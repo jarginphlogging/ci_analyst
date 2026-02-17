@@ -130,6 +130,7 @@ Note:
 - `PROVIDER_MODE=sandbox`
 - `ANTHROPIC_API_KEY=<your-key>`
 - optional `ANTHROPIC_MODEL`
+- keep `SANDBOX_CORTEX_API_KEY=` blank (no external Cortex key needed)
 
 2. Edit `/Users/joe/Code/ci_analyst/apps/web/.env.local`:
 - `WEB_BACKEND_MODE=orchestrator`

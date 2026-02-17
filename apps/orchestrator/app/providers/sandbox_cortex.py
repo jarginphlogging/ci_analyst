@@ -8,13 +8,14 @@ from app.config import settings
 
 
 async def execute_sandbox_sql(sql: str) -> List[Dict[str, Optional[Union[str, int, float, bool]]]]:
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if settings.sandbox_cortex_api_key:
+        headers["Authorization"] = f"Bearer {settings.sandbox_cortex_api_key}"
+
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
             f"{settings.sandbox_cortex_base_url.rstrip('/')}/query",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.sandbox_cortex_api_key}",
-            },
+            headers=headers,
             json={"sql": sql},
         )
 
@@ -48,13 +49,14 @@ async def analyze_message(
         "stepId": step_id,
     }
 
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    if settings.sandbox_cortex_api_key:
+        headers["Authorization"] = f"Bearer {settings.sandbox_cortex_api_key}"
+
     async with httpx.AsyncClient(timeout=45.0) as client:
         response = await client.post(
             f"{settings.sandbox_cortex_base_url.rstrip('/')}/message",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.sandbox_cortex_api_key}",
-            },
+            headers=headers,
             json=request_payload,
         )
 

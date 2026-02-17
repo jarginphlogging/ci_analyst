@@ -19,6 +19,7 @@
 1. Set `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
    - `PROVIDER_MODE=sandbox`
    - `ANTHROPIC_API_KEY=<key>`
+   - `SANDBOX_CORTEX_API_KEY=` (blank unless you want local auth)
 2. Set `/Users/joe/Code/ci_analyst/apps/web/.env.local`:
    - `WEB_BACKEND_MODE=orchestrator`
    - `ORCHESTRATOR_URL=http://localhost:8787`
@@ -40,6 +41,7 @@
   - `AZURE_OPENAI_DEPLOYMENT`
   - `SNOWFLAKE_CORTEX_BASE_URL`
   - `SNOWFLAKE_CORTEX_API_KEY`
+  - (These Snowflake vars are not required in sandbox mode.)
 - optional `SEMANTIC_MODEL_PATH` (absolute path to model JSON)
   - optional `REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS` for bounded workflow control
 

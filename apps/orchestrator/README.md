@@ -36,6 +36,7 @@ Provider modes:
   - conversation memory by `conversationId`
   - raw `/query` endpoint for direct SQL execution
 - Local seeded SQLite dataset with allowlisted banking tables
+- No external Snowflake/Cortex API key required for sandbox mode.
 
 Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`

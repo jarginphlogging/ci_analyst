@@ -47,6 +47,9 @@ app = FastAPI(title="CI Analyst Sandbox Cortex Service", version="0.2.0", lifesp
 
 
 def _check_auth(authorization: Optional[str]) -> None:
+    # Local sandbox auth is optional by default. If a key is configured, enforce it.
+    if not settings.sandbox_cortex_api_key:
+        return
     expected = f"Bearer {settings.sandbox_cortex_api_key}"
     if authorization != expected:
         raise HTTPException(status_code=401, detail="Unauthorized")

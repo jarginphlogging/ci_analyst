@@ -48,6 +48,13 @@ def _as_nonempty(value: Optional[str], default: str) -> str:
     return trimmed if trimmed else default
 
 
+def _as_optional(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed if trimmed else None
+
+
 @dataclass(frozen=True)
 class Settings:
     node_env: str = os.getenv("NODE_ENV", "development")
@@ -82,7 +89,7 @@ class Settings:
         os.getenv("SANDBOX_CORTEX_BASE_URL"),
         "http://127.0.0.1:8788/api/v2/cortex/analyst",
     )
-    sandbox_cortex_api_key: str = _as_nonempty(os.getenv("SANDBOX_CORTEX_API_KEY"), "sandbox-local-key")
+    sandbox_cortex_api_key: Optional[str] = _as_optional(os.getenv("SANDBOX_CORTEX_API_KEY"))
     sandbox_sqlite_path: str = _as_nonempty(
         os.getenv("SANDBOX_SQLITE_PATH"),
         str(Path(__file__).resolve().parents[1] / ".sandbox" / "ci_analyst_sandbox.db"),
