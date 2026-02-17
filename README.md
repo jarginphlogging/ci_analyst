@@ -48,7 +48,7 @@ Prerequisites:
 1. Install workspace dependencies:
 ```bash
 cd /Users/joe/Code/ci_analyst
-npm install
+npm ci
 ```
 
 2. (Optional but recommended) Create and activate a Python virtual environment:
@@ -129,6 +129,11 @@ npm run eval
 ```
 
 `npm run eval` expects orchestrator running on `http://localhost:8787` by default.
+
+## Enterprise Registry Notes
+
+- This repo pins `typescript-eslint` to `8.46.0` to avoid mirror lag issues with newer transitive releases.
+- For long-term deterministic installs on enterprise mirrors, use `npm ci` (not `npm install`) on your work machine.
 
 ## Security and Governance Notes
 
