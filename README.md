@@ -1,17 +1,29 @@
-# Conversational Analytics Agent (Banking-Ready Scaffold)
+# Conversational Analytics Agent (Banking-Ready)
 
-Production-oriented monorepo scaffold for a fast, explainable conversational analytics agent with:
+Production-oriented monorepo for a fast, explainable conversational analytics agent with:
 - Next.js + Tailwind frontend (`apps/web`)
 - FastAPI orchestrator backend (`apps/orchestrator`)
 - Shared contracts (`packages/contracts`)
 - Semantic model package (`packages/semantic-model`)
 - Evaluation harness (`packages/eval-harness`)
 
-This repo is pre-wired for:
+This repo supports:
 - Streamed responses
 - Deterministic workflow + bounded agentic reasoning
 - Mock mode locally, then switch to Azure OpenAI + Snowflake Cortex Analyst by env toggle
 - In-UI tabular data explorer with CSV/JSON export
+
+## Current Backend Status
+
+- Mock mode is fully implemented for local UX/demo/testing.
+- Real mode is wired for:
+  - route classification
+  - bounded planning
+  - SQL generation + guardrails
+  - Snowflake execution
+  - validation and insight synthesis
+- Semantic model source is currently JSON:
+  - `/Users/joe/Code/ci_analyst/packages/semantic-model/models/banking-core.v1.json`
 
 ## Monorepo Structure
 
@@ -76,12 +88,14 @@ To slow mock streaming for demos, tune:
 - Azure variables (`AZURE_OPENAI_*`)
 - Snowflake variables (`SNOWFLAKE_CORTEX_*`)
 - optional semantic model override (`SEMANTIC_MODEL_PATH=/absolute/path/to/model.json`)
+- optional orchestration controls (`REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS`, `REAL_LLM_*`)
 - `WEB_USE_LOCAL_MOCK=false`
 - `ORCHESTRATOR_URL=http://localhost:8787`
 
 3. Start orchestrator + frontend.
 
-No code changes required for initial cutover.
+4. If your enterprise Snowflake wrapper expects a different endpoint/body format than `/query`, adjust:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
 
 ## Quality Commands
 
@@ -104,6 +118,8 @@ npm run eval
 
 - `/Users/joe/Code/ci_analyst/docs/conversational-analytics-master-plan.md`
 - `/Users/joe/Code/ci_analyst/docs/implementation-blueprint.md`
+- `/Users/joe/Code/ci_analyst/docs/api-contracts.md`
 - `/Users/joe/Code/ci_analyst/docs/prompts-and-policies.md`
+- `/Users/joe/Code/ci_analyst/docs/evaluation-and-tests.md`
 - `/Users/joe/Code/ci_analyst/docs/runbook-and-cutover.md`
 - `/Users/joe/Code/ci_analyst/docs/frontend-ux-spec.md`
