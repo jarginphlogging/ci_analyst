@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from app.config import settings
@@ -12,6 +14,12 @@ from app.services.table_analysis import normalize_rows
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
+
+
+@dataclass(frozen=True)
+class _StepSql:
+    sql: str
+    fallback_sql: str
 
 
 def _first_table(model: SemanticModel) -> SemanticTable:
@@ -59,6 +67,35 @@ class SqlExecutionStage:
         self._ask_llm_json = ask_llm_json
         self._sql_fn = sql_fn
 
+    async def _execute_sql(self, step_sql: _StepSql) -> SqlExecutionResult:
+        executed_sql = step_sql.sql
+        try:
+            raw_rows = await self._sql_fn(executed_sql)
+        except Exception:
+            executed_sql = step_sql.fallback_sql
+            raw_rows = await self._sql_fn(executed_sql)
+
+        normalized_rows = normalize_rows(raw_rows)
+        return SqlExecutionResult(
+            sql=executed_sql,
+            rows=normalized_rows,
+            rowCount=len(normalized_rows),
+        )
+
+    async def _execute_sql_parallel(self, step_sqls: list[_StepSql]) -> list[SqlExecutionResult]:
+        semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
+
+        async def _run(index: int, step_sql: _StepSql) -> tuple[int, SqlExecutionResult]:
+            async with semaphore:
+                result = await self._execute_sql(step_sql)
+                return index, result
+
+        indexed_results = await asyncio.gather(
+            *(_run(index, step_sql) for index, step_sql in enumerate(step_sqls))
+        )
+        indexed_results.sort(key=lambda item: item[0])
+        return [result for _, result in indexed_results]
+
     async def run_sql(
         self,
         *,
@@ -68,7 +105,7 @@ class SqlExecutionStage:
     ) -> tuple[list[SqlExecutionResult], list[str]]:
         prior_sql: list[str] = []
         accumulated_assumptions: list[str] = []
-        results: list[SqlExecutionResult] = []
+        step_sqls: list[_StepSql] = []
 
         for step in plan:
             sql_text = _fallback_sql(self._model, step.goal)
@@ -94,22 +131,21 @@ class SqlExecutionStage:
                 pass
 
             guarded_sql = guard_sql(sql_text, self._model)
+            fallback_sql = guard_sql(
+                f"SELECT * FROM {_select_table_for_goal(self._model, step.goal).name}",
+                self._model,
+            )
             prior_sql.append(guarded_sql)
-
-            try:
-                raw_rows = await self._sql_fn(guarded_sql)
-            except Exception:
-                fallback_sql = guard_sql(f"SELECT * FROM {_select_table_for_goal(self._model, step.goal).name}", self._model)
-                raw_rows = await self._sql_fn(fallback_sql)
-                guarded_sql = fallback_sql
-
-            normalized_rows = normalize_rows(raw_rows)
-            results.append(
-                SqlExecutionResult(
+            step_sqls.append(
+                _StepSql(
                     sql=guarded_sql,
-                    rows=normalized_rows,
-                    rowCount=len(normalized_rows),
+                    fallback_sql=fallback_sql,
                 )
             )
+
+        if settings.real_enable_parallel_sql and len(step_sqls) > 1:
+            results = await self._execute_sql_parallel(step_sqls)
+        else:
+            results = [await self._execute_sql(step_sql) for step_sql in step_sqls]
 
         return results, accumulated_assumptions[:6]

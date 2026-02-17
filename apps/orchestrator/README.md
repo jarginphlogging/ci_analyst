@@ -20,6 +20,7 @@ Real mode (`USE_MOCK_PROVIDERS=false`) uses:
 - Azure OpenAI for routing, planning, SQL generation, and narrative synthesis
 - Snowflake Cortex SQL execution adapter
 - deterministic SQL guardrails and validation checks
+- optional bounded parallel SQL execution (disabled by default)
 
 Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`
@@ -84,3 +85,15 @@ Set these in `.env` to slow down and visualize the live run:
 - `MOCK_STREAM_STATUS_DELAY_MS` (default `700`)
 - `MOCK_STREAM_TOKEN_DELAY_MS` (default `120`)
 - `MOCK_STREAM_RESPONSE_DELAY_MS` (default `450`)
+
+## Real SQL Parallelism (Optional)
+
+Enable bounded parallel SQL execution only when your warehouse and governance controls support it:
+
+- `REAL_ENABLE_PARALLEL_SQL=false` (default)
+- `REAL_MAX_PARALLEL_QUERIES=3`
+
+Behavior:
+- SQL planning/generation remains deterministic and sequential.
+- Query execution can run in parallel with bounded concurrency.
+- Final result ordering remains deterministic by plan step index.
