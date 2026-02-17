@@ -36,7 +36,7 @@ export async function POST(request: Request) {
     });
   }
 
-  if (!serverEnv.WEB_USE_LOCAL_MOCK && serverEnv.ORCHESTRATOR_URL) {
+  if (serverEnv.WEB_BACKEND_MODE === "orchestrator" && serverEnv.ORCHESTRATOR_URL) {
     try {
       const upstream = await fetch(`${serverEnv.ORCHESTRATOR_URL}/v1/chat/stream`, {
         method: "POST",

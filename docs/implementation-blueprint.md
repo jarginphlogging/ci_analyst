@@ -18,8 +18,8 @@
 
 1. Frontend posts a turn to `/api/chat/stream` or `/api/chat`.
 2. Web route either:
-   - serves local mock stream (`WEB_USE_LOCAL_MOCK=true`), or
-   - proxies to orchestrator (`WEB_USE_LOCAL_MOCK=false`).
+   - serves local mock stream (`WEB_BACKEND_MODE=web_mock`), or
+   - proxies to orchestrator (`WEB_BACKEND_MODE=orchestrator`).
 3. Orchestrator receives `/v1/chat/turn` or `/v1/chat/stream`.
 4. Dependency mode selected by `PROVIDER_MODE`:
    - `mock` path: deterministic mock provider payloads
@@ -92,7 +92,8 @@
 
 ### Backend (`apps/orchestrator/.env`)
 - Auto-loaded at startup.
-- Choose a template:
+- Real runtime file is committed and can be edited directly.
+- Optional reference templates:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example`
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example`
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
@@ -109,10 +110,11 @@
 - `MOCK_STREAM_STATUS_DELAY_MS`, `MOCK_STREAM_TOKEN_DELAY_MS`, `MOCK_STREAM_RESPONSE_DELAY_MS`
 
 ### Frontend (`apps/web/.env.local`)
-- Choose a template:
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.mock.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
-- `WEB_USE_LOCAL_MOCK=true|false`
+- Real runtime file is committed and can be edited directly.
+- Optional reference templates:
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator.example`
+- `WEB_BACKEND_MODE=web_mock|orchestrator`
 - `ORCHESTRATOR_URL=http://localhost:8787`
 - `WEB_MOCK_STATUS_DELAY_MS`, `WEB_MOCK_TOKEN_DELAY_MS`, `WEB_MOCK_RESPONSE_DELAY_MS`
 

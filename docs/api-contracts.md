@@ -80,5 +80,5 @@ Response:
 - `/api/chat/stream` -> stream route (proxy/fallback)
 
 Both routes support:
-- local mock mode (`WEB_USE_LOCAL_MOCK=true`)
-- orchestrator proxy mode (`WEB_USE_LOCAL_MOCK=false`, `ORCHESTRATOR_URL` set)
+- web mock mode (`WEB_BACKEND_MODE=web_mock`)
+- orchestrator proxy mode (`WEB_BACKEND_MODE=orchestrator`, `ORCHESTRATOR_URL` set)

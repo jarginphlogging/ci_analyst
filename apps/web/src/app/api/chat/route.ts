@@ -17,7 +17,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "message is required" }, { status: 400 });
     }
 
-    if (!serverEnv.WEB_USE_LOCAL_MOCK && serverEnv.ORCHESTRATOR_URL) {
+    if (serverEnv.WEB_BACKEND_MODE === "orchestrator" && serverEnv.ORCHESTRATOR_URL) {
       const upstream = await fetch(`${serverEnv.ORCHESTRATOR_URL}/v1/chat/turn`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },

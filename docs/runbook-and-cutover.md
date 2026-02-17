@@ -4,12 +4,11 @@
 
 1. `npm install`
 2. `npm run setup:orchestrator`
-3. Copy env templates:
-   - `cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env`
-   - `cp /Users/joe/Code/ci_analyst/apps/web/.env.mock.example /Users/joe/Code/ci_analyst/apps/web/.env.local`
-4. `npm run dev:orchestrator`
-5. `npm run dev:web`
-6. Confirm:
+3. Edit `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `PROVIDER_MODE=mock`
+4. Edit `/Users/joe/Code/ci_analyst/apps/web/.env.local`: `WEB_BACKEND_MODE=web_mock`
+5. `npm run dev:orchestrator`
+6. `npm run dev:web`
+7. Confirm:
    - frontend streams answer tokens
    - trace panel expands
    - evidence table sorts
@@ -17,11 +16,12 @@
 
 ## 2) Local Sandbox Workflow (Realistic pre-prod test)
 
-1. Copy env templates:
-   - `cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env`
-   - `cp /Users/joe/Code/ci_analyst/apps/web/.env.remote.example /Users/joe/Code/ci_analyst/apps/web/.env.local`
-2. Set `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
+1. Set `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
+   - `PROVIDER_MODE=sandbox`
    - `ANTHROPIC_API_KEY=<key>`
+2. Set `/Users/joe/Code/ci_analyst/apps/web/.env.local`:
+   - `WEB_BACKEND_MODE=orchestrator`
+   - `ORCHESTRATOR_URL=http://localhost:8787`
 3. Start local Cortex shim:
    - `npm run dev:sandbox-cortex`
 4. Start orchestrator:
@@ -33,7 +33,6 @@
 
 ## Backend
 - File: `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
-- Template source: `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
 - Required:
   - `PROVIDER_MODE=prod`
   - `AZURE_OPENAI_ENDPOINT`
@@ -46,9 +45,8 @@
 
 ## Frontend
 - File: `/Users/joe/Code/ci_analyst/apps/web/.env.local`
-- Template source: `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
 - Required:
-  - `WEB_USE_LOCAL_MOCK=false`
+  - `WEB_BACKEND_MODE=orchestrator`
   - `ORCHESTRATOR_URL=http://localhost:8787`
 
 ## 4) Health Checks

@@ -75,11 +75,13 @@ npm run setup:orchestrator
 
 This runs in the orchestrator workspace to ensure installs and runtime use the same Python interpreter.
 
-4. Choose environment files (mock first):
-```bash
-cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env
-cp /Users/joe/Code/ci_analyst/apps/web/.env.mock.example /Users/joe/Code/ci_analyst/apps/web/.env.local
-```
+4. Edit runtime env files (already present in repo):
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+- `/Users/joe/Code/ci_analyst/apps/web/.env.local`
+
+For quick local mock startup, set:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `PROVIDER_MODE=mock`
+- `/Users/joe/Code/ci_analyst/apps/web/.env.local`: `WEB_BACKEND_MODE=web_mock`
 
 5. Run orchestrator in mock mode (Python FastAPI):
 ```bash
@@ -107,16 +109,16 @@ Backend env file:
 Frontend env file:
 - `/Users/joe/Code/ci_analyst/apps/web/.env.local`
 
-Mode templates:
+Optional reference templates:
 - Mock:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.mock.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock.example`
 - Sandbox:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator.example`
 - Prod:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator.example`
 
 Note:
 - Orchestrator now auto-loads `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` on startup.
@@ -124,15 +126,14 @@ Note:
 
 ## Sandbox Mode (Anthropic + Local Cortex + SQLite)
 
-1. Copy sandbox env templates:
-```bash
-cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env
-cp /Users/joe/Code/ci_analyst/apps/web/.env.remote.example /Users/joe/Code/ci_analyst/apps/web/.env.local
-```
-
-2. Set key in `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
+1. Edit `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
+- `PROVIDER_MODE=sandbox`
 - `ANTHROPIC_API_KEY=<your-key>`
 - optional `ANTHROPIC_MODEL`
+
+2. Edit `/Users/joe/Code/ci_analyst/apps/web/.env.local`:
+- `WEB_BACKEND_MODE=orchestrator`
+- `ORCHESTRATOR_URL=http://localhost:8787`
 
 3. Install backend Python deps (once per environment):
 ```bash
@@ -181,9 +182,9 @@ To slow mock streaming for demos, tune:
 
 ## Switching to Real Providers (Work Machine)
 
-1. Copy env templates:
-- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example` -> `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
-- `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example` -> `/Users/joe/Code/ci_analyst/apps/web/.env.local`
+1. Edit runtime files directly:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+- `/Users/joe/Code/ci_analyst/apps/web/.env.local`
 
 2. Set:
 - `PROVIDER_MODE=prod`
@@ -195,7 +196,7 @@ To slow mock streaming for demos, tune:
 - Snowflake variables (`SNOWFLAKE_CORTEX_*`)
 - optional semantic model override (`SEMANTIC_MODEL_PATH=/absolute/path/to/model.json`)
 - optional orchestration controls (`REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS`, `REAL_LLM_*`)
-- `WEB_USE_LOCAL_MOCK=false`
+- `WEB_BACKEND_MODE=orchestrator`
 - `ORCHESTRATOR_URL=http://localhost:8787`
 
 3. Start orchestrator + frontend.

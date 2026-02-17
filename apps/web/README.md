@@ -13,8 +13,8 @@ Next.js + Tailwind frontend for the conversational analytics agent.
 
 ## API Integration Modes
 
-- Local mock mode (`WEB_USE_LOCAL_MOCK=true`)
-- Orchestrator proxy mode (`WEB_USE_LOCAL_MOCK=false`, `ORCHESTRATOR_URL` set)
+- Web mock mode (`WEB_BACKEND_MODE=web_mock`)
+- Orchestrator mode (`WEB_BACKEND_MODE=orchestrator`, `ORCHESTRATOR_URL` set)
 
 ## Run
 
