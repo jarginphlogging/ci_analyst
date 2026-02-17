@@ -12,7 +12,7 @@ from app.models import (
     SqlExecutionResult,
     ValidationResult,
 )
-from app.providers.factory import build_live_provider_bundle
+from app.providers.factory import build_provider_bundle
 from app.providers.mock_provider import (
     mock_build_response,
     mock_classify_route,
@@ -71,7 +71,12 @@ class RealDependencies:
         sql_fn: Optional[SqlFn] = None,
         model: Optional[SemanticModel] = None,
     ) -> None:
-        provider_bundle = build_live_provider_bundle() if (llm_fn is None or sql_fn is None) else None
+        provider_bundle = None
+        if llm_fn is None or sql_fn is None:
+            mode = settings.provider_mode
+            if mode == "mock":
+                mode = "prod"
+            provider_bundle = build_provider_bundle(mode)
         self._llm_fn = llm_fn or (provider_bundle.llm_fn if provider_bundle else None)
         self._sql_fn = sql_fn or (provider_bundle.sql_fn if provider_bundle else None)
         if self._llm_fn is None or self._sql_fn is None:
@@ -145,9 +150,9 @@ class RealDependencies:
 
 
 def create_dependencies() -> OrchestratorDependencies:
-    if settings.use_mock_providers:
+    if settings.provider_mode == "mock":
         return MockDependencies()
-    provider_bundle = build_live_provider_bundle()
+    provider_bundle = build_provider_bundle(settings.provider_mode)
     return RealDependencies(
         llm_fn=provider_bundle.llm_fn,
         sql_fn=provider_bundle.sql_fn,

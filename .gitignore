@@ -10,6 +10,9 @@ coverage/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+*.db
+*.sqlite
+apps/orchestrator/.sandbox/
 
 # Env
 .env

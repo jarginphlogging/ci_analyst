@@ -10,12 +10,16 @@ Production-oriented monorepo for a fast, explainable conversational analytics ag
 This repo supports:
 - Streamed responses
 - Deterministic workflow + bounded agentic reasoning
-- Mock mode locally, then switch to Azure OpenAI + Snowflake Cortex Analyst by env toggle
+- Three interchangeable provider modes (`mock`, `sandbox`, `prod`) switched by env only
 - In-UI tabular data explorer with CSV/JSON export
 
 ## Current Backend Status
 
 - Mock mode is fully implemented for local UX/demo/testing.
+- Sandbox mode is implemented for realistic local e2e testing:
+  - Anthropic API as LLM
+  - local Cortex-compatible REST shim
+  - seeded local SQLite analytics tables
 - Real mode is wired for:
   - route classification
   - bounded planning
@@ -95,6 +99,29 @@ npm run dev:web
 
 7. Open [http://localhost:3000](http://localhost:3000)
 
+## Sandbox Mode (Anthropic + Local Cortex + SQLite)
+
+1. In `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` set:
+- `PROVIDER_MODE=sandbox`
+- `ANTHROPIC_API_KEY=<your-key>`
+- optional `ANTHROPIC_MODEL`
+
+2. Start local Cortex-compatible sandbox service:
+```bash
+npm run dev:sandbox-cortex
+```
+
+3. Start orchestrator + web:
+```bash
+npm run dev:orchestrator
+npm run dev:web
+```
+
+4. Keep frontend routing to orchestrator:
+- `/Users/joe/Code/ci_analyst/apps/web/.env.local`
+  - `WEB_USE_LOCAL_MOCK=false`
+  - `ORCHESTRATOR_URL=http://localhost:8787`
+
 ## Streaming UX
 
 The frontend uses `POST /api/chat/stream` and incrementally renders:
@@ -115,7 +142,7 @@ To slow mock streaming for demos, tune:
 - `/Users/joe/Code/ci_analyst/apps/web/.env.example` -> `.env.local`
 
 2. Set:
-- `USE_MOCK_PROVIDERS=false`
+- `PROVIDER_MODE=prod`
 - Azure variables (`AZURE_OPENAI_*`)
   - auth mode: `AZURE_OPENAI_AUTH_MODE=api_key` or `AZURE_OPENAI_AUTH_MODE=certificate`
   - `api_key` mode: set `AZURE_OPENAI_API_KEY`
@@ -131,6 +158,16 @@ To slow mock streaming for demos, tune:
 
 4. If your enterprise Snowflake wrapper expects a different endpoint/body format than `/query`, adjust:
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
+
+Provider swap points (no orchestration rewrite needed):
+- LLM providers:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/azure_openai.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/anthropic_llm.py`
+- SQL providers:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/sandbox_cortex.py`
+- Mode registry:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/factory.py`
 
 ## Work Machine Version Control Workflow
 

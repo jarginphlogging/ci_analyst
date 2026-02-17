@@ -21,9 +21,10 @@
    - serves local mock stream (`WEB_USE_LOCAL_MOCK=true`), or
    - proxies to orchestrator (`WEB_USE_LOCAL_MOCK=false`).
 3. Orchestrator receives `/v1/chat/turn` or `/v1/chat/stream`.
-4. Dependency mode selected by `USE_MOCK_PROVIDERS`:
-   - mock path: deterministic mock provider payloads
-   - real path: Azure + Snowflake + guardrails
+4. Dependency mode selected by `PROVIDER_MODE`:
+   - `mock` path: deterministic mock provider payloads
+   - `sandbox` path: Anthropic + local Cortex REST + local SQLite
+   - `prod` path: Azure + Snowflake + guardrails
 5. Real path stages:
    - classify route (`fast_path` vs `deep_path`)
    - create bounded plan
@@ -54,7 +55,11 @@
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/table_analysis.py`
 - Provider adapters:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/azure_openai.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/anthropic_llm.py`
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/sandbox_cortex.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/sandbox/cortex_service.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/sandbox/sqlite_store.py`
 
 ## 4) Semantic Model
 
@@ -86,9 +91,13 @@
 ## 6) Environment Toggles
 
 ### Backend (`apps/orchestrator/.env`)
-- `USE_MOCK_PROVIDERS=true|false`
+- `PROVIDER_MODE=mock|sandbox|prod`
+- `USE_MOCK_PROVIDERS=true|false` (backward-compatible fallback if `PROVIDER_MODE` is unset)
 - `AZURE_OPENAI_*`
+- `ANTHROPIC_*` (sandbox mode)
 - `SNOWFLAKE_CORTEX_*`
+- `SANDBOX_CORTEX_*`
+- `SANDBOX_SQLITE_PATH`, `SANDBOX_SEED_RESET`
 - `SEMANTIC_MODEL_PATH` (optional)
 - `REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS`
 - `REAL_LLM_TEMPERATURE`, `REAL_LLM_MAX_TOKENS`

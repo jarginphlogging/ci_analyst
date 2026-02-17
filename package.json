@@ -9,6 +9,7 @@
     "setup:orchestrator": "npm --workspace @ci/orchestrator run setup",
     "dev:web": "npm --workspace @ci/web run dev",
     "dev:orchestrator": "npm --workspace @ci/orchestrator run dev",
+    "dev:sandbox-cortex": "npm --workspace @ci/orchestrator run dev:sandbox-cortex",
     "build": "npm run build --workspaces --if-present",
     "lint": "npm run lint --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",

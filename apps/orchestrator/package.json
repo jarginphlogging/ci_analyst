@@ -5,8 +5,10 @@
   "scripts": {
     "setup": "node ../../scripts/run-python.mjs -m pip install -r requirements.txt",
     "dev": "node ../../scripts/run-python.mjs -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload",
+    "dev:sandbox-cortex": "node ../../scripts/run-python.mjs -m uvicorn app.sandbox.cortex_service:app --host 0.0.0.0 --port 8788 --reload",
     "start": "node ../../scripts/run-python.mjs -m uvicorn app.main:app --host 0.0.0.0 --port 8787",
-    "lint": "node ../../scripts/run-python.mjs -m py_compile app/*.py app/providers/*.py app/prompts/*.py app/services/*.py tests/*.py",
+    "start:sandbox-cortex": "node ../../scripts/run-python.mjs -m uvicorn app.sandbox.cortex_service:app --host 0.0.0.0 --port 8788",
+    "lint": "node ../../scripts/run-python.mjs -m py_compile app/*.py app/providers/*.py app/prompts/*.py app/services/*.py app/sandbox/*.py tests/*.py",
     "test": "node ../../scripts/run-python.mjs -m pytest -q",
     "build": "node ../../scripts/run-python.mjs -m compileall app"
   }

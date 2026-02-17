@@ -25,7 +25,7 @@ orchestrator = ConversationalOrchestrator(create_dependencies())
 
 
 def _event_delay_seconds(event_type: str) -> float:
-    if not settings.use_mock_providers:
+    if settings.provider_mode != "mock":
         return 0.0
     if event_type == "status":
         return max(settings.mock_stream_status_delay_ms, 0) / 1000
@@ -40,7 +40,7 @@ def _event_delay_seconds(event_type: str) -> float:
 async def health() -> dict[str, str]:
     from app.models import now_iso
 
-    return {"status": "ok", "timestamp": now_iso()}
+    return {"status": "ok", "timestamp": now_iso(), "providerMode": settings.provider_mode}
 
 
 @app.post("/v1/chat/turn", responses={400: {"model": ErrorResponse}})

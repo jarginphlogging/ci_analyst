@@ -4,6 +4,7 @@
 
 1. `npm install`
 2. `npm run setup:orchestrator`
+3. Set `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `PROVIDER_MODE=mock`
 3. `npm run dev:orchestrator`
 4. `npm run dev:web`
 5. Confirm:
@@ -12,18 +13,33 @@
    - evidence table sorts
    - retrieved data tables can be exported as CSV/JSON
 
-## 2) Work Machine Cutover
+## 2) Local Sandbox Workflow (Realistic pre-prod test)
+
+1. In `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` set:
+   - `PROVIDER_MODE=sandbox`
+   - `ANTHROPIC_API_KEY=<key>`
+2. Start local Cortex shim:
+   - `npm run dev:sandbox-cortex`
+3. Start orchestrator:
+   - `npm run dev:orchestrator`
+4. Set frontend `/Users/joe/Code/ci_analyst/apps/web/.env.local`:
+   - `WEB_USE_LOCAL_MOCK=false`
+   - `ORCHESTRATOR_URL=http://localhost:8787`
+5. Start web:
+   - `npm run dev:web`
+
+## 3) Work Machine Cutover
 
 ## Backend
 - File: `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
 - Required:
-  - `USE_MOCK_PROVIDERS=false`
+  - `PROVIDER_MODE=prod`
   - `AZURE_OPENAI_ENDPOINT`
   - `AZURE_OPENAI_API_KEY`
   - `AZURE_OPENAI_DEPLOYMENT`
   - `SNOWFLAKE_CORTEX_BASE_URL`
   - `SNOWFLAKE_CORTEX_API_KEY`
-  - optional `SEMANTIC_MODEL_PATH` (absolute path to model JSON)
+- optional `SEMANTIC_MODEL_PATH` (absolute path to model JSON)
   - optional `REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS` for bounded workflow control
 
 ## Frontend
@@ -32,13 +48,13 @@
   - `WEB_USE_LOCAL_MOCK=false`
   - `ORCHESTRATOR_URL=http://localhost:8787`
 
-## 3) Health Checks
+## 4) Health Checks
 
 - `GET /health` should return status `ok`
 - `POST /v1/chat/turn` should return structured payload
 - `POST /v1/chat/stream` should return NDJSON with `status`, `answer_delta`, `response`, `done`
 
-## 4) Troubleshooting
+## 5) Troubleshooting
 
 - If stream stalls:
   - check reverse proxy buffering settings

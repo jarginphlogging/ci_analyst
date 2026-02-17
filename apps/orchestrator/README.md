@@ -17,11 +17,21 @@ FastAPI orchestration service for conversational analytics.
 5. build answer + evidence + insights + trace + retrievable tables
 6. carry forward bounded prior-turn context into route/plan/sql/response prompts
 
-Real mode (`USE_MOCK_PROVIDERS=false`) uses:
+Provider modes:
+- `mock`: static deterministic demo responses
+- `sandbox`: Anthropic LLM + local Cortex-compatible REST + local SQLite data
+- `prod`: Azure OpenAI + Snowflake Cortex Analyst
+
+`prod` mode uses:
 - Azure OpenAI for routing, planning, SQL generation, and narrative synthesis
 - Snowflake Cortex SQL execution adapter
 - deterministic SQL guardrails and validation checks
 - optional bounded parallel SQL execution (disabled by default)
+
+`sandbox` mode uses:
+- Anthropic Messages API for routing/planning/sql/synthesis
+- Local Cortex-compatible `/query` REST service
+- Local seeded SQLite dataset with allowlisted banking tables
 
 Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`
@@ -50,6 +60,13 @@ npm run dev:orchestrator
 
 The npm scripts auto-detect Python (`python`, `py -3`, or `python3`).
 
+For `sandbox` mode, run local Cortex shim in a second terminal:
+
+```bash
+cd /Users/joe/Code/ci_analyst
+npm run dev:sandbox-cortex
+```
+
 Direct command:
 ```bash
 cd /Users/joe/Code/ci_analyst/apps/orchestrator
@@ -67,9 +84,13 @@ npm --workspace @ci/orchestrator run test
 
 - `app/providers/azure_openai.py`
 - `app/providers/snowflake_cortex.py`
+- `app/providers/anthropic_llm.py`
+- `app/providers/sandbox_cortex.py`
 - `app/providers/factory.py`
 - `app/providers/protocols.py`
 - `app/services/dependencies.py`
+- `app/sandbox/cortex_service.py`
+- `app/sandbox/sqlite_store.py`
 - stage modules:
   - `app/services/stages/planner_stage.py`
   - `app/services/stages/sql_stage.py`
@@ -98,3 +119,14 @@ Behavior:
 - SQL planning/generation remains deterministic and sequential.
 - Query execution can run in parallel with bounded concurrency.
 - Final result ordering remains deterministic by plan step index.
+
+## Mode Selection
+
+Set in `.env`:
+
+- `PROVIDER_MODE=mock` (default)
+- `PROVIDER_MODE=sandbox` (local end-to-end testing without enterprise services)
+- `PROVIDER_MODE=prod` (Azure/Snowflake/Cortex)
+
+Backward-compat note:
+- if `PROVIDER_MODE` is omitted, `USE_MOCK_PROVIDERS=true` maps to `mock`, `false` maps to `prod`.
