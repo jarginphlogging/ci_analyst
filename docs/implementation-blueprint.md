@@ -91,6 +91,11 @@
 ## 6) Environment Toggles
 
 ### Backend (`apps/orchestrator/.env`)
+- Auto-loaded at startup.
+- Choose a template:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
 - `PROVIDER_MODE=mock|sandbox|prod`
 - `USE_MOCK_PROVIDERS=true|false` (backward-compatible fallback if `PROVIDER_MODE` is unset)
 - `AZURE_OPENAI_*`
@@ -104,6 +109,9 @@
 - `MOCK_STREAM_STATUS_DELAY_MS`, `MOCK_STREAM_TOKEN_DELAY_MS`, `MOCK_STREAM_RESPONSE_DELAY_MS`
 
 ### Frontend (`apps/web/.env.local`)
+- Choose a template:
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.mock.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
 - `WEB_USE_LOCAL_MOCK=true|false`
 - `ORCHESTRATOR_URL=http://localhost:8787`
 - `WEB_MOCK_STATUS_DELAY_MS`, `WEB_MOCK_TOKEN_DELAY_MS`, `WEB_MOCK_RESPONSE_DELAY_MS`

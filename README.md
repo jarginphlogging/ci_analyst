@@ -75,10 +75,10 @@ npm run setup:orchestrator
 
 This runs in the orchestrator workspace to ensure installs and runtime use the same Python interpreter.
 
-4. Copy env templates:
+4. Choose environment files (mock first):
 ```bash
-cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env
-cp /Users/joe/Code/ci_analyst/apps/web/.env.example /Users/joe/Code/ci_analyst/apps/web/.env.local
+cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env
+cp /Users/joe/Code/ci_analyst/apps/web/.env.mock.example /Users/joe/Code/ci_analyst/apps/web/.env.local
 ```
 
 5. Run orchestrator in mock mode (Python FastAPI):
@@ -99,28 +99,51 @@ npm run dev:web
 
 7. Open [http://localhost:3000](http://localhost:3000)
 
+## Environment Files (Single Source of Truth)
+
+Backend env file:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+
+Frontend env file:
+- `/Users/joe/Code/ci_analyst/apps/web/.env.local`
+
+Mode templates:
+- Mock:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.mock.example`
+- Sandbox:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
+- Prod:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
+
+Note:
+- Orchestrator now auto-loads `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` on startup.
+- Root `/Users/joe/Code/ci_analyst/.env` is not used for normal runtime.
+
 ## Sandbox Mode (Anthropic + Local Cortex + SQLite)
 
-1. In `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` set:
-- `PROVIDER_MODE=sandbox`
+1. Copy sandbox env templates:
+```bash
+cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env
+cp /Users/joe/Code/ci_analyst/apps/web/.env.remote.example /Users/joe/Code/ci_analyst/apps/web/.env.local
+```
+
+2. Set key in `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
 - `ANTHROPIC_API_KEY=<your-key>`
 - optional `ANTHROPIC_MODEL`
 
-2. Start local Cortex-compatible sandbox service:
+3. Start local Cortex-compatible sandbox service:
 ```bash
 npm run dev:sandbox-cortex
 ```
 
-3. Start orchestrator + web:
+4. Start orchestrator + web:
 ```bash
 npm run dev:orchestrator
 npm run dev:web
 ```
-
-4. Keep frontend routing to orchestrator:
-- `/Users/joe/Code/ci_analyst/apps/web/.env.local`
-  - `WEB_USE_LOCAL_MOCK=false`
-  - `ORCHESTRATOR_URL=http://localhost:8787`
 
 ## Streaming UX
 
@@ -138,8 +161,8 @@ To slow mock streaming for demos, tune:
 ## Switching to Real Providers (Work Machine)
 
 1. Copy env templates:
-- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.example` -> `.env`
-- `/Users/joe/Code/ci_analyst/apps/web/.env.example` -> `.env.local`
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example` -> `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+- `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example` -> `/Users/joe/Code/ci_analyst/apps/web/.env.local`
 
 2. Set:
 - `PROVIDER_MODE=prod`

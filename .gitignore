@@ -17,7 +17,9 @@ apps/orchestrator/.sandbox/
 # Env
 .env
 .env.local
-.env.*.local
+.env.*
+!.env.example
+!.env.*.example
 semantic_model.yaml
 
 # OS

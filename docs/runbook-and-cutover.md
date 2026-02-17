@@ -4,10 +4,12 @@
 
 1. `npm install`
 2. `npm run setup:orchestrator`
-3. Set `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `PROVIDER_MODE=mock`
-3. `npm run dev:orchestrator`
-4. `npm run dev:web`
-5. Confirm:
+3. Copy env templates:
+   - `cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+   - `cp /Users/joe/Code/ci_analyst/apps/web/.env.mock.example /Users/joe/Code/ci_analyst/apps/web/.env.local`
+4. `npm run dev:orchestrator`
+5. `npm run dev:web`
+6. Confirm:
    - frontend streams answer tokens
    - trace panel expands
    - evidence table sorts
@@ -15,16 +17,15 @@
 
 ## 2) Local Sandbox Workflow (Realistic pre-prod test)
 
-1. In `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` set:
-   - `PROVIDER_MODE=sandbox`
+1. Copy env templates:
+   - `cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+   - `cp /Users/joe/Code/ci_analyst/apps/web/.env.remote.example /Users/joe/Code/ci_analyst/apps/web/.env.local`
+2. Set `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
    - `ANTHROPIC_API_KEY=<key>`
-2. Start local Cortex shim:
+3. Start local Cortex shim:
    - `npm run dev:sandbox-cortex`
-3. Start orchestrator:
+4. Start orchestrator:
    - `npm run dev:orchestrator`
-4. Set frontend `/Users/joe/Code/ci_analyst/apps/web/.env.local`:
-   - `WEB_USE_LOCAL_MOCK=false`
-   - `ORCHESTRATOR_URL=http://localhost:8787`
 5. Start web:
    - `npm run dev:web`
 
@@ -32,6 +33,7 @@
 
 ## Backend
 - File: `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+- Template source: `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
 - Required:
   - `PROVIDER_MODE=prod`
   - `AZURE_OPENAI_ENDPOINT`
@@ -44,6 +46,7 @@
 
 ## Frontend
 - File: `/Users/joe/Code/ci_analyst/apps/web/.env.local`
+- Template source: `/Users/joe/Code/ci_analyst/apps/web/.env.remote.example`
 - Required:
   - `WEB_USE_LOCAL_MOCK=false`
   - `ORCHESTRATOR_URL=http://localhost:8787`

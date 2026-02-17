@@ -5,6 +5,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - dependency availability is environment-specific
+    load_dotenv = None
+
+
+_ORCHESTRATOR_DIR = Path(__file__).resolve().parents[1]
+_ORCHESTRATOR_ENV_FILE = _ORCHESTRATOR_DIR / ".env"
+if load_dotenv and _ORCHESTRATOR_ENV_FILE.exists():
+    load_dotenv(_ORCHESTRATOR_ENV_FILE, override=False)
+
 
 def _as_bool(value: Optional[str], default: bool) -> bool:
     if value is None:

@@ -48,8 +48,16 @@ source .venv/bin/activate
 # Windows (PowerShell)
 # .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-cp .env.example .env
+cp .env.mock.example .env
 ```
+
+Environment templates:
+- `.env.mock.example`
+- `.env.sandbox.example`
+- `.env.prod.example`
+
+Runtime file:
+- `.env` (auto-loaded by orchestrator startup)
 
 ## Run
 
