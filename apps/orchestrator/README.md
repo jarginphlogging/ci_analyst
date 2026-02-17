@@ -30,7 +30,11 @@ Provider modes:
 
 `sandbox` mode uses:
 - Anthropic Messages API for routing/planning/sql/synthesis
-- Local Cortex-compatible `/query` REST service
+- Local pseudo-Cortex Analyst REST service with:
+  - `message` endpoint (NL question -> SQL + light response + rows)
+  - clarification handling for vague questions
+  - conversation memory by `conversationId`
+  - raw `/query` endpoint for direct SQL execution
 - Local seeded SQLite dataset with allowlisted banking tables
 
 Azure auth supports:

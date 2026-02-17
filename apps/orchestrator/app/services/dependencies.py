@@ -20,7 +20,7 @@ from app.providers.mock_provider import (
     mock_run_sql,
     mock_validate_results,
 )
-from app.providers.protocols import LlmFn, SqlFn
+from app.providers.protocols import AnalystFn, LlmFn, SqlFn
 from app.services.llm_json import parse_json_object
 from app.services.semantic_model import SemanticModel, load_semantic_model
 from app.services.stages import PlannerStage, SqlExecutionStage, SynthesisStage, ValidationStage, heuristic_route
@@ -69,23 +69,32 @@ class RealDependencies:
         *,
         llm_fn: Optional[LlmFn] = None,
         sql_fn: Optional[SqlFn] = None,
+        analyst_fn: Optional[AnalystFn] = None,
         model: Optional[SemanticModel] = None,
     ) -> None:
         provider_bundle = None
-        if llm_fn is None or sql_fn is None:
+        if llm_fn is None or sql_fn is None or analyst_fn is None:
             mode = settings.provider_mode
             if mode == "mock":
                 mode = "prod"
             provider_bundle = build_provider_bundle(mode)
         self._llm_fn = llm_fn or (provider_bundle.llm_fn if provider_bundle else None)
         self._sql_fn = sql_fn or (provider_bundle.sql_fn if provider_bundle else None)
+        self._analyst_fn = analyst_fn if analyst_fn is not None else (
+            provider_bundle.analyst_fn if provider_bundle else None
+        )
         if self._llm_fn is None or self._sql_fn is None:
             raise RuntimeError("Provider wiring failed to initialize.")
         self._model = model or load_semantic_model()
         self._route_cache: dict[str, str] = {}
         self._assumption_cache: dict[str, list[str]] = {}
         self._planner_stage = PlannerStage(model=self._model, ask_llm_json=self._ask_llm_json)
-        self._sql_stage = SqlExecutionStage(model=self._model, ask_llm_json=self._ask_llm_json, sql_fn=self._sql_fn)
+        self._sql_stage = SqlExecutionStage(
+            model=self._model,
+            ask_llm_json=self._ask_llm_json,
+            sql_fn=self._sql_fn,
+            analyst_fn=self._analyst_fn,
+        )
         self._validation_stage = ValidationStage(max_row_limit=self._model.policy.max_row_limit)
         self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_llm_json)
 
@@ -121,6 +130,7 @@ class RealDependencies:
             route=route,
             plan=plan,
             history=history,
+            conversation_id=str(request.sessionId or "anonymous"),
         )
         self._assumption_cache[request_key] = accumulated_assumptions
         return results
@@ -156,4 +166,5 @@ def create_dependencies() -> OrchestratorDependencies:
     return RealDependencies(
         llm_fn=provider_bundle.llm_fn,
         sql_fn=provider_bundle.sql_fn,
+        analyst_fn=provider_bundle.analyst_fn,
     )

@@ -19,5 +19,18 @@ class SqlProvider(Protocol):
     async def __call__(self, sql: str) -> list[dict[str, Any]]: ...
 
 
+class AnalystProvider(Protocol):
+    async def __call__(
+        self,
+        *,
+        conversation_id: str,
+        message: str,
+        history: list[str] | None = None,
+        route: str | None = None,
+        step_id: str | None = None,
+    ) -> dict[str, Any]: ...
+
+
 LlmFn = Callable[..., Awaitable[str]]
 SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
+AnalystFn = Callable[..., Awaitable[dict[str, Any]]]

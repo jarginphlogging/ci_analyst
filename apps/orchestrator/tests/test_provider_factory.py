@@ -9,12 +9,14 @@ def test_build_provider_bundle_for_prod() -> None:
     bundle = build_provider_bundle("prod")
     assert bundle.llm_fn
     assert bundle.sql_fn
+    assert bundle.analyst_fn is None
 
 
 def test_build_provider_bundle_for_sandbox() -> None:
     bundle = build_provider_bundle("sandbox")
     assert bundle.llm_fn
     assert bundle.sql_fn
+    assert bundle.analyst_fn
 
 
 def test_build_provider_bundle_rejects_mock_mode() -> None:

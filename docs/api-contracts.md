@@ -70,9 +70,57 @@ Response:
 ```json
 {
   "status": "ok",
-  "timestamp": "..."
+  "timestamp": "...",
+  "providerMode": "mock|sandbox|prod"
 }
 ```
+
+## Sandbox Pseudo-Cortex API (Local, default `http://localhost:8788`)
+
+### POST `/api/v2/cortex/analyst/message`
+
+Request:
+```json
+{
+  "conversationId": "session-123",
+  "message": "What were my sales by state in Q4 2025?",
+  "history": ["Show me channel mix first"],
+  "route": "deep_path",
+  "stepId": "step_1"
+}
+```
+
+Response:
+```json
+{
+  "type": "answer|clarification",
+  "conversationId": "session-123",
+  "sql": "SELECT ...",
+  "lightResponse": "One-sentence analyst summary.",
+  "clarificationQuestion": "",
+  "rows": [],
+  "rowCount": 0,
+  "assumptions": []
+}
+```
+
+Notes:
+- `type=clarification` returns a non-empty `clarificationQuestion`.
+- Service keeps conversation memory by `conversationId`.
+
+### GET `/api/v2/cortex/analyst/history/{conversationId}`
+
+Response:
+```json
+{
+  "conversationId": "session-123",
+  "history": ["..."]
+}
+```
+
+### POST `/api/v2/cortex/analyst/query`
+
+Raw SQL execution endpoint used by the sandbox SQL adapter.
 
 ## Frontend API Routes
 

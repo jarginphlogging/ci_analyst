@@ -14,6 +14,7 @@ from app.services.table_analysis import normalize_rows
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
+AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
 
 
 @dataclass(frozen=True)
@@ -62,10 +63,12 @@ class SqlExecutionStage:
         model: SemanticModel,
         ask_llm_json: AskLlmJsonFn,
         sql_fn: SqlFn,
+        analyst_fn: AnalystFn | None = None,
     ) -> None:
         self._model = model
         self._ask_llm_json = ask_llm_json
         self._sql_fn = sql_fn
+        self._analyst_fn = analyst_fn
 
     async def _execute_sql(self, step_sql: _StepSql) -> SqlExecutionResult:
         executed_sql = step_sql.sql
@@ -103,12 +106,54 @@ class SqlExecutionStage:
         route: str,
         plan: list[QueryPlanStep],
         history: list[str],
+        conversation_id: str = "anonymous",
     ) -> tuple[list[SqlExecutionResult], list[str]]:
         prior_sql: list[str] = []
         accumulated_assumptions: list[str] = []
         step_sqls: list[_StepSql] = []
+        results: list[SqlExecutionResult] = []
 
         for step in plan:
+            handled_by_analyst = False
+            if self._analyst_fn is not None:
+                try:
+                    analyst_payload = await self._analyst_fn(
+                        conversation_id=conversation_id,
+                        message=f"{message}\n\nStep goal: {step.goal}",
+                        history=history,
+                        route=route,
+                        step_id=step.id,
+                    )
+                    analyst_sql = str(analyst_payload.get("sql", "")).strip()
+                    if analyst_sql:
+                        guarded_sql = guard_sql(analyst_sql, self._model)
+                        prior_sql.append(guarded_sql)
+
+                        payload_rows = analyst_payload.get("rows")
+                        if isinstance(payload_rows, list):
+                            normalized_rows = normalize_rows(payload_rows)
+                        else:
+                            normalized_rows = normalize_rows(await self._sql_fn(guarded_sql))
+
+                        clarification = str(analyst_payload.get("clarificationQuestion", "")).strip()
+                        if clarification:
+                            accumulated_assumptions.append(f"Clarification requested: {clarification}")
+                        accumulated_assumptions.extend(
+                            as_string_list(analyst_payload.get("assumptions"), max_items=3)
+                        )
+                        results.append(
+                            SqlExecutionResult(
+                                sql=guarded_sql,
+                                rows=normalized_rows,
+                                rowCount=len(normalized_rows),
+                            )
+                        )
+                        handled_by_analyst = True
+                except Exception:
+                    pass
+            if handled_by_analyst:
+                continue
+
             sql_text = _fallback_sql(self._model, step.goal)
             try:
                 system_prompt, user_prompt = sql_prompt(
@@ -138,12 +183,17 @@ class SqlExecutionStage:
                 self._model,
             )
             prior_sql.append(guarded_sql)
-            step_sqls.append(
-                _StepSql(
-                    sql=guarded_sql,
-                    fallback_sql=fallback_sql,
-                )
+            step_sql = _StepSql(
+                sql=guarded_sql,
+                fallback_sql=fallback_sql,
             )
+            if self._analyst_fn is not None:
+                results.append(await self._execute_sql(step_sql))
+            else:
+                step_sqls.append(step_sql)
+
+        if self._analyst_fn is not None:
+            return results, accumulated_assumptions[:6]
 
         if settings.real_enable_parallel_sql and len(step_sqls) > 1:
             results = await self._execute_sql_parallel(step_sqls)

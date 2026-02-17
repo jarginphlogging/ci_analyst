@@ -23,7 +23,7 @@
 3. Orchestrator receives `/v1/chat/turn` or `/v1/chat/stream`.
 4. Dependency mode selected by `PROVIDER_MODE`:
    - `mock` path: deterministic mock provider payloads
-   - `sandbox` path: Anthropic + local Cortex REST + local SQLite
+   - `sandbox` path: Anthropic + local pseudo-Cortex Analyst REST + local SQLite
    - `prod` path: Azure + Snowflake + guardrails
 5. Real path stages:
    - classify route (`fast_path` vs `deep_path`)

@@ -6,9 +6,11 @@ from app.providers.factory import (
     build_provider_bundle,
     build_sandbox_provider_bundle,
 )
-from app.providers.protocols import LlmFn, LlmProvider, SqlFn, SqlProvider
+from app.providers.protocols import AnalystFn, AnalystProvider, LlmFn, LlmProvider, SqlFn, SqlProvider
 
 __all__ = [
+    "AnalystFn",
+    "AnalystProvider",
     "LlmFn",
     "LlmProvider",
     "ProviderBundle",

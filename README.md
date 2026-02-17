@@ -18,7 +18,7 @@ This repo supports:
 - Mock mode is fully implemented for local UX/demo/testing.
 - Sandbox mode is implemented for realistic local e2e testing:
   - Anthropic API as LLM
-  - local Cortex-compatible REST shim
+  - local pseudo-Cortex Analyst REST shim (`message -> sql -> light response`)
   - seeded local SQLite analytics tables
 - Real mode is wired for:
   - route classification
@@ -146,6 +146,13 @@ npm run setup:orchestrator
 cd /Users/joe/Code/ci_analyst
 npm run dev:sandbox-cortex
 ```
+
+Sandbox Cortex behavior:
+- Accepts natural-language `message` requests (not only raw SQL).
+- Generates SQL using Anthropic (with fallback SQL if generation fails).
+- Returns a light analyst response plus rows.
+- If a question is vague, returns a clarification question and a default summary query.
+- Maintains conversation history by `conversationId` for multi-turn continuity.
 
 5. Start orchestrator API (Terminal 2):
 ```bash
