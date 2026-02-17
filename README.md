@@ -132,8 +132,8 @@ npm run eval
 
 ## Enterprise Registry Notes
 
-- This repo pins `typescript-eslint` to `8.46.0` to avoid mirror lag issues with newer transitive releases.
 - For long-term deterministic installs on enterprise mirrors, use `npm ci` (not `npm install`) on your work machine.
+- The web lint config is intentionally minimal to avoid frequent mirror lag on fast-moving lint plugin packages.
 
 ## Security and Governance Notes
 
