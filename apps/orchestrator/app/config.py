@@ -39,6 +39,14 @@ class Settings:
     azure_openai_api_key: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")
     azure_openai_deployment: Optional[str] = os.getenv("AZURE_OPENAI_DEPLOYMENT")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
+    azure_openai_auth_mode: str = os.getenv("AZURE_OPENAI_AUTH_MODE", "api_key").strip().lower()
+    azure_tenant_id: Optional[str] = os.getenv("AZURE_TENANT_ID")
+    azure_spn_client_id: Optional[str] = os.getenv("AZURE_SPN_CLIENT_ID")
+    azure_spn_cert_path: Optional[str] = os.getenv("AZURE_SPN_CERT_PATH")
+    azure_spn_cert_password: Optional[str] = os.getenv("AZURE_SPN_CERT_PASSWORD")
+    azure_openai_scope: str = os.getenv("AZURE_OPENAI_SCOPE", "https://cognitiveservices.azure.com/.default")
+    azure_openai_gateway_api_key: Optional[str] = os.getenv("AZURE_OPENAI_GATEWAY_API_KEY")
+    azure_openai_gateway_api_key_header: str = os.getenv("AZURE_OPENAI_GATEWAY_API_KEY_HEADER", "Api-Key")
 
     snowflake_cortex_base_url: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_BASE_URL")
     snowflake_cortex_api_key: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_API_KEY")
@@ -55,7 +63,11 @@ class Settings:
     mock_stream_response_delay_ms: int = _as_int(os.getenv("MOCK_STREAM_RESPONSE_DELAY_MS"), 450)
 
     def has_azure_credentials(self) -> bool:
-        return bool(self.azure_openai_endpoint and self.azure_openai_api_key and self.azure_openai_deployment)
+        if not self.azure_openai_endpoint or not self.azure_openai_deployment:
+            return False
+        if self.azure_openai_auth_mode == "certificate":
+            return bool(self.azure_tenant_id and self.azure_spn_client_id and self.azure_spn_cert_path)
+        return bool(self.azure_openai_api_key)
 
     def has_snowflake_credentials(self) -> bool:
         return bool(self.snowflake_cortex_base_url and self.snowflake_cortex_api_key)

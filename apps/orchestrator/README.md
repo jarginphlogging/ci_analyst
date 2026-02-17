@@ -21,6 +21,11 @@ Real mode (`USE_MOCK_PROVIDERS=false`) uses:
 - Snowflake Cortex SQL execution adapter
 - deterministic SQL guardrails and validation checks
 
+Azure auth supports:
+- `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_AUTH_MODE=certificate` with `AZURE_TENANT_ID`, `AZURE_SPN_CLIENT_ID`, `AZURE_SPN_CERT_PATH` (optional `AZURE_SPN_CERT_PASSWORD`)
+- optional enterprise gateway header via `AZURE_OPENAI_GATEWAY_API_KEY` and `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
+
 ## Local Setup
 
 ```bash

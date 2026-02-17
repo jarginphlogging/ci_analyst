@@ -117,6 +117,10 @@ To slow mock streaming for demos, tune:
 2. Set:
 - `USE_MOCK_PROVIDERS=false`
 - Azure variables (`AZURE_OPENAI_*`)
+  - auth mode: `AZURE_OPENAI_AUTH_MODE=api_key` or `AZURE_OPENAI_AUTH_MODE=certificate`
+  - `api_key` mode: set `AZURE_OPENAI_API_KEY`
+  - `certificate` mode: set `AZURE_TENANT_ID`, `AZURE_SPN_CLIENT_ID`, `AZURE_SPN_CERT_PATH` (and optional `AZURE_SPN_CERT_PASSWORD`)
+  - optional gateway header support: `AZURE_OPENAI_GATEWAY_API_KEY`, `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
 - Snowflake variables (`SNOWFLAKE_CORTEX_*`)
 - optional semantic model override (`SEMANTIC_MODEL_PATH=/absolute/path/to/model.json`)
 - optional orchestration controls (`REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS`, `REAL_LLM_*`)
