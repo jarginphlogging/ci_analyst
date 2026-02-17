@@ -1,10 +1,31 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const candidates = [
-  ["python"],
-  ["py", "-3"],
-  ["python3"],
+const isWin = process.platform === "win32";
+const __filename = fileURLToPath(import.meta.url);
+const repoRoot = path.resolve(path.dirname(__filename), "..");
+
+function candidatePath(baseDir) {
+  return isWin
+    ? path.join(baseDir, ".venv", "Scripts", "python.exe")
+    : path.join(baseDir, ".venv", "bin", "python");
+}
+
+const venvCandidates = [
+  candidatePath(process.cwd()),
+  candidatePath(path.join(repoRoot, "apps", "orchestrator")),
+  candidatePath(repoRoot),
 ];
+
+const candidates = [];
+for (const candidate of venvCandidates) {
+  if (existsSync(candidate)) {
+    candidates.push([candidate]);
+  }
+}
+candidates.push(["python"], ["py", "-3"], ["python3"]);
 
 function findPythonCommand() {
   for (const command of candidates) {
