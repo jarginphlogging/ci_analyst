@@ -14,18 +14,19 @@ class ConversationalOrchestrator:
     async def run_turn(self, request: ChatTurnRequest) -> TurnResult:
         session_id = str(request.sessionId or "anonymous")
         history = self._session_history.get(session_id, [])
+        prior_history = history[-8:]
         history.append(request.message)
         self._session_history[session_id] = history[-12:]
 
-        route = await self._dependencies.classify_route(request)
-        plan = await self._dependencies.create_plan(request)
-        results = await self._dependencies.run_sql(request, plan)
+        route = await self._dependencies.classify_route(request, prior_history)
+        plan = await self._dependencies.create_plan(request, prior_history)
+        results = await self._dependencies.run_sql(request, plan, prior_history)
         validation = await self._dependencies.validate_results(results)
 
         if not validation.passed:
             raise RuntimeError("Result validation failed.")
 
-        response = await self._dependencies.build_response(request, results)
+        response = await self._dependencies.build_response(request, results, prior_history)
 
         response.trace = [
             (

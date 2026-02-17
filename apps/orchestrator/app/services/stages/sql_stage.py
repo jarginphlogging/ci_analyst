@@ -102,6 +102,7 @@ class SqlExecutionStage:
         message: str,
         route: str,
         plan: list[QueryPlanStep],
+        history: list[str],
     ) -> tuple[list[SqlExecutionResult], list[str]]:
         prior_sql: list[str] = []
         accumulated_assumptions: list[str] = []
@@ -117,6 +118,7 @@ class SqlExecutionStage:
                     step.goal,
                     self._model,
                     prior_sql,
+                    history,
                 )
                 payload = await self._ask_llm_json(
                     system_prompt=system_prompt,

@@ -35,8 +35,8 @@ class PlannerStage:
         self._model = model
         self._ask_llm_json = ask_llm_json
 
-    async def classify_route(self, message: str) -> str:
-        system_prompt, user_prompt = route_prompt(message, [])
+    async def classify_route(self, message: str, history: list[str]) -> str:
+        system_prompt, user_prompt = route_prompt(message, history)
         route = heuristic_route(message)
         try:
             payload = await self._ask_llm_json(
@@ -51,11 +51,11 @@ class PlannerStage:
             route = heuristic_route(message)
         return route
 
-    async def create_plan(self, message: str, route: str) -> list[QueryPlanStep]:
+    async def create_plan(self, message: str, route: str, history: list[str]) -> list[QueryPlanStep]:
         max_steps = settings.real_deep_plan_steps if route == "deep_path" else settings.real_fast_plan_steps
         max_steps = max(1, max_steps)
 
-        system_prompt, user_prompt = plan_prompt(message, route, self._model, max_steps)
+        system_prompt, user_prompt = plan_prompt(message, route, self._model, max_steps, history)
 
         try:
             payload = await self._ask_llm_json(

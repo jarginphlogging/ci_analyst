@@ -88,6 +88,7 @@ class SynthesisStage:
         route: str,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
+        history: list[str],
     ) -> AgentResponse:
         evidence = build_evidence_rows(results)
         metrics = build_metric_points(results, evidence)
@@ -102,6 +103,7 @@ class SynthesisStage:
                 route,
                 result_summary,
                 evidence_summary,
+                history,
             )
             llm_payload = await self._ask_llm_json(
                 system_prompt=system_prompt,

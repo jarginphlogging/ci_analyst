@@ -3,8 +3,13 @@ from __future__ import annotations
 from app.services.semantic_model import SemanticModel, semantic_model_summary
 
 
+def _history_text(history: list[str]) -> str:
+    recent = [item.strip() for item in history[-6:] if item and item.strip()]
+    return "\n".join(f"- {item}" for item in recent) or "- none"
+
+
 def route_prompt(user_message: str, history: list[str]) -> tuple[str, str]:
-    history_text = "\n".join(f"- {item}" for item in history[-6:]) or "- none"
+    history_text = _history_text(history)
     system = (
         "You are a routing model for a governed customer-insights analytics assistant. "
         "Choose fast_path for simple metric retrieval and deep_path for multi-step causal analysis. "
@@ -18,12 +23,19 @@ def route_prompt(user_message: str, history: list[str]) -> tuple[str, str]:
     return system, user
 
 
-def plan_prompt(user_message: str, route: str, model: SemanticModel, max_steps: int) -> tuple[str, str]:
+def plan_prompt(
+    user_message: str,
+    route: str,
+    model: SemanticModel,
+    max_steps: int,
+    history: list[str],
+) -> tuple[str, str]:
     system = (
         "You design deterministic analytics plans with bounded steps for regulated environments. "
         "Use only entities from the semantic model. Return strict JSON only."
     )
     user = (
+        f"Conversation history:\n{_history_text(history)}\n\n"
         f"{semantic_model_summary(model)}\n\n"
         f"Route: {route}\n"
         f"Max steps: {max_steps}\n"
@@ -41,6 +53,7 @@ def sql_prompt(
     step_goal: str,
     model: SemanticModel,
     prior_sql: list[str],
+    history: list[str],
 ) -> tuple[str, str]:
     prior_text = "\n".join(f"- {sql}" for sql in prior_sql[-3:]) or "- none"
     system = (
@@ -49,6 +62,7 @@ def sql_prompt(
         "Use only allowlisted tables and no restricted columns. Return strict JSON only."
     )
     user = (
+        f"Conversation history:\n{_history_text(history)}\n\n"
         f"{semantic_model_summary(model)}\n\n"
         f"Question: {user_message}\n"
         f"Route: {route}\n"
@@ -68,6 +82,7 @@ def response_prompt(
     route: str,
     result_summary: str,
     evidence_summary: str,
+    history: list[str],
 ) -> tuple[str, str]:
     system = (
         "You are an executive analytics narrator for a banking customer-insights platform. "
@@ -75,6 +90,7 @@ def response_prompt(
         "Do not invent facts. Return strict JSON only."
     )
     user = (
+        f"Conversation history:\n{_history_text(history)}\n\n"
         f"Question: {user_message}\n"
         f"Route: {route}\n\n"
         f"SQL result summary:\n{result_summary}\n\n"

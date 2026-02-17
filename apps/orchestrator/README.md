@@ -15,6 +15,7 @@ FastAPI orchestration service for conversational analytics.
 3. execute governed SQL steps
 4. run numeric validation checks
 5. build answer + evidence + insights + trace + retrievable tables
+6. carry forward bounded prior-turn context into route/plan/sql/response prompts
 
 Real mode (`USE_MOCK_PROVIDERS=false`) uses:
 - Azure OpenAI for routing, planning, SQL generation, and narrative synthesis

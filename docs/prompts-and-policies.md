@@ -12,6 +12,7 @@ Stages:
 4. `response_prompt` -> produce final narrative payload
 
 All stages request strict JSON output and run through parser safeguards.
+All stages include bounded recent conversation history (up to 6 turns) for multi-turn continuity.
 
 ## 2) LLM Output Enforcement
 

@@ -32,6 +32,7 @@
    - execute SQL via Snowflake adapter
    - validate results
    - synthesize response with deterministic table profiling + Azure narrative
+   - carry forward bounded session history into route/plan/sql/response prompts
 6. Response is returned with answer, metrics, evidence, insights, trace, assumptions, and `dataTables`.
 
 ## 3) Orchestrator Modules (Current)
@@ -114,5 +115,4 @@
 
 1. Tune prompts with bank-specific language and domain rubric.
 2. Align Snowflake adapter payload format to enterprise wrapper if it differs from `/query`.
-3. Add multi-turn memory carry-forward into planning prompts.
-4. Expand eval harness for strict numeric assertions and path-specific latency thresholds.
+3. Expand eval harness for strict numeric assertions and path-specific latency thresholds.

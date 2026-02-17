@@ -58,11 +58,11 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     request = ChatTurnRequest(sessionId=uuid4(), message="What were my sales by state and how did channel mix change?")
     deps = RealDependencies(llm_fn=fake_llm, sql_fn=fake_sql, model=load_semantic_model())
 
-    route = await deps.classify_route(request)
-    plan = await deps.create_plan(request)
-    results = await deps.run_sql(request, plan)
+    route = await deps.classify_route(request, [])
+    plan = await deps.create_plan(request, [])
+    results = await deps.run_sql(request, plan, [])
     validation = await deps.validate_results(results)
-    response = await deps.build_response(request, results)
+    response = await deps.build_response(request, results, [])
 
     assert route == "deep_path"
     assert len(plan) >= 1
@@ -78,11 +78,11 @@ async def test_real_dependencies_pipeline_fallbacks_without_llm() -> None:
     request = ChatTurnRequest(sessionId=uuid4(), message="Show transaction trends by state")
     deps = RealDependencies(llm_fn=failing_llm, sql_fn=fake_sql, model=load_semantic_model())
 
-    route = await deps.classify_route(request)
-    plan = await deps.create_plan(request)
-    results = await deps.run_sql(request, plan)
+    route = await deps.classify_route(request, [])
+    plan = await deps.create_plan(request, [])
+    results = await deps.run_sql(request, plan, [])
     validation = await deps.validate_results(results)
-    response = await deps.build_response(request, results)
+    response = await deps.build_response(request, results, [])
 
     assert route in {"fast_path", "deep_path"}
     assert len(plan) >= 1

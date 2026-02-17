@@ -66,6 +66,7 @@ async def test_parallel_sql_execution_preserves_plan_order() -> None:
             message="run parallel query steps",
             route="deep_path",
             plan=plan,
+            history=[],
         )
     finally:
         object.__setattr__(settings, "real_enable_parallel_sql", original_parallel_enabled)

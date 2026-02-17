@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -25,21 +26,40 @@ from app.services.semantic_model import SemanticModel, load_semantic_model
 from app.services.stages import PlannerStage, SqlExecutionStage, SynthesisStage, ValidationStage, heuristic_route
 from app.services.types import OrchestratorDependencies
 
+
+def _request_key(request: ChatTurnRequest) -> str:
+    session_id = str(request.sessionId or "anonymous")
+    role = (request.role or "").strip().lower()
+    message = request.message.strip().lower()
+    filters = json.dumps(request.explicitFilters or {}, sort_keys=True)
+    return f"{session_id}|{role}|{message}|{filters}"
+
+
 @dataclass
 class MockDependencies:
-    async def classify_route(self, request: ChatTurnRequest) -> str:
+    async def classify_route(self, request: ChatTurnRequest, history: list[str]) -> str:  # noqa: ARG002
         return await mock_classify_route(request)
 
-    async def create_plan(self, request: ChatTurnRequest) -> list[QueryPlanStep]:
+    async def create_plan(self, request: ChatTurnRequest, history: list[str]) -> list[QueryPlanStep]:  # noqa: ARG002
         return await mock_create_plan(request)
 
-    async def run_sql(self, request: ChatTurnRequest, plan: list[QueryPlanStep]) -> list[SqlExecutionResult]:
+    async def run_sql(
+        self,
+        request: ChatTurnRequest,
+        plan: list[QueryPlanStep],
+        history: list[str],  # noqa: ARG002
+    ) -> list[SqlExecutionResult]:
         return await mock_run_sql(request, plan)
 
     async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult:
         return await mock_validate_results(results)
 
-    async def build_response(self, request: ChatTurnRequest, results: list[SqlExecutionResult]) -> AgentResponse:
+    async def build_response(
+        self,
+        request: ChatTurnRequest,
+        results: list[SqlExecutionResult],
+        history: list[str],  # noqa: ARG002
+    ) -> AgentResponse:
         return await mock_build_response(request, results)
 
 
@@ -74,36 +94,54 @@ class RealDependencies:
         )
         return parse_json_object(response)
 
-    async def classify_route(self, request: ChatTurnRequest) -> str:
-        route = await self._planner_stage.classify_route(request.message)
-        self._route_cache[request.message] = route
+    async def classify_route(self, request: ChatTurnRequest, history: list[str]) -> str:
+        route = await self._planner_stage.classify_route(request.message, history)
+        self._route_cache[_request_key(request)] = route
         return route
 
-    async def create_plan(self, request: ChatTurnRequest) -> list[QueryPlanStep]:
-        route = self._route_cache.get(request.message) or heuristic_route(request.message)
-        return await self._planner_stage.create_plan(request.message, route)
+    async def create_plan(self, request: ChatTurnRequest, history: list[str]) -> list[QueryPlanStep]:
+        route = self._route_cache.get(_request_key(request)) or heuristic_route(request.message)
+        return await self._planner_stage.create_plan(request.message, route, history)
 
-    async def run_sql(self, request: ChatTurnRequest, plan: list[QueryPlanStep]) -> list[SqlExecutionResult]:
-        route = self._route_cache.get(request.message) or heuristic_route(request.message)
+    async def run_sql(
+        self,
+        request: ChatTurnRequest,
+        plan: list[QueryPlanStep],
+        history: list[str],
+    ) -> list[SqlExecutionResult]:
+        request_key = _request_key(request)
+        route = self._route_cache.get(request_key) or heuristic_route(request.message)
         results, accumulated_assumptions = await self._sql_stage.run_sql(
             message=request.message,
             route=route,
             plan=plan,
+            history=history,
         )
-        self._assumption_cache[request.message] = accumulated_assumptions
+        self._assumption_cache[request_key] = accumulated_assumptions
         return results
 
     async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult:
         return self._validation_stage.validate_results(results)
 
-    async def build_response(self, request: ChatTurnRequest, results: list[SqlExecutionResult]) -> AgentResponse:
-        route = self._route_cache.get(request.message) or heuristic_route(request.message)
-        return await self._synthesis_stage.build_response(
-            message=request.message,
-            route=route,
-            results=results,
-            prior_assumptions=self._assumption_cache.get(request.message, []),
-        )
+    async def build_response(
+        self,
+        request: ChatTurnRequest,
+        results: list[SqlExecutionResult],
+        history: list[str],
+    ) -> AgentResponse:
+        request_key = _request_key(request)
+        route = self._route_cache.get(request_key) or heuristic_route(request.message)
+        try:
+            return await self._synthesis_stage.build_response(
+                message=request.message,
+                route=route,
+                results=results,
+                prior_assumptions=self._assumption_cache.get(request_key, []),
+                history=history,
+            )
+        finally:
+            self._route_cache.pop(request_key, None)
+            self._assumption_cache.pop(request_key, None)
 
 
 def create_dependencies() -> OrchestratorDependencies:
