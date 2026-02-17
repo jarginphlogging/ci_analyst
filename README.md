@@ -53,9 +53,16 @@ npm ci
 
 2. (Optional but recommended) Create and activate a Python virtual environment:
 ```bash
-python3 -m venv .venv
+python -m venv .venv
+# macOS/Linux
 source .venv/bin/activate
+# Windows (PowerShell)
+# .\.venv\Scripts\Activate.ps1
 ```
+
+If `python` is not available on Windows, use `py -3` in the same commands.
+
+`npm run setup:orchestrator` and orchestrator npm scripts auto-detect Python (`python`, `py -3`, or `python3`).
 
 3. Install Python backend dependencies:
 ```bash
@@ -76,7 +83,7 @@ npm run dev:orchestrator
 Alternative direct command:
 ```bash
 cd /Users/joe/Code/ci_analyst/apps/orchestrator
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
 6. In another shell, run frontend in mock mode:

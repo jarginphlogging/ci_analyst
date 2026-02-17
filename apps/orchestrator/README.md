@@ -25,9 +25,12 @@ Real mode (`USE_MOCK_PROVIDERS=false`) uses:
 
 ```bash
 cd /Users/joe/Code/ci_analyst/apps/orchestrator
-python3 -m venv .venv
+python -m venv .venv
+# macOS/Linux
 source .venv/bin/activate
-python3 -m pip install -r requirements.txt
+# Windows (PowerShell)
+# .\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
 cp .env.example .env
 ```
 
@@ -38,10 +41,12 @@ cd /Users/joe/Code/ci_analyst
 npm run dev:orchestrator
 ```
 
+The npm scripts auto-detect Python (`python`, `py -3`, or `python3`).
+
 Direct command:
 ```bash
 cd /Users/joe/Code/ci_analyst/apps/orchestrator
-python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
 ## Test
