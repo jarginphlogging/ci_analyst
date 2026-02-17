@@ -65,6 +65,8 @@ npm --workspace @ci/orchestrator run test
 
 - `app/providers/azure_openai.py`
 - `app/providers/snowflake_cortex.py`
+- `app/providers/factory.py`
+- `app/providers/protocols.py`
 - `app/services/dependencies.py`
 - prompt templates: `app/prompts/templates.py`
 - SQL policy checks: `app/services/sql_guardrails.py`

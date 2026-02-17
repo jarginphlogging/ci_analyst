@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Awaitable, Callable, Literal, Optional, cast
+from typing import Any, Literal, Optional, cast
 
 from app.config import settings
 from app.models import (
@@ -15,7 +15,7 @@ from app.models import (
     ValidationResult,
 )
 from app.prompts.templates import plan_prompt, response_prompt, route_prompt, sql_prompt
-from app.providers.azure_openai import chat_completion
+from app.providers.factory import build_live_provider_bundle
 from app.providers.mock_provider import (
     mock_build_response,
     mock_classify_route,
@@ -23,7 +23,7 @@ from app.providers.mock_provider import (
     mock_run_sql,
     mock_validate_results,
 )
-from app.providers.snowflake_cortex import execute_cortex_sql
+from app.providers.protocols import LlmFn, SqlFn
 from app.services.llm_json import as_string_list, parse_json_object
 from app.services.semantic_model import SemanticModel, SemanticTable, load_semantic_model
 from app.services.sql_guardrails import guard_sql
@@ -35,9 +35,6 @@ from app.services.table_analysis import (
     summarize_results_for_prompt,
 )
 from app.services.types import OrchestratorDependencies
-
-LlmFn = Callable[..., Awaitable[str]]
-SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
 
 
 def _heuristic_route(message: str) -> str:
@@ -180,8 +177,11 @@ class RealDependencies:
         sql_fn: Optional[SqlFn] = None,
         model: Optional[SemanticModel] = None,
     ) -> None:
-        self._llm_fn = llm_fn or chat_completion
-        self._sql_fn = sql_fn or execute_cortex_sql
+        provider_bundle = build_live_provider_bundle() if (llm_fn is None or sql_fn is None) else None
+        self._llm_fn = llm_fn or (provider_bundle.llm_fn if provider_bundle else None)
+        self._sql_fn = sql_fn or (provider_bundle.sql_fn if provider_bundle else None)
+        if self._llm_fn is None or self._sql_fn is None:
+            raise RuntimeError("Provider wiring failed to initialize.")
         self._model = model or load_semantic_model()
         self._route_cache: dict[str, str] = {}
         self._assumption_cache: dict[str, list[str]] = {}
@@ -416,4 +416,8 @@ class RealDependencies:
 def create_dependencies() -> OrchestratorDependencies:
     if settings.use_mock_providers:
         return MockDependencies()
-    return RealDependencies()
+    provider_bundle = build_live_provider_bundle()
+    return RealDependencies(
+        llm_fn=provider_bundle.llm_fn,
+        sql_fn=provider_bundle.sql_fn,
+    )
