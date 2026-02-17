@@ -111,14 +111,14 @@ Frontend env file:
 
 Optional reference templates:
 - Mock:
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock.example`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock`
 - Sandbox:
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator.example`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator`
 - Prod:
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator.example`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator`
 
 Note:
 - Orchestrator now auto-loads `/Users/joe/Code/ci_analyst/apps/orchestrator/.env` on startup.

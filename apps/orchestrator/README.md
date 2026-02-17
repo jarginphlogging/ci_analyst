@@ -51,9 +51,9 @@ python -m pip install -r requirements.txt
 ```
 
 Environment templates:
-- `.env.mock.example`
-- `.env.sandbox.example`
-- `.env.prod.example`
+- `.env.mock`
+- `.env.sandbox`
+- `.env.prod`
 
 Runtime file:
 - `.env` (auto-loaded by orchestrator startup)

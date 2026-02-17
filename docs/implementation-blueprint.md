@@ -94,9 +94,9 @@
 - Auto-loaded at startup.
 - Real runtime file is committed and can be edited directly.
 - Optional reference templates:
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock.example`
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox.example`
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod.example`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod`
 - `PROVIDER_MODE=mock|sandbox|prod`
 - `USE_MOCK_PROVIDERS=true|false` (backward-compatible fallback if `PROVIDER_MODE` is unset)
 - `AZURE_OPENAI_*`
@@ -112,8 +112,8 @@
 ### Frontend (`apps/web/.env.local`)
 - Real runtime file is committed and can be edited directly.
 - Optional reference templates:
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock.example`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator.example`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock`
+  - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator`
 - `WEB_BACKEND_MODE=web_mock|orchestrator`
 - `ORCHESTRATOR_URL=http://localhost:8787`
 - `WEB_MOCK_STATUS_DELAY_MS`, `WEB_MOCK_TOKEN_DELAY_MS`, `WEB_MOCK_RESPONSE_DELAY_MS`
