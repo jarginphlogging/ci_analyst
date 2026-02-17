@@ -2,16 +2,73 @@
   {
     "id": "g1",
     "question": "Show me my sales in each state in descending order.",
-    "mustContainAny": ["sales", "state", "CNP"]
+    "mustContainAny": ["sales", "state", "cnp"],
+    "minTokenHits": 2,
+    "expectedRoute": "fast_path",
+    "maxLatencyMs": 5000,
+    "numericAssertions": [
+      {
+        "label": "Total Spend",
+        "field": "value",
+        "expected": 2.83,
+        "tolerance": 0.001,
+        "unit": "usd"
+      },
+      {
+        "label": "CNP Spend Share",
+        "field": "value",
+        "expected": 39.8,
+        "tolerance": 0.001,
+        "unit": "pct"
+      }
+    ]
   },
   {
     "id": "g2",
     "question": "What were my sales, transactions, and average sale amount for Q4 2025 compared to the same period last year?",
-    "mustContainAny": ["Q4 2025", "Q4 2024", "average sale amount"]
+    "mustContainAny": ["q4 2025", "q4 2024", "average sale amount"],
+    "minTokenHits": 2,
+    "expectedRoute": "deep_path",
+    "maxLatencyMs": 15000,
+    "numericAssertions": [
+      {
+        "label": "Q4 2025 Spend",
+        "field": "value",
+        "expected": 0.74,
+        "tolerance": 0.001,
+        "unit": "usd"
+      },
+      {
+        "label": "Q4 CNP Share",
+        "field": "value",
+        "expected": 41.2,
+        "tolerance": 0.001,
+        "unit": "pct"
+      }
+    ]
   },
   {
     "id": "g3",
     "question": "What are my top and bottom performing stores for 2025? For each of those stores, what is the new vs. repeat customer mix?",
-    "mustContainAny": ["top", "bottom", "repeat"]
+    "mustContainAny": ["top", "bottom", "repeat"],
+    "minTokenHits": 2,
+    "expectedRoute": "deep_path",
+    "maxLatencyMs": 15000,
+    "numericAssertions": [
+      {
+        "label": "Top Store Spend",
+        "field": "value",
+        "expected": 0.04,
+        "tolerance": 0.001,
+        "unit": "usd"
+      },
+      {
+        "label": "Repeat Share Gap",
+        "field": "value",
+        "expected": 19.1,
+        "tolerance": 0.001,
+        "unit": "pct"
+      }
+    ]
   }
 ]

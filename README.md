@@ -175,6 +175,7 @@ npm run eval
 ```
 
 `npm run eval` expects orchestrator running on `http://localhost:8787` by default.
+It evaluates token hits, numeric assertions, expected route, and route-specific latency thresholds (p50/p95).
 
 ## Enterprise Registry Notes
 

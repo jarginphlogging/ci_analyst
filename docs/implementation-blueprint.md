@@ -110,9 +110,11 @@
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/tests/test_sql_guardrails.py`
 - Frontend stream parser tests:
   - `/Users/joe/Code/ci_analyst/apps/web/src/lib/stream.test.ts`
+- Eval harness scoring tests:
+  - `/Users/joe/Code/ci_analyst/packages/eval-harness/src/score.test.mjs`
 
 ## 8) Known Gaps / Next Hardening Steps
 
 1. Tune prompts with bank-specific language and domain rubric.
 2. Align Snowflake adapter payload format to enterprise wrapper if it differs from `/query`.
-3. Expand eval harness for strict numeric assertions and path-specific latency thresholds.
+3. Add CI gate wiring to fail merges when eval regression thresholds are breached.
