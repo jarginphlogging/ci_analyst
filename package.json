@@ -1,0 +1,17 @@
+{
+  "name": "ci_analyst",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup:orchestrator": "python3 -m pip install -r apps/orchestrator/requirements.txt",
+    "dev:web": "npm --workspace @ci/web run dev",
+    "dev:orchestrator": "npm --workspace @ci/orchestrator run dev",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present",
+    "eval": "npm --workspace @ci/eval-harness run eval"
+  }
+}

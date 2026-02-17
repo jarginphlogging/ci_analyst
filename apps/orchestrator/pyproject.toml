@@ -1,0 +1,23 @@
+[project]
+name = "ci-orchestrator"
+version = "0.1.0"
+description = "Python orchestrator for conversational analytics"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi==0.116.1",
+  "uvicorn[standard]==0.35.0",
+  "pydantic==2.11.7",
+  "httpx==0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.4.1",
+  "pytest-asyncio==1.1.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+testpaths = ["tests"]

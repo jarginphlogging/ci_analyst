@@ -1,0 +1,17 @@
+[
+  {
+    "id": "g1",
+    "question": "What changed in charge-off risk this quarter by region?",
+    "mustContainAny": ["charge-off", "bps", "North America"]
+  },
+  {
+    "id": "g2",
+    "question": "Where are fraud losses accelerating and why?",
+    "mustContainAny": ["fraud", "corridor", "loss"]
+  },
+  {
+    "id": "g3",
+    "question": "Show deposit mix shifts that may pressure NIM.",
+    "mustContainAny": ["deposit", "NIM", "liquidity"]
+  }
+]

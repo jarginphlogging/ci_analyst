@@ -1,0 +1,11 @@
+{
+  "name": "@ci/eval-harness",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "eval": "node src/run-eval.mjs",
+    "lint": "node -e \"console.log('no lint for eval-harness')\"",
+    "test": "node --test src/**/*.test.mjs"
+  }
+}
