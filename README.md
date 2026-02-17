@@ -69,6 +69,8 @@ If `python` is not available on Windows, use `py -3` in the same commands.
 npm run setup:orchestrator
 ```
 
+This runs in the orchestrator workspace to ensure installs and runtime use the same Python interpreter.
+
 4. Copy env templates:
 ```bash
 cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env

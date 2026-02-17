@@ -6,7 +6,7 @@
     "packages/*"
   ],
   "scripts": {
-    "setup:orchestrator": "node scripts/run-python.mjs -m pip install -r apps/orchestrator/requirements.txt",
+    "setup:orchestrator": "npm --workspace @ci/orchestrator run setup",
     "dev:web": "npm --workspace @ci/web run dev",
     "dev:orchestrator": "npm --workspace @ci/orchestrator run dev",
     "build": "npm run build --workspaces --if-present",
