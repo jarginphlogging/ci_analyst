@@ -143,6 +143,7 @@ npm run eval
 
 - For long-term deterministic installs on enterprise mirrors, use `npm ci` (not `npm install`) on your work machine.
 - The web lint config is intentionally minimal to avoid frequent mirror lag on fast-moving lint plugin packages.
+- The web app uses Tailwind v3 + standard PostCSS plugins to avoid native `lightningcss` binary issues on locked-down Windows environments.
 
 ## Security and Governance Notes
 
