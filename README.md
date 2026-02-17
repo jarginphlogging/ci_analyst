@@ -128,6 +128,39 @@ To slow mock streaming for demos, tune:
 4. If your enterprise Snowflake wrapper expects a different endpoint/body format than `/query`, adjust:
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
 
+## Work Machine Version Control Workflow
+
+Use this workflow when you have local work-machine-only changes (for provider wiring/secrets integration) and need to pull upstream repo updates.
+
+1. Stash local changes (tracked + untracked):
+```bash
+git stash push -u -m "work-local"
+```
+
+2. Pull latest repo changes:
+```bash
+git fetch origin
+git checkout main
+git pull --ff-only origin main
+```
+
+3. Re-apply local changes:
+```bash
+git stash pop
+```
+
+4. If conflicts occur:
+```bash
+git status
+# resolve conflicted files
+git add <resolved-file>
+```
+
+Notes:
+- This workflow does not require commits or pushes from the work machine.
+- Keep secrets in `.env` files only.
+- Use this sequence each time before updating from `origin/main`.
+
 ## Quality Commands
 
 ```bash
