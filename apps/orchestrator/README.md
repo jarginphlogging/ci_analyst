@@ -68,6 +68,11 @@ npm --workspace @ci/orchestrator run test
 - `app/providers/factory.py`
 - `app/providers/protocols.py`
 - `app/services/dependencies.py`
+- stage modules:
+  - `app/services/stages/planner_stage.py`
+  - `app/services/stages/sql_stage.py`
+  - `app/services/stages/validation_stage.py`
+  - `app/services/stages/synthesis_stage.py`
 - prompt templates: `app/prompts/templates.py`
 - SQL policy checks: `app/services/sql_guardrails.py`
 - semantic model loader: `app/services/semantic_model.py`
