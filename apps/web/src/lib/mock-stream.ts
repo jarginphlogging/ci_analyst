@@ -12,6 +12,7 @@ export function buildMockEvents(message: string): ChatStreamEvent[] {
   const events: ChatStreamEvent[] = [
     { type: "status", message: "Understanding your question" },
     { type: "status", message: "Selecting fast path vs deep path reasoning" },
+    { type: "status", message: "Resolving latest RESP_DATE context from semantic model" },
     { type: "status", message: "Generating governed SQL and running checks" },
     { type: "status", message: "Executing SQL and retrieving evidence tables" },
     { type: "status", message: "Running numeric QA and consistency checks" },

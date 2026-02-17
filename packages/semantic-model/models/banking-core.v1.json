@@ -1,35 +1,46 @@
 {
-  "version": "banking-core.v1",
-  "description": "Governed semantic model for risk and liquidity analytics.",
+  "version": "customer-insights.v1",
+  "description": "Governed semantic model for customer transaction, spend, and channel analytics.",
   "tables": [
     {
-      "name": "curated.credit_risk_summary",
-      "description": "Portfolio credit performance by quarter and segment.",
-      "dimensions": ["quarter", "region", "product_type", "fico_band", "vintage"],
-      "metrics": ["charge_off_rate", "default_rate", "severity", "at_risk_balance_usd"]
+      "name": "cia_sales_insights_cortex",
+      "description": "Transaction summary table with repeat/new behavior, channel mix, and spend outcomes.",
+      "dimensions": [
+        "co_id",
+        "td_id",
+        "transaction_state",
+        "transaction_city",
+        "mcc",
+        "channel",
+        "repeat_flag",
+        "resp_date",
+        "day_of_week",
+        "transaction_time",
+        "consumer_commercial"
+      ],
+      "metrics": [
+        "repeat_transactions",
+        "new_transactions",
+        "repeat_spend",
+        "new_spend",
+        "cp_transactions",
+        "cnp_transactions",
+        "cp_spend",
+        "cnp_spend",
+        "transactions",
+        "spend"
+      ]
     },
     {
-      "name": "curated.fraud_summary",
-      "description": "Fraud losses and recoveries by corridor and channel.",
-      "dimensions": ["quarter", "region", "channel", "corridor", "merchant_group"],
-      "metrics": ["fraud_loss_rate", "gross_fraud_loss_usd", "recovered_disputes_usd"]
-    },
-    {
-      "name": "curated.deposit_mix_summary",
-      "description": "Deposit balances and growth by product and client cohort.",
-      "dimensions": ["quarter", "client_segment", "product", "repricing_bucket"],
-      "metrics": ["deposit_growth_rate", "balance_usd", "commercial_outflow_usd", "lcr_buffer_pct"]
+      "name": "cia_household_insights_cortex",
+      "description": "Household/store relationship table used to quantify households shopping by location.",
+      "dimensions": ["td_id", "date_from", "date_through"],
+      "metrics": []
     }
   ],
-  "joinRules": [
-    {
-      "left": "curated.credit_risk_summary",
-      "right": "curated.fraud_summary",
-      "keys": ["quarter", "region"]
-    }
-  ],
+  "joinRules": [],
   "policy": {
-    "restrictedColumns": ["customer_id", "ssn", "account_number"],
+    "restrictedColumns": ["customer_id", "ssn", "account_number", "card_number", "email"],
     "defaultRowLimit": 1000,
     "maxRowLimit": 5000
   }

@@ -8,16 +8,16 @@ import { readNdjsonStream } from "@/lib/stream";
 import type { AgentResponse, ChatMessage, ChatStreamEvent, DataTable, MetricPoint } from "@/lib/types";
 
 const starterPrompts = [
-  "What changed in charge-off risk this quarter by region?",
-  "Where are fraud losses accelerating and why?",
-  "Show deposit mix shifts that may pressure NIM.",
+  "Show me my sales in each state in descending order.",
+  "What were my sales, transactions, and average sale amount for Q4 2025 compared to the same period last year?",
+  "What are my top and bottom performing stores for 2025? Include new vs repeat mix and compare to prior year.",
 ];
 
 const sessionItems = [
-  "Charge-Off Monitoring",
-  "Fraud Operations Weekly",
-  "Liquidity Watchlist",
-  "Vintage Stress Deep Dive",
+  "State Sales Watch",
+  "Q4 YoY Performance",
+  "Store Cohort Monitor",
+  "Channel Mix Deep Dive",
 ];
 
 function formatMetric(metric: MetricPoint): string {
@@ -70,7 +70,7 @@ export function AgentWorkspace() {
     {
       id: "assistant-welcome",
       role: "assistant",
-      text: "Ask any portfolio, fraud, or liquidity question. I will return a concise answer, audited analysis trace, and interactive evidence.",
+      text: "Ask any customer-insights question across spend, transactions, channel mix, and store performance. I will return a concise answer, audited trace, and exportable evidence tables.",
       createdAt: "2026-02-16T13:00:00.000Z",
     },
   ]);
@@ -225,7 +225,7 @@ export function AgentWorkspace() {
           <header className="rounded-2xl border border-slate-200 bg-white/85 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Banking Risk Intelligence</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Customer Insights Intelligence</p>
                 <h2 className="text-xl font-bold text-slate-900">Conversation Workspace</h2>
               </div>
               <div className="flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
@@ -394,7 +394,7 @@ export function AgentWorkspace() {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 rows={2}
-                placeholder="Ask a complex banking analytics question..."
+                placeholder="Ask a customer insights question..."
                 className="min-h-[74px] flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner outline-none ring-cyan-500 placeholder:text-slate-400 focus:ring-2"
               />
               <button

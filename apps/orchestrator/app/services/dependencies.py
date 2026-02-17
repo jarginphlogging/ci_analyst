@@ -148,9 +148,9 @@ def _default_insights(evidence: list[EvidenceRow]) -> list[Insight]:
 
 def _default_questions() -> list[str]:
     return [
-        "Can you break this down by region and product?",
-        "How much of the change is volume versus severity?",
-        "What early-warning indicators moved before this shift?",
+        "Can you break this down by state and channel?",
+        "How much of the change came from repeat versus new customers?",
+        "Which stores are diverging most from portfolio averages?",
     ]
 
 

@@ -50,6 +50,7 @@ class ConversationalOrchestrator:
         events: list[dict[str, object]] = [
             {"type": "status", "message": "Understanding query intent and scope"},
             {"type": "status", "message": "Selecting fast path vs deep path reasoning"},
+            {"type": "status", "message": "Resolving latest RESP_DATE context from semantic model"},
             {"type": "status", "message": "Building governed plan and SQL"},
             {"type": "status", "message": "Executing SQL and retrieving result tables"},
         ]

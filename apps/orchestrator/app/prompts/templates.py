@@ -6,7 +6,7 @@ from app.services.semantic_model import SemanticModel, semantic_model_summary
 def route_prompt(user_message: str, history: list[str]) -> tuple[str, str]:
     history_text = "\n".join(f"- {item}" for item in history[-6:]) or "- none"
     system = (
-        "You are a routing model for a governed banking analytics assistant. "
+        "You are a routing model for a governed customer-insights analytics assistant. "
         "Choose fast_path for simple metric retrieval and deep_path for multi-step causal analysis. "
         "Return strict JSON only."
     )
@@ -70,7 +70,7 @@ def response_prompt(
     evidence_summary: str,
 ) -> tuple[str, str]:
     system = (
-        "You are an executive analytics narrator for a banking risk platform. "
+        "You are an executive analytics narrator for a banking customer-insights platform. "
         "Write concise, high-signal output grounded only in supplied data summaries. "
         "Do not invent facts. Return strict JSON only."
     )
@@ -88,4 +88,3 @@ def response_prompt(
         '- "assumptions": array of up to 4 strings'
     )
     return system, user
-

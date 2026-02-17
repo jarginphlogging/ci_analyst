@@ -18,24 +18,24 @@ async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
     if "deterministic analytics plans" in system_prompt:
         return (
             '{"steps":['
-            '{"goal":"Retrieve fraud loss trend by region","primaryMetric":"fraud_loss_rate","grain":"region","timeWindow":"last quarter"},'
-            '{"goal":"Decompose by channel and corridor","primaryMetric":"fraud_loss_rate","grain":"channel","timeWindow":"last quarter"}'
+            '{"goal":"Retrieve spend and transactions trend by state","primaryMetric":"spend","grain":"transaction_state","timeWindow":"last quarter"},'
+            '{"goal":"Decompose by card-present versus card-not-present channel","primaryMetric":"spend","grain":"channel","timeWindow":"last quarter"}'
             "]}")
 
     if "SQL generator" in system_prompt:
         return (
             '{"sql":"SELECT region AS segment, 0.82 AS prior, 1.26 AS current, 44 AS changeBps, 0.61 AS contribution '
-            'FROM curated.fraud_summary LIMIT 50",'
+            'FROM cia_sales_insights_cortex LIMIT 50",'
             '"assumptions":["latest settled quarter used"]}'
         )
 
     if "executive analytics narrator" in system_prompt:
         return (
-            '{"answer":"Fraud losses increased, concentrated in a few segments.",'
-            '"whyItMatters":"Concentration allows targeted controls.",'
+            '{"answer":"Spend increased with concentration in a few states and channel mix shifting toward CNP.",'
+            '"whyItMatters":"State and channel concentration creates targeted optimization opportunities.",'
             '"confidence":"high",'
-            '"insights":[{"title":"Concentration signal","detail":"Top segments account for most of the movement.","importance":"high"}],'
-            '"suggestedQuestions":["Which corridors explain most of the increase?","What changed by channel?","Which controls are fastest?"],'
+            '"insights":[{"title":"Concentration signal","detail":"Top states account for most of the movement.","importance":"high"}],'
+            '"suggestedQuestions":["Which states drove the increase?","What changed by channel?","How much came from repeat customers?"],'
             '"assumptions":["Data reflects settled transactions only."]}'
         )
 
@@ -55,7 +55,7 @@ async def failing_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
 
 @pytest.mark.asyncio
 async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
-    request = ChatTurnRequest(sessionId=uuid4(), message="Where are fraud losses accelerating and why?")
+    request = ChatTurnRequest(sessionId=uuid4(), message="What were my sales by state and how did channel mix change?")
     deps = RealDependencies(llm_fn=fake_llm, sql_fn=fake_sql, model=load_semantic_model())
 
     route = await deps.classify_route(request)
@@ -75,7 +75,7 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
 
 @pytest.mark.asyncio
 async def test_real_dependencies_pipeline_fallbacks_without_llm() -> None:
-    request = ChatTurnRequest(sessionId=uuid4(), message="Show deposit movement by segment")
+    request = ChatTurnRequest(sessionId=uuid4(), message="Show transaction trends by state")
     deps = RealDependencies(llm_fn=failing_llm, sql_fn=fake_sql, model=load_semantic_model())
 
     route = await deps.classify_route(request)

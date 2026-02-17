@@ -1,17 +1,17 @@
 [
   {
     "id": "g1",
-    "question": "What changed in charge-off risk this quarter by region?",
-    "mustContainAny": ["charge-off", "bps", "North America"]
+    "question": "Show me my sales in each state in descending order.",
+    "mustContainAny": ["sales", "state", "CNP"]
   },
   {
     "id": "g2",
-    "question": "Where are fraud losses accelerating and why?",
-    "mustContainAny": ["fraud", "corridor", "loss"]
+    "question": "What were my sales, transactions, and average sale amount for Q4 2025 compared to the same period last year?",
+    "mustContainAny": ["Q4 2025", "Q4 2024", "average sale amount"]
   },
   {
     "id": "g3",
-    "question": "Show deposit mix shifts that may pressure NIM.",
-    "mustContainAny": ["deposit", "NIM", "liquidity"]
+    "question": "What are my top and bottom performing stores for 2025? For each of those stores, what is the new vs. repeat customer mix?",
+    "mustContainAny": ["top", "bottom", "repeat"]
   }
 ]
