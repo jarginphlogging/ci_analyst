@@ -1,5 +1,8 @@
 # Conversational Analytics Agent Master Plan
 
+This document is the strategic architecture and roadmap. For the current implemented backend/frontend shape, use:
+- `/Users/joe/Code/ci_analyst/docs/implementation-blueprint.md`
+
 ## 1) Product Objectives and Constraints
 
 ### Core objectives
@@ -82,8 +85,11 @@ flowchart LR
   - Step orchestration and policy enforcement.
   - Tool calls to Cortex Analyst and Azure OpenAI.
   - Validation, insight extraction, response packaging.
-- Suggested endpoints:
-  - `POST /api/chat/turn`
+- Current implemented endpoints:
+  - `GET /health`
+  - `POST /v1/chat/turn`
+  - `POST /v1/chat/stream`
+- Optional future endpoints:
   - `GET /api/chat/session/:id`
   - `GET /api/trace/:traceId`
   - `POST /api/eval/run` (internal)
@@ -189,7 +195,7 @@ Maintain explicit state per session:
 ## 9) Frontend Plan (Next.js + Tailwind)
 
 ### 9.1 Tech choices
-- Next.js 15+ (App Router, TypeScript)
+- Next.js (App Router, TypeScript). Current project version: 16.x.
 - Tailwind CSS + component primitives (e.g., Radix/shadcn-style)
 - Charting: ECharts or Recharts (choose one for consistency)
 - State/query: React Query + lightweight client store
@@ -215,6 +221,7 @@ Maintain explicit state per session:
 - user message
 - user role
 - optional explicit filters
+- current route path: `/v1/chat/turn` (direct) or `/api/chat` (frontend proxy)
 
 ### 10.2 Turn response (orchestrator -> frontend)
 - canonical answer text
@@ -223,6 +230,7 @@ Maintain explicit state per session:
 - ranked insights list
 - assumptions + clarifications
 - trace id + confidence + latency stats
+- current response also includes retrievable `dataTables` for export
 
 ### 10.3 Internal contracts
 - `SemanticModelVersion`
@@ -275,8 +283,7 @@ Maintain explicit state per session:
 ## 13) Key Decisions to Lock This Week
 
 1. Single orchestrator service or split into microservices.
-2. Exact semantic layer format and ownership model.
+2. Exact semantic layer format and ownership model. Current implementation uses JSON semantic model files.
 3. Chart library and UI component baseline for frontend.
 4. Initial evaluation rubric and pass/fail thresholds.
 5. Canary rollout strategy and rollback criteria.
-

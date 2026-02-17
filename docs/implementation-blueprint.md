@@ -1,159 +1,118 @@
-# Implementation Blueprint
+# Implementation Blueprint (As Built)
 
-## 1) Proposed Repository Structure
+## 1) Repository Structure
 
 ```text
 /Users/joe/Code/ci_analyst
   apps/
     web/                      # Next.js + Tailwind frontend
-    orchestrator/             # API/orchestration service (Python/FastAPI)
+    orchestrator/             # Python FastAPI orchestration service
   packages/
-    contracts/                # Shared types and API contracts
-    semantic-model/           # Versioned semantic definitions + validators
-    eval-harness/             # Offline + CI evaluation runner
-    ui/                       # Shared UI primitives
+    contracts/                # Shared request/response schemas (TypeScript + zod)
+    semantic-model/           # Versioned semantic model JSON + validators
+    eval-harness/             # Golden-question evaluator
   docs/
-    conversational-analytics-master-plan.md
-    implementation-blueprint.md
-    prompts-and-policies.md
 ```
 
 ## 2) Runtime Flow (Turn Execution)
 
-1. Frontend posts turn to orchestrator.
-2. Orchestrator loads session state and semantic model version.
-3. Classifier decides `fast_path` or `deep_path`.
-4. Planner builds one or more analysis steps.
-5. SQL steps execute through Cortex Analyst REST API.
-6. Validator checks numeric integrity and quality flags.
-7. Insight engine computes and ranks additional findings.
-8. Response generator produces final user-facing output.
-9. Trace and metrics are written for observability/evaluation.
+1. Frontend posts a turn to `/api/chat/stream` or `/api/chat`.
+2. Web route either:
+   - serves local mock stream (`WEB_USE_LOCAL_MOCK=true`), or
+   - proxies to orchestrator (`WEB_USE_LOCAL_MOCK=false`).
+3. Orchestrator receives `/v1/chat/turn` or `/v1/chat/stream`.
+4. Dependency mode selected by `USE_MOCK_PROVIDERS`:
+   - mock path: deterministic mock provider payloads
+   - real path: Azure + Snowflake + guardrails
+5. Real path stages:
+   - classify route (`fast_path` vs `deep_path`)
+   - create bounded plan
+   - generate SQL per step
+   - run SQL guardrails (allowlist, restricted columns, read-only checks, limit policy)
+   - execute SQL via Snowflake adapter
+   - validate results
+   - synthesize response with deterministic table profiling + Azure narrative
+6. Response is returned with answer, metrics, evidence, insights, trace, assumptions, and `dataTables`.
 
-## 3) API Contract Drafts
+## 3) Orchestrator Modules (Current)
 
-## POST `/api/chat/turn`
+- Entry/API:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/main.py`
+- Core orchestration:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/orchestrator.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/dependencies.py`
+- Prompt templates:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/prompts/templates.py`
+- LLM JSON extraction/parsing:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/llm_json.py`
+- Semantic model loading:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/semantic_model.py`
+- SQL policy guardrails:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/sql_guardrails.py`
+- Result normalization/profiling:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/table_analysis.py`
+- Provider adapters:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/azure_openai.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
 
-```json
-{
-  "sessionId": "uuid",
-  "message": "How did card charge-off rates change in Q4 by region?",
-  "role": "analyst",
-  "explicitFilters": {
-    "region": ["NA", "EMEA"]
-  }
-}
-```
+## 4) Semantic Model
 
-## 200 Response
+- Current semantic model source: JSON
+  - `/Users/joe/Code/ci_analyst/packages/semantic-model/models/banking-core.v1.json`
+- Optional runtime override:
+  - `SEMANTIC_MODEL_PATH=/absolute/path/to/model.json`
+- Policy fields used at runtime:
+  - `restrictedColumns`
+  - `defaultRowLimit`
+  - `maxRowLimit`
 
-```json
-{
-  "sessionId": "uuid",
-  "turnId": "uuid",
-  "answer": {
-    "text": "Charge-off rate rose 42 bps in Q4, mostly driven by NA unsecured cards.",
-    "confidence": "high"
-  },
-  "evidence": {
-    "metrics": [
-      {"name": "charge_off_rate", "value": 0.0242, "delta": 0.0042}
-    ],
-    "table": {"columns": ["region", "q3", "q4", "delta_bps"], "rows": []},
-    "charts": [{"type": "line", "spec": {}}]
-  },
-  "insights": [
-    {
-      "title": "NA drove 78% of deterioration",
-      "detail": "Unsecured segment concentration increased materially",
-      "priority": 1
-    }
-  ],
-  "assumptions": ["Using booked balance-weighted rate"],
-  "suggestedQuestions": [
-    "Which products contributed most to the NA increase?",
-    "How does this compare with the same quarter last year?",
-    "Was the increase driven by volume or severity?"
-  ],
-  "traceId": "uuid",
-  "latencyMs": 2890
-}
-```
+## 5) Frontend Integration Contract
 
-## 4) Frontend Build Plan (Next.js + Tailwind)
+- Internal frontend routes:
+  - `POST /api/chat`
+  - `POST /api/chat/stream`
+- Orchestrator routes:
+  - `GET /health`
+  - `POST /v1/chat/turn`
+  - `POST /v1/chat/stream` (`application/x-ndjson`)
+- Streaming events:
+  - `status`
+  - `answer_delta`
+  - `response`
+  - `done`
+  - `error`
 
-### Sprint A
-- Scaffold app, auth wrapper, and route layout.
-- Build chat workspace shell with responsive layout.
-- Create message timeline and answer card.
+## 6) Environment Toggles
 
-### Sprint B
-- Add evidence renderer (table + chart blocks).
-- Add insight cards and suggested follow-ups.
-- Add filter chip bar and assumption banner.
+### Backend (`apps/orchestrator/.env`)
+- `USE_MOCK_PROVIDERS=true|false`
+- `AZURE_OPENAI_*`
+- `SNOWFLAKE_CORTEX_*`
+- `SEMANTIC_MODEL_PATH` (optional)
+- `REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS`
+- `REAL_LLM_TEMPERATURE`, `REAL_LLM_MAX_TOKENS`
+- `MOCK_STREAM_STATUS_DELAY_MS`, `MOCK_STREAM_TOKEN_DELAY_MS`, `MOCK_STREAM_RESPONSE_DELAY_MS`
 
-### Sprint C
-- Add trace viewer page (internal roles only).
-- Add loading states and progressive response delivery.
-- Add error boundaries and policy-safe error messaging.
+### Frontend (`apps/web/.env.local`)
+- `WEB_USE_LOCAL_MOCK=true|false`
+- `ORCHESTRATOR_URL=http://localhost:8787`
+- `WEB_MOCK_STATUS_DELAY_MS`, `WEB_MOCK_TOKEN_DELAY_MS`, `WEB_MOCK_RESPONSE_DELAY_MS`
 
-### UX rules
-- Show direct answer in <= 2 lines first.
-- Keep each insight card to headline + one supporting sentence.
-- Always display data provenance and confidence tier.
+## 7) Test Coverage (Current)
 
-## 5) Orchestrator Build Plan
+- Orchestrator unit and route tests:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/tests/test_orchestrator.py`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/tests/test_routes.py`
+- Real dependency pipeline tests (stubbed Azure/Snowflake):
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/tests/test_real_dependencies.py`
+- SQL guardrail tests:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/tests/test_sql_guardrails.py`
+- Frontend stream parser tests:
+  - `/Users/joe/Code/ci_analyst/apps/web/src/lib/stream.test.ts`
 
-### Modules
-- `session-store`
-- `classifier`
-- `planner`
-- `sql-runner` (Cortex Analyst adapter)
-- `validator`
-- `insight-engine`
-- `response-generator`
-- `trace-writer`
+## 8) Known Gaps / Next Hardening Steps
 
-### Sequence
-1. Implement deterministic fast path.
-2. Add deep-path step orchestration (max 4 steps initially).
-3. Add validator hard-fail/soft-fail semantics.
-4. Add insight engine and ranking.
-5. Add policy filters and audit hooks.
-
-## 6) Evaluation and Regression Plan
-
-### Golden dataset v1
-- 150 questions total:
-  - 60 fast path
-  - 60 deep path
-  - 30 adversarial/ambiguous
-
-### Automated scoring
-- SQL validity
-- numeric correctness vs expected tolerances
-- latency SLO per path
-- insight relevance rubric score
-- policy compliance checks
-
-### CI gate recommendation
-- Block merge if:
-  - numeric correctness drops >1% absolute
-  - compliance failures >0
-  - p95 latency regresses >20% on benchmark set
-
-## 7) Non-Functional Requirements
-
-- Availability target: 99.9% (business hours priority).
-- Trace completeness: 100%.
-- PII leakage tolerance: 0 incidents.
-- Replay capability for all production turns.
-
-## 8) Immediate Next Tasks (Week 1)
-
-1. Initialize monorepo with `apps/` and `packages/`.
-2. Define contracts in `packages/contracts`.
-3. Build semantic model schema and sample banking metrics.
-4. Scaffold Next.js + Tailwind frontend shell.
-5. Implement `/api/chat/turn` with stubbed orchestrator path.
-6. Add first 20 golden questions and scoring harness.
+1. Tune prompts with bank-specific language and domain rubric.
+2. Align Snowflake adapter payload format to enterprise wrapper if it differs from `/query`.
+3. Add multi-turn memory carry-forward into planning prompts.
+4. Expand eval harness for strict numeric assertions and path-specific latency thresholds.

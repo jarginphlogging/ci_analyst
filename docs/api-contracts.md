@@ -10,7 +10,11 @@ Request:
 ```json
 {
   "sessionId": "optional-uuid",
-  "message": "What changed in charge-off risk this quarter?"
+  "message": "What changed in charge-off risk this quarter?",
+  "role": "analyst",
+  "explicitFilters": {
+    "region": ["NA", "EMEA"]
+  }
 }
 ```
 
@@ -57,6 +61,7 @@ Event shapes:
 {"type":"answer_delta","delta":"token "}
 {"type":"response","response":{}}
 {"type":"done"}
+{"type":"error","message":"..."}
 ```
 
 ## GET `/health`

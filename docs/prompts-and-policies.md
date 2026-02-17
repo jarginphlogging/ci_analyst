@@ -1,99 +1,78 @@
-# Prompts and Policies Spec
+# Prompts and Policies (Implemented)
 
-## 1) Prompting Strategy
+## 1) Prompt Stages
 
-Use role-specific prompts per stage, not one giant system prompt.
+The real backend uses stage-specific prompts from:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/app/prompts/templates.py`
 
-## Stage prompts
-- Classifier prompt: classify complexity, ambiguity, and policy risk.
-- Planner prompt: produce bounded step plan (max steps, explicit goals).
-- Response prompt: convert validated artifacts into concise business narrative.
-- Follow-up prompt: generate 3 useful next questions from known context only.
+Stages:
+1. `route_prompt` -> choose `fast_path` or `deep_path`
+2. `plan_prompt` -> generate bounded plan steps
+3. `sql_prompt` -> produce one SQL statement per step
+4. `response_prompt` -> produce final narrative payload
 
-## 2) Deterministic Controls
+All stages request strict JSON output and run through parser safeguards.
 
-- Set low temperature for classifier/planner.
-- Enforce strict JSON schemas for intermediate outputs.
-- Reject and retry invalid schema outputs once; then fail safe.
-- Disable unbounded recursion or open tool loops.
+## 2) LLM Output Enforcement
 
-## 3) Policy Rules
+- Parser implementation:
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/llm_json.py`
+- Behavior:
+  - attempts JSON extraction from plain or fenced output
+  - raises on invalid JSON objects
+  - pipeline falls back to deterministic defaults when parsing fails
 
-- Never access data outside allowlisted semantic model.
-- Never expose restricted/PII fields in narrative or artifacts.
-- Never fabricate missing values; mark unavailable with reason.
-- If ambiguity affects correctness, ask a clarification question.
+## 3) SQL Guardrails (Hard Controls)
 
-## 4) Confidence Policy
+Implemented in:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/app/services/sql_guardrails.py`
 
-Confidence is based on validation, not language model certainty.
+Rules:
+- read-only only (`SELECT`/`WITH`)
+- reject mutation/DDL statements
+- allowlisted table references only (semantic model)
+- restricted column blocking
+- enforce row-limit policy (default limit added if missing, capped if too high)
 
-- High: all required QA checks passed, no material assumptions.
-- Medium: minor assumptions or soft QA warnings.
-- Low: incomplete data, conflicting signals, or unresolved ambiguity.
+## 4) Semantic Policy Source
 
-## 5) Error Handling
+Loaded from semantic model JSON:
+- `/Users/joe/Code/ci_analyst/packages/semantic-model/models/banking-core.v1.json`
+- optional override via `SEMANTIC_MODEL_PATH`
 
-- User-safe errors: clear and non-technical.
-- Internal traces: include detailed failure taxonomy.
-- Return partial validated results when possible.
+Policy fields used in runtime:
+- `restrictedColumns`
+- `defaultRowLimit`
+- `maxRowLimit`
 
-## 6) Suggested Prompt Skeletons
+## 5) Confidence and Response Policy
 
-## Classifier output schema
+Confidence in the final response is constrained to:
+- `high`
+- `medium`
+- `low`
 
-```json
-{
-  "route": "fast_path|deep_path",
-  "needsClarification": true,
-  "clarificationQuestion": "string",
-  "policyRisk": "low|medium|high",
-  "reason": "string"
-}
-```
+Response assembly combines:
+- deterministic evidence/metric extraction from retrieved rows
+- LLM narrative generation constrained to retrieved summaries
+- deterministic fallback if LLM fails
 
-## Planner output schema
+## 6) Chain-of-Thought Handling
 
-```json
-{
-  "steps": [
-    {
-      "id": "step_1",
-      "goal": "string",
-      "inputDependencies": [],
-      "expectedOutput": "string"
-    }
-  ],
-  "maxStepsExceeded": false
-}
-```
+- UI and APIs expose concise trace summaries (`trace`) and quality checks.
+- Private raw chain-of-thought is not exposed.
+- SQL text and validations are included for explainability.
 
-## Response output schema
+## 7) Logging Expectations
 
-```json
-{
-  "answer": "string",
-  "insights": [
-    {"title": "string", "detail": "string", "priority": 1}
-  ],
-  "assumptions": ["string"],
-  "suggestedQuestions": ["string"]
-}
-```
+Current payload includes:
+- per-turn `trace`
+- `assumptions`
+- `dataTables` with source SQL
+- stream status checkpoints
 
-## 7) Guardrails for Insight Generation
-
-- Insight must reference validated evidence artifact IDs.
-- Rank by impact x confidence x user relevance.
-- Cap at 3 insights by default to reduce cognitive overload.
-
-## 8) Logging Requirements
-
-For each turn, persist:
-- prompt version ids used
-- model deployment ids
-- intermediate JSON outputs
-- SQL request/response ids
-- QA outcomes
-- final payload and latency
-
+Recommended next step for production:
+1. persist prompt version IDs per stage
+2. persist model deployment/version
+3. persist SQL request/response IDs from enterprise data gateway
+4. persist validation outcomes for replay and audits
