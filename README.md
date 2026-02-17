@@ -134,15 +134,36 @@ cp /Users/joe/Code/ci_analyst/apps/web/.env.remote.example /Users/joe/Code/ci_an
 - `ANTHROPIC_API_KEY=<your-key>`
 - optional `ANTHROPIC_MODEL`
 
-3. Start local Cortex-compatible sandbox service:
+3. Install backend Python deps (once per environment):
 ```bash
+cd /Users/joe/Code/ci_analyst
+npm run setup:orchestrator
+```
+
+4. Start local Cortex-compatible sandbox service (Terminal 1):
+```bash
+cd /Users/joe/Code/ci_analyst
 npm run dev:sandbox-cortex
 ```
 
-4. Start orchestrator + web:
+5. Start orchestrator API (Terminal 2):
 ```bash
+cd /Users/joe/Code/ci_analyst
 npm run dev:orchestrator
+```
+
+6. Start frontend (Terminal 3):
+```bash
+cd /Users/joe/Code/ci_analyst
 npm run dev:web
+```
+
+7. Open [http://localhost:3000](http://localhost:3000)
+
+8. Optional health checks:
+```bash
+curl http://127.0.0.1:8788/health
+curl http://127.0.0.1:8787/health
 ```
 
 ## Streaming UX
