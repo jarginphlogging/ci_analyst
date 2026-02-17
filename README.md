@@ -39,7 +39,11 @@ This repo supports:
   docs/
 ```
 
-## Quick Start
+## Quick Start (Python Backend + Next.js Frontend)
+
+Prerequisites:
+- Node.js 20+
+- Python 3.10+
 
 1. Install workspace dependencies:
 ```bash
@@ -47,22 +51,40 @@ cd /Users/joe/Code/ci_analyst
 npm install
 ```
 
-2. Install Python backend dependencies:
+2. (Optional but recommended) Create and activate a Python virtual environment:
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
+
+3. Install Python backend dependencies:
 ```bash
 npm run setup:orchestrator
 ```
 
-3. Run orchestrator in mock mode:
+4. Copy env templates:
+```bash
+cp /Users/joe/Code/ci_analyst/apps/orchestrator/.env.example /Users/joe/Code/ci_analyst/apps/orchestrator/.env
+cp /Users/joe/Code/ci_analyst/apps/web/.env.example /Users/joe/Code/ci_analyst/apps/web/.env.local
+```
+
+5. Run orchestrator in mock mode (Python FastAPI):
 ```bash
 npm run dev:orchestrator
 ```
 
-4. In another shell, run frontend in mock mode:
+Alternative direct command:
+```bash
+cd /Users/joe/Code/ci_analyst/apps/orchestrator
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
+```
+
+6. In another shell, run frontend in mock mode:
 ```bash
 npm run dev:web
 ```
 
-5. Open [http://localhost:3000](http://localhost:3000)
+7. Open [http://localhost:3000](http://localhost:3000)
 
 ## Streaming UX
 

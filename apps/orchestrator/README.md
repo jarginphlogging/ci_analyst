@@ -25,7 +25,10 @@ Real mode (`USE_MOCK_PROVIDERS=false`) uses:
 
 ```bash
 cd /Users/joe/Code/ci_analyst/apps/orchestrator
+python3 -m venv .venv
+source .venv/bin/activate
 python3 -m pip install -r requirements.txt
+cp .env.example .env
 ```
 
 ## Run
@@ -33,6 +36,12 @@ python3 -m pip install -r requirements.txt
 ```bash
 cd /Users/joe/Code/ci_analyst
 npm run dev:orchestrator
+```
+
+Direct command:
+```bash
+cd /Users/joe/Code/ci_analyst/apps/orchestrator
+python3 -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
 ## Test
