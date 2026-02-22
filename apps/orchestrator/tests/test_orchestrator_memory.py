@@ -42,6 +42,7 @@ class HistorySpyDependencies:
         request: ChatTurnRequest,
         plan: list[QueryPlanStep],
         history: list[str],
+        progress_callback=None,
     ) -> list[SqlExecutionResult]:
         self.sql_histories.append(list(history))
         return [

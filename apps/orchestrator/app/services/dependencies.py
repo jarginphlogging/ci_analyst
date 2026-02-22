@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from app.config import settings
 from app.models import (
@@ -26,6 +26,8 @@ from app.services.semantic_model import SemanticModel, load_semantic_model
 from app.services.stages import PlannerStage, SqlExecutionStage, SynthesisStage, ValidationStage, heuristic_route
 from app.services.types import OrchestratorDependencies
 
+ProgressCallback = Optional[Callable[[str], Optional[Awaitable[None]]]]
+
 
 def _request_key(request: ChatTurnRequest) -> str:
     session_id = str(request.sessionId or "anonymous")
@@ -48,6 +50,7 @@ class MockDependencies:
         request: ChatTurnRequest,
         plan: list[QueryPlanStep],
         history: list[str],  # noqa: ARG002
+        progress_callback: ProgressCallback = None,  # noqa: ARG002
     ) -> list[SqlExecutionResult]:
         return await mock_run_sql(request, plan)
 
@@ -55,6 +58,14 @@ class MockDependencies:
         return await mock_validate_results(results)
 
     async def build_response(
+        self,
+        request: ChatTurnRequest,
+        results: list[SqlExecutionResult],
+        history: list[str],  # noqa: ARG002
+    ) -> AgentResponse:
+        return await mock_build_response(request, results)
+
+    async def build_fast_response(
         self,
         request: ChatTurnRequest,
         results: list[SqlExecutionResult],
@@ -122,6 +133,7 @@ class RealDependencies:
         request: ChatTurnRequest,
         plan: list[QueryPlanStep],
         history: list[str],
+        progress_callback: ProgressCallback = None,
     ) -> list[SqlExecutionResult]:
         request_key = _request_key(request)
         route = self._route_cache.get(request_key) or heuristic_route(request.message)
@@ -131,6 +143,7 @@ class RealDependencies:
             plan=plan,
             history=history,
             conversation_id=str(request.sessionId or "anonymous"),
+            progress_callback=progress_callback,
         )
         self._assumption_cache[request_key] = accumulated_assumptions
         return results
@@ -157,6 +170,22 @@ class RealDependencies:
         finally:
             self._route_cache.pop(request_key, None)
             self._assumption_cache.pop(request_key, None)
+
+    async def build_fast_response(
+        self,
+        request: ChatTurnRequest,
+        results: list[SqlExecutionResult],
+        history: list[str],
+    ) -> AgentResponse:
+        request_key = _request_key(request)
+        route = self._route_cache.get(request_key) or heuristic_route(request.message)
+        return await self._synthesis_stage.build_fast_response(
+            message=request.message,
+            route=route,
+            results=results,
+            prior_assumptions=self._assumption_cache.get(request_key, []),
+            history=history,
+        )
 
 
 def create_dependencies() -> OrchestratorDependencies:

@@ -34,6 +34,7 @@ function triggerDownload(fileName: string, content: string, type: string): void 
 
 export function DataExplorer({ tables }: { tables: DataTable[] }) {
   const [activeId, setActiveId] = useState(tables[0]?.id ?? "");
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const selected = useMemo(() => tables.find((table) => table.id === activeId) ?? tables[0], [tables, activeId]);
 
@@ -60,81 +61,95 @@ export function DataExplorer({ tables }: { tables: DataTable[] }) {
           <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
             {selected.columns.length} columns
           </span>
+          <button
+            type="button"
+            onClick={() => setIsExpanded((prev) => !prev)}
+            className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
+            aria-expanded={isExpanded}
+          >
+            {isExpanded ? "Collapse" : "Expand"}
+          </button>
         </div>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2">
-        <select
-          value={selected.id}
-          onChange={(event) => setActiveId(event.target.value)}
-          className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-800"
-        >
-          {tables.map((table) => (
-            <option key={table.id} value={table.id}>
-              {table.name}
-            </option>
-          ))}
-        </select>
-
-        <button
-          type="button"
-          onClick={() => triggerDownload(`${selected.id}.csv`, toCsv(selected), "text/csv;charset=utf-8")}
-          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
-        >
-          Export CSV
-        </button>
-
-        <button
-          type="button"
-          onClick={() =>
-            triggerDownload(`${selected.id}.json`, JSON.stringify(selected.rows, null, 2), "application/json;charset=utf-8")
-          }
-          className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
-        >
-          Export JSON
-        </button>
-      </div>
-
-      {selected.description ? <p className="mt-2 text-xs text-slate-600">{selected.description}</p> : null}
-
-      <div className="mt-3 overflow-x-auto">
-        <table className="w-full min-w-[760px] border-separate border-spacing-y-1.5 text-left text-sm">
-          <thead>
-            <tr className="text-xs uppercase tracking-wide text-slate-500">
-              {selected.columns.map((column) => (
-                <th key={column} className="px-2 py-1">
-                  {column}
-                </th>
+      {isExpanded ? (
+        <>
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <select
+              value={selected.id}
+              onChange={(event) => setActiveId(event.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-medium text-slate-800"
+            >
+              {tables.map((table) => (
+                <option key={table.id} value={table.id}>
+                  {table.name}
+                </option>
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {selected.rows.map((row, index) => (
-              <tr key={`${selected.id}-${index}`} className="rounded-xl bg-slate-50 text-slate-800">
-                {selected.columns.map((column, idx) => (
-                  <td
-                    key={`${selected.id}-${index}-${column}`}
-                    className={`px-2 py-2 text-sm ${idx === 0 ? "rounded-l-xl font-medium" : ""} ${
-                      idx === selected.columns.length - 1 ? "rounded-r-xl" : ""
-                    }`}
-                  >
-                    {formatCell(row[column] ?? null)}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </select>
 
-      {selected.sourceSql ? (
-        <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2">
-          <summary className="cursor-pointer text-xs font-semibold text-slate-700">Source SQL</summary>
-          <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
-            <code>{selected.sourceSql}</code>
-          </pre>
-        </details>
-      ) : null}
+            <button
+              type="button"
+              onClick={() => triggerDownload(`${selected.id}.csv`, toCsv(selected), "text/csv;charset=utf-8")}
+              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
+            >
+              Export CSV
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                triggerDownload(`${selected.id}.json`, JSON.stringify(selected.rows, null, 2), "application/json;charset=utf-8")
+              }
+              className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
+            >
+              Export JSON
+            </button>
+          </div>
+
+          {selected.description ? <p className="mt-2 text-xs text-slate-600">{selected.description}</p> : null}
+
+          <div className="mt-3 overflow-x-auto">
+            <table className="w-full min-w-[760px] border-separate border-spacing-y-1.5 text-left text-sm">
+              <thead>
+                <tr className="text-xs uppercase tracking-wide text-slate-500">
+                  {selected.columns.map((column) => (
+                    <th key={column} className="px-2 py-1">
+                      {column}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {selected.rows.map((row, index) => (
+                  <tr key={`${selected.id}-${index}`} className="rounded-xl bg-slate-50 text-slate-800">
+                    {selected.columns.map((column, idx) => (
+                      <td
+                        key={`${selected.id}-${index}-${column}`}
+                        className={`px-2 py-2 text-sm ${idx === 0 ? "rounded-l-xl font-medium" : ""} ${
+                          idx === selected.columns.length - 1 ? "rounded-r-xl" : ""
+                        }`}
+                      >
+                        {formatCell(row[column] ?? null)}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {selected.sourceSql ? (
+            <details className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2">
+              <summary className="cursor-pointer text-xs font-semibold text-slate-700">Source SQL</summary>
+              <pre className="mt-2 overflow-x-auto rounded-md bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                <code>{selected.sourceSql}</code>
+              </pre>
+            </details>
+          ) : null}
+        </>
+      ) : (
+        <p className="mt-3 text-xs text-slate-600">Collapsed by default. Expand to view and export retrieved data.</p>
+      )}
     </section>
   );
 }

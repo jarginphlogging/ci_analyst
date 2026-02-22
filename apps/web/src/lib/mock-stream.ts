@@ -9,6 +9,10 @@ interface StreamDelays {
 
 export function buildMockEvents(message: string): ChatStreamEvent[] {
   const response = getMockAgentResponse(message);
+  const draftAnswer = response.answer.split(".")[0]?.trim();
+  const draftResponse = draftAnswer
+    ? { ...response, answer: `${draftAnswer}.` }
+    : response;
   const events: ChatStreamEvent[] = [
     { type: "status", message: "Understanding your question" },
     { type: "status", message: "Selecting fast path vs deep path reasoning" },
@@ -17,6 +21,7 @@ export function buildMockEvents(message: string): ChatStreamEvent[] {
     { type: "status", message: "Executing SQL and retrieving evidence tables" },
     { type: "status", message: "Running numeric QA and consistency checks" },
     { type: "status", message: "Ranking insights by impact and confidence" },
+    { type: "response", phase: "draft", response: draftResponse },
   ];
 
   for (const token of response.answer.split(" ")) {
@@ -24,7 +29,7 @@ export function buildMockEvents(message: string): ChatStreamEvent[] {
   }
 
   events.push({ type: "status", message: "Finalizing response payload and audit trace" });
-  events.push({ type: "response", response });
+  events.push({ type: "response", phase: "final", response });
   events.push({ type: "done" });
 
   return events;

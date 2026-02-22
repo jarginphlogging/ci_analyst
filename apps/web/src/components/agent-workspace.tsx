@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { AnalysisTrace } from "@/components/analysis-trace";
 import { DataExplorer } from "@/components/data-explorer";
 import { EvidenceTable } from "@/components/evidence-table";
@@ -14,24 +14,293 @@ const starterPrompts = [
 ];
 
 const sessionItems = [
-  "State Sales Watch",
+  "State Sales Taxonomy",
   "Q4 YoY Performance",
-  "Store Cohort Monitor",
+  "Store Performance Monitor",
   "Channel Mix Deep Dive",
 ];
 
-function formatMetric(metric: MetricPoint): string {
-  if (metric.unit === "pct") return `${metric.value.toFixed(2)}%`;
-  if (metric.unit === "bps") return `${metric.value.toFixed(0)} bps`;
-  if (metric.unit === "usd") return `$${metric.value.toFixed(2)}B`;
-  return metric.value.toFixed(0);
+const insightImportanceRank: Record<"high" | "medium", number> = {
+  high: 0,
+  medium: 1,
+};
+
+const integerFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
+const currencyFormatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+type KpiMetric = Pick<MetricPoint, "label" | "value" | "unit">;
+
+function toTitleCase(text: string): string {
+  return text.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
 }
 
-function formatDelta(metric: MetricPoint): string {
-  if (metric.unit === "bps") return `${metric.delta > 0 ? "+" : ""}${metric.delta.toFixed(0)} bps`;
-  if (metric.unit === "pct") return `${metric.delta > 0 ? "+" : ""}${metric.delta.toFixed(2)} pp`;
-  if (metric.unit === "usd") return `${metric.delta > 0 ? "+" : ""}$${metric.delta.toFixed(2)}B`;
-  return `${metric.delta > 0 ? "+" : ""}${metric.delta.toFixed(0)}`;
+function normalizeMetricLabel(label: string): string {
+  const cleaned = label.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+  if (!cleaned) return label;
+
+  const dedupedWords = cleaned.split(" ").filter((word, index, words) => {
+    if (index === 0) return true;
+    return word.toLowerCase() !== words[index - 1].toLowerCase();
+  });
+  const deduped = dedupedWords.join(" ");
+
+  return deduped === deduped.toUpperCase() ? toTitleCase(deduped) : deduped;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function looksCurrencyLabel(label: string): boolean {
+  return /(spend|sales|revenue|amount|ticket|value|aov)/i.test(label);
+}
+
+function looksPercentLabel(label: string): boolean {
+  return /(share|percent|percentage|ratio|rate|mix|pct)/i.test(label);
+}
+
+function isRowsRetrievedLabel(label: string): boolean {
+  return normalizeMetricLabel(label).toLowerCase() === "rows retrieved";
+}
+
+function resolveMetricUnit(metric: KpiMetric): MetricPoint["unit"] {
+  if (metric.unit !== "count") return metric.unit;
+  if (looksPercentLabel(metric.label)) return "pct";
+  if (looksCurrencyLabel(metric.label)) return "usd";
+  return "count";
+}
+
+function formatUsdValue(value: number, label: string): string {
+  const abs = Math.abs(value);
+  const isAverageLike = /(avg|average|mean|ticket|amount)/i.test(label);
+
+  if (abs < 1000 && !isAverageLike) return `$${value.toFixed(2)}B`;
+  if (abs >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
+  if (abs >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
+  if (abs >= 1_000) return `$${(value / 1_000).toFixed(1)}K`;
+  return currencyFormatter.format(value);
+}
+
+function formatMetric(metric: KpiMetric): string {
+  const resolvedUnit = resolveMetricUnit(metric);
+
+  if (resolvedUnit === "pct") {
+    const normalizedPct = Math.abs(metric.value) <= 1 ? metric.value * 100 : metric.value;
+    return `${normalizedPct.toFixed(Math.abs(normalizedPct) >= 10 ? 1 : 2)}%`;
+  }
+  if (resolvedUnit === "bps") return `${metric.value.toFixed(0)} bps`;
+  if (resolvedUnit === "usd") return formatUsdValue(metric.value, metric.label);
+  return integerFormatter.format(Math.round(metric.value));
+}
+
+function derivedKpis(response: AgentResponse): KpiMetric[] {
+  const fallback: KpiMetric[] = [];
+
+  const topContribution = response.evidence.reduce((max, row) => Math.max(max, Math.abs(row.contribution)), 0);
+  if (topContribution > 0) {
+    fallback.push({ label: "Top Driver Share", value: topContribution * 100, unit: "pct" });
+  }
+
+  const rankingArtifact = (response.artifacts ?? []).find((artifact) => artifact.kind === "ranking_breakdown" && artifact.rows.length > 0);
+  if (rankingArtifact) {
+    const maxShare = Math.max(
+      0,
+      ...rankingArtifact.rows
+        .map((row) => asFiniteNumber(row.share_pct))
+        .filter((value): value is number => value !== null),
+    );
+    if (maxShare > 0) {
+      fallback.push({ label: "Top Entity Share", value: maxShare, unit: "pct" });
+    }
+  }
+
+  const highPriorityCount = response.insights.filter((insight) => insight.importance === "high").length;
+  if (highPriorityCount > 0) {
+    fallback.push({ label: "High-Priority Insights", value: highPriorityCount, unit: "count" });
+  }
+
+  if (response.suggestedQuestions.length > 0) {
+    fallback.push({ label: "Suggested Next Steps", value: response.suggestedQuestions.length, unit: "count" });
+  }
+
+  return fallback;
+}
+
+function kpiMetrics(response: AgentResponse): KpiMetric[] {
+  const primary = response.metrics.filter((metric) => !isRowsRetrievedLabel(metric.label));
+  const selected: KpiMetric[] = [...primary];
+
+  for (const metric of derivedKpis(response)) {
+    if (selected.length >= 3) break;
+    if (selected.some((item) => normalizeMetricLabel(item.label) === normalizeMetricLabel(metric.label))) continue;
+    selected.push(metric);
+  }
+
+  return selected.slice(0, 3);
+}
+
+function parseDateValue(value: unknown): Date | null {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (typeof value !== "string") return null;
+
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (!/\d{4}-\d{2}-\d{2}/.test(trimmed)) return null;
+
+  const parsed = new Date(trimmed);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatDateRange(start: Date, end: Date): string {
+  const from = start.getTime() <= end.getTime() ? start : end;
+  const to = start.getTime() <= end.getTime() ? end : start;
+  if (from.getTime() === to.getTime()) return `Period: ${dateFormatter.format(from)}`;
+  return `Period: ${dateFormatter.format(from)} - ${dateFormatter.format(to)}`;
+}
+
+function periodFromSql(sql: string | undefined): string | null {
+  if (!sql) return null;
+
+  const betweenMatch = sql.match(/between\s+'(\d{4}-\d{2}-\d{2})'\s+and\s+'(\d{4}-\d{2}-\d{2})'/i);
+  if (betweenMatch) {
+    const start = parseDateValue(betweenMatch[1]);
+    const end = parseDateValue(betweenMatch[2]);
+    if (start && end) return formatDateRange(start, end);
+  }
+
+  const yearMatch = sql.match(/year\s*\(\s*resp_date\s*\)\s*=\s*(20\d{2})/i);
+  if (yearMatch) {
+    return `Period: Calendar year ${yearMatch[1]}`;
+  }
+
+  return null;
+}
+
+function periodFromTables(tables: DataTable[]): string | null {
+  const dates: Date[] = [];
+
+  for (const table of tables) {
+    for (const row of table.rows) {
+      for (const value of Object.values(row)) {
+        const parsed = parseDateValue(value);
+        if (parsed) {
+          dates.push(parsed);
+        }
+      }
+    }
+  }
+
+  if (dates.length === 0) return null;
+  const minDate = new Date(Math.min(...dates.map((value) => value.getTime())));
+  const maxDate = new Date(Math.max(...dates.map((value) => value.getTime())));
+  if (minDate.getTime() === maxDate.getTime()) {
+    return `As of ${dateFormatter.format(maxDate)}`;
+  }
+  return formatDateRange(minDate, maxDate);
+}
+
+function periodFromText(text: string): string | null {
+  const betweenMatch = text.match(/(\d{4}-\d{2}-\d{2}).*?(\d{4}-\d{2}-\d{2})/i);
+  if (betweenMatch) {
+    const start = parseDateValue(betweenMatch[1]);
+    const end = parseDateValue(betweenMatch[2]);
+    if (start && end) return formatDateRange(start, end);
+  }
+
+  const quarterComparisons = [...text.matchAll(/\bq([1-4])\s*(20\d{2})\b/gi)];
+  if (quarterComparisons.length >= 2) {
+    const latest = quarterComparisons[0];
+    const prior = quarterComparisons[1];
+    return `Period: Q${latest[1]} ${latest[2]} vs Q${prior[1]} ${prior[2]}`;
+  }
+  if (quarterComparisons.length === 1) {
+    const [quarter] = quarterComparisons;
+    return `Period: Q${quarter[1]} ${quarter[2]}`;
+  }
+
+  const years = [...text.matchAll(/\b(20\d{2})\b/g)].map((match) => Number(match[1])).filter((year) => Number.isFinite(year));
+  if (years.length >= 2) {
+    const sorted = [...years].sort((a, b) => b - a);
+    if (sorted[0] !== sorted[1]) return `Period: ${sorted[0]} vs ${sorted[1]}`;
+  }
+  if (years.length === 1) {
+    return `Period: Calendar year ${years[0]}`;
+  }
+
+  return null;
+}
+
+function periodFromMetricLabels(metrics: MetricPoint[]): string | null {
+  for (const metric of metrics) {
+    const fromMetric = periodFromText(metric.label);
+    if (fromMetric) return fromMetric;
+  }
+
+  return null;
+}
+
+function deriveMetricPeriodLabel(response: AgentResponse, userQuery: string, responseCreatedAt: string): string {
+  for (const table of response.dataTables ?? []) {
+    const fromSql = periodFromSql(table.sourceSql);
+    if (fromSql) return fromSql;
+  }
+
+  for (const step of response.trace ?? []) {
+    const fromTraceSql = periodFromSql(step.sql);
+    if (fromTraceSql) return fromTraceSql;
+  }
+
+  const fromTables = periodFromTables(response.dataTables ?? []);
+  if (fromTables) return fromTables;
+
+  for (const assumption of response.assumptions ?? []) {
+    const fromAssumption = periodFromText(assumption);
+    if (fromAssumption) return fromAssumption;
+  }
+
+  const fromAnswer = periodFromText(response.answer ?? "");
+  if (fromAnswer) return fromAnswer;
+
+  const fromMetricLabels = periodFromMetricLabels(response.metrics ?? []);
+  if (fromMetricLabels) return fromMetricLabels;
+
+  const fromUserQuery = periodFromText(userQuery);
+  if (fromUserQuery) return fromUserQuery;
+
+  const responseDate = parseDateValue(responseCreatedAt);
+  if (responseDate) return `As of ${dateFormatter.format(responseDate)}`;
+  return `As of ${dateFormatter.format(new Date())}`;
+}
+
+function rowsRetrievedCount(response: AgentResponse): number {
+  const fromTables = (response.dataTables ?? []).reduce((total, table) => total + table.rowCount, 0);
+  if (fromTables > 0) return fromTables;
+  return response.evidence.length;
+}
+
+function formatRuntime(durationMs: number | undefined, isStreaming: boolean | undefined): string {
+  if (typeof durationMs !== "number" || !Number.isFinite(durationMs) || durationMs <= 0) {
+    return isStreaming ? "Running..." : "--";
+  }
+  if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
+  if (durationMs < 10000) return `${(durationMs / 1000).toFixed(1)} s`;
+  if (durationMs < 60000) return `${Math.round(durationMs / 1000)} s`;
+
+  const minutes = Math.floor(durationMs / 60000);
+  const seconds = Math.round((durationMs % 60000) / 1000);
+  return `${minutes}m ${seconds}s`;
+}
+
+function nextActionText(question: string | undefined): string {
+  if (!question) {
+    return "Select a suggested follow-up question to continue the analysis.";
+  }
+  return `Run this next: ${question}`;
 }
 
 function messageTime(iso: string): string {
@@ -62,16 +331,27 @@ function buildRenderableTables(response: AgentResponse): DataTable[] {
   ];
 }
 
-export function AgentWorkspace() {
+type EnvironmentLabel = "Mock" | "Sandbox" | "Production";
+
+interface AgentWorkspaceProps {
+  initialEnvironment: EnvironmentLabel;
+}
+
+function isEnvironmentLabel(value: unknown): value is EnvironmentLabel {
+  return value === "Mock" || value === "Sandbox" || value === "Production";
+}
+
+export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [environment, setEnvironment] = useState<EnvironmentLabel>(initialEnvironment);
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "assistant-welcome",
       role: "assistant",
-      text: "Ask any customer-insights question across spend, transactions, channel mix, and store performance. I will return a concise answer, audited trace, and exportable evidence tables.",
-      createdAt: "2026-02-16T13:00:00.000Z",
+      text: "Ask any Customer Insights question across Sales, Loyalty, Demographics, Geographics, or Industry. I will return key insights, exportable data, and an audited trace.",
+      createdAt: new Date().toISOString(),
     },
   ]);
 
@@ -79,6 +359,28 @@ export function AgentWorkspace() {
     () => [...messages].reverse().find((message) => message.role === "assistant" && message.response)?.response,
     [messages],
   );
+  const showStarterPrompts = useMemo(() => !messages.some((message) => message.role === "user"), [messages]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadEnvironment = async (): Promise<void> => {
+      try {
+        const response = await fetch("/api/system-status", { cache: "no-store" });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { environment?: unknown };
+        if (!isMounted || !isEnvironmentLabel(payload.environment)) return;
+        setEnvironment(payload.environment);
+      } catch {
+        // Keep initial environment when status endpoint is unavailable.
+      }
+    };
+
+    void loadEnvironment();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
 
   const updateAssistantMessage = (messageId: string, updater: (draft: ChatMessage) => ChatMessage): void => {
     setMessages((prev) =>
@@ -92,6 +394,7 @@ export function AgentWorkspace() {
   async function submitQuery(query: string) {
     const clean = query.trim();
     if (!clean || isLoading) return;
+    const requestStartedAtMs = performance.now();
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -113,7 +416,7 @@ export function AgentWorkspace() {
         text: "",
         createdAt: new Date().toISOString(),
         isStreaming: true,
-        statusUpdates: ["Queued request"],
+        statusUpdates: [],
       },
     ]);
 
@@ -130,26 +433,45 @@ export function AgentWorkspace() {
 
       await readNdjsonStream(response.body, (event: ChatStreamEvent) => {
         if (event.type === "status") {
-          updateAssistantMessage(assistantMessageId, (draft) => ({
-            ...draft,
-            statusUpdates: [...(draft.statusUpdates ?? []), event.message],
-          }));
+          updateAssistantMessage(assistantMessageId, (draft) => {
+            const updates = draft.statusUpdates ?? [];
+            const lastStatus = updates.length > 0 ? updates[updates.length - 1] : "";
+            if (lastStatus === event.message) {
+              return draft;
+            }
+            return {
+              ...draft,
+              statusUpdates: [...updates, event.message],
+            };
+          });
           return;
         }
 
         if (event.type === "answer_delta") {
           updateAssistantMessage(assistantMessageId, (draft) => ({
             ...draft,
-            text: `${draft.text}${event.delta}`,
+            text: `${draft.hasAnswerDeltas ? draft.text : ""}${event.delta}`,
+            hasAnswerDeltas: true,
           }));
           return;
         }
 
         if (event.type === "response") {
+          if (event.phase === "draft") {
+            updateAssistantMessage(assistantMessageId, (draft) => ({
+              ...draft,
+              draftResponse: event.response,
+            }));
+            return;
+          }
+
           updateAssistantMessage(assistantMessageId, (draft) => ({
             ...draft,
             text: event.response.answer,
             response: event.response,
+            draftResponse: undefined,
+            hasAnswerDeltas: true,
+            requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
           }));
           return;
         }
@@ -160,6 +482,7 @@ export function AgentWorkspace() {
             text: event.message,
             isStreaming: false,
             statusUpdates: [...(draft.statusUpdates ?? []), "Request failed"],
+            requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
           }));
           return;
         }
@@ -168,6 +491,7 @@ export function AgentWorkspace() {
           updateAssistantMessage(assistantMessageId, (draft) => ({
             ...draft,
             isStreaming: false,
+            requestDurationMs: draft.requestDurationMs ?? Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
           }));
         }
       });
@@ -177,6 +501,7 @@ export function AgentWorkspace() {
         text: "I could not process that request. Please retry in a moment.",
         isStreaming: false,
         statusUpdates: [...(draft.statusUpdates ?? []), "Request failed"],
+        requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
       }));
     } finally {
       setIsLoading(false);
@@ -190,15 +515,15 @@ export function AgentWorkspace() {
 
       <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)_320px] lg:px-6 lg:py-6">
         <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)]">
-          <p className="text-xs uppercase tracking-[0.22em] text-cyan-300">Analyst Console</p>
-          <h1 className="mt-2 text-xl font-bold leading-tight">Cortex Conversational Analyst</h1>
-          <p className="mt-2 text-sm text-slate-300">Fast governed answers with audit-ready reasoning summaries.</p>
+          <p className="text-xs uppercase tracking-[0.22em] text-cyan-300">Customer Insights</p>
+          <h1 className="mt-2 text-3xl font-bold leading-tight">Analyst</h1>
+          <p className="mt-2 text-sm text-slate-300">Ask questions about your data in natural language.</p>
 
           <div className="mt-6 rounded-2xl border border-slate-700 bg-slate-800/70 p-3">
             <p className="text-xs uppercase tracking-wide text-slate-400">System Status</p>
             <div className="mt-2 flex items-center gap-2 text-sm">
               <span className="h-2 w-2 rounded-full bg-emerald-400" />
-              Azure OpenAI + Cortex Analyst connected
+              {environment}
             </div>
           </div>
 
@@ -222,27 +547,29 @@ export function AgentWorkspace() {
         </aside>
 
         <main className="flex min-h-[calc(100vh-2.5rem)] flex-col rounded-3xl border border-slate-200 bg-white/70 p-4 shadow-[0_18px_40px_rgba(14,44,68,0.13)] backdrop-blur lg:p-5">
-          <header className="rounded-2xl border border-slate-200 bg-white/85 px-4 py-3">
+          <header className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs uppercase tracking-[0.18em] text-slate-500">Customer Insights Intelligence</p>
-                <h2 className="text-xl font-bold text-slate-900">Conversation Workspace</h2>
+                <h2 className="text-xl font-bold text-slate-100">Conversation Workspace</h2>
               </div>
               <div className="flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
                 <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                Deterministic Workflow + Bounded Agentic Reasoning
+                Multi-Agent Reasoning Active
               </div>
             </div>
           </header>
 
           <section className="mt-4 flex-1 space-y-4 overflow-y-auto pr-1">
-            {messages.map((message) => {
+            {messages.map((message, messageIndex) => {
               if (message.role === "user") {
                 return (
                   <article key={message.id} className="flex justify-end">
-                    <div className="max-w-[85%] rounded-2xl rounded-br-md bg-slate-900 px-4 py-3 text-sm text-slate-100 shadow">
-                      <p>{message.text}</p>
-                      <p className="mt-2 text-[11px] uppercase tracking-wide text-slate-400">{messageTime(message.createdAt)}</p>
+                    <div className="max-w-[85%] animate-fade-up space-y-3 rounded-2xl rounded-br-md bg-slate-900 p-4 text-slate-100 shadow">
+                      <div className="flex items-start justify-between gap-2">
+                        <p className="text-xs uppercase tracking-[0.16em] text-cyan-300">User Query</p>
+                        <p className="text-sm text-slate-300">{messageTime(message.createdAt)}</p>
+                      </div>
+                      <p className="text-base font-medium leading-relaxed text-slate-100">{message.text}</p>
                     </div>
                   </article>
                 );
@@ -270,17 +597,22 @@ export function AgentWorkspace() {
                     ) : null}
                   </div>
 
-                  <p className="text-lg font-semibold leading-snug text-slate-950">{message.text || "..."}</p>
+                  {message.text ? <p className="text-base font-medium leading-relaxed text-slate-950">{message.text}</p> : null}
 
                   {message.isStreaming ? (
                     <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3">
-                      <p className="text-xs font-semibold uppercase tracking-wide text-cyan-800">Live reasoning trace</p>
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {(message.statusUpdates ?? []).slice(-8).map((status, index) => (
-                          <span key={`${status}-${index}`} className="rounded-full bg-white px-2 py-1 text-[11px] font-medium text-cyan-800">
-                            {status}
+                      <div className="flex items-center gap-3">
+                        <div className="signal-spinner" aria-hidden="true">
+                          <span className="signal-spinner__ring signal-spinner__ring-a" />
+                          <span className="signal-spinner__ring signal-spinner__ring-b" />
+                          <span className="signal-spinner__core" />
+                        </div>
+                        <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
+                          <p className="text-sm font-semibold text-cyan-900">Running your analysis</p>
+                          <span className="animate-fade-up rounded-full bg-white px-2 py-1 text-sm font-medium text-cyan-800">
+                            {(message.statusUpdates ?? []).at(-1) ?? "Initializing pipeline..."}
                           </span>
-                        ))}
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -292,25 +624,46 @@ export function AgentWorkspace() {
                         <p className="mt-1.5 text-sm text-slate-700">{message.response.whyItMatters}</p>
                       </section>
 
-                      <section className="grid gap-3 sm:grid-cols-3">
-                        {message.response.metrics.map((metric) => (
-                          <div key={metric.label} className="rounded-xl border border-slate-200 bg-white p-3">
-                            <p className="text-xs uppercase tracking-wide text-slate-500">{metric.label}</p>
-                            <p className="mt-2 text-xl font-bold text-slate-900">{formatMetric(metric)}</p>
-                            <p className={`mt-1 text-xs font-semibold ${metric.delta >= 0 ? "text-rose-700" : "text-emerald-700"}`}>
-                              {formatDelta(metric)}
-                            </p>
-                          </div>
-                        ))}
-                      </section>
+                      {(() => {
+                        const userQuery =
+                          [...messages.slice(0, messageIndex)].reverse().find((entry) => entry.role === "user")?.text ?? "";
+                        const metricPeriodLabel = deriveMetricPeriodLabel(message.response, userQuery, message.createdAt);
+                        const rowsRetrieved = rowsRetrievedCount(message.response);
+                        const runtime = formatRuntime(message.requestDurationMs, message.isStreaming);
+                        return (
+                          <>
+                            <section className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">{metricPeriodLabel}</span>
+                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                                  Rows: {integerFormatter.format(rowsRetrieved)}
+                                </span>
+                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">Runtime: {runtime}</span>
+                              </div>
+                            </section>
 
-                      <EvidenceTable rows={message.response.evidence} />
+                            <section className="grid gap-3 sm:grid-cols-3">
+                              {kpiMetrics(message.response).map((metric, index) => (
+                                <div key={`${metric.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">{normalizeMetricLabel(metric.label)}</p>
+                                  <p className="mt-2 text-xl font-bold text-slate-900">{formatMetric(metric)}</p>
+                                </div>
+                              ))}
+                            </section>
+                          </>
+                        );
+                      })()}
+
+                      <EvidenceTable rows={message.response.evidence} artifacts={message.response.artifacts} />
                       <DataExplorer tables={buildRenderableTables(message.response)} />
 
                       <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">
                         <h3 className="text-sm font-semibold tracking-wide text-slate-900">Priority Insights</h3>
                         <div className="mt-3 grid gap-2 md:grid-cols-3">
-                          {message.response.insights.map((insight) => (
+                          {[...message.response.insights]
+                            .sort((a, b) => insightImportanceRank[a.importance] - insightImportanceRank[b.importance])
+                            .slice(0, 3)
+                            .map((insight) => (
                             <article key={insight.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                               <p
                                 className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
@@ -324,7 +677,7 @@ export function AgentWorkspace() {
                               <p className="mt-2 text-sm font-semibold text-slate-900">{insight.title}</p>
                               <p className="mt-1 text-sm leading-relaxed text-slate-700">{insight.detail}</p>
                             </article>
-                          ))}
+                            ))}
                         </div>
                       </section>
 
@@ -333,9 +686,9 @@ export function AgentWorkspace() {
                       <section className="grid gap-3 md:grid-cols-2">
                         <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                           <p className="text-xs uppercase tracking-wide text-slate-500">Assumptions</p>
-                          <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
+                          <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-700 marker:text-slate-400">
                             {message.response.assumptions.map((item) => (
-                              <li key={item}>- {item}</li>
+                              <li key={item}>{item}</li>
                             ))}
                           </ul>
                         </div>
@@ -361,27 +714,23 @@ export function AgentWorkspace() {
               );
             })}
 
-            {isLoading ? (
-              <article className="animate-fade-up rounded-2xl border border-cyan-200 bg-cyan-50 p-4">
-                <p className="text-sm font-semibold text-cyan-900">Streaming analysis in progress...</p>
-                <p className="mt-1 text-sm text-cyan-800">Response appears token-by-token while the governed pipeline runs validation.</p>
-              </article>
-            ) : null}
           </section>
 
           <footer className="mt-4 rounded-2xl border border-slate-200 bg-white/85 p-3">
-            <div className="mb-2 flex flex-wrap gap-2">
-              {starterPrompts.map((prompt) => (
-                <button
-                  key={prompt}
-                  onClick={() => setInput(prompt)}
-                  className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 transition hover:border-cyan-500 hover:text-cyan-900"
-                  type="button"
-                >
-                  {prompt}
-                </button>
-              ))}
-            </div>
+            {showStarterPrompts ? (
+              <div className="mb-2 flex flex-wrap gap-2">
+                {starterPrompts.map((prompt) => (
+                  <button
+                    key={prompt}
+                    onClick={() => setInput(prompt)}
+                    className="rounded-full border border-slate-300 bg-slate-50 px-3 py-1 text-xs font-medium text-slate-700 transition hover:border-cyan-500 hover:text-cyan-900"
+                    type="button"
+                  >
+                    {prompt}
+                  </button>
+                ))}
+              </div>
+            ) : null}
 
             <form
               onSubmit={(event) => {
@@ -394,7 +743,7 @@ export function AgentWorkspace() {
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
                 rows={2}
-                placeholder="Ask a customer insights question..."
+                placeholder="Ask a Customer Insights Analyst a question..."
                 className="min-h-[74px] flex-1 resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-inner outline-none ring-cyan-500 placeholder:text-slate-400 focus:ring-2"
               />
               <button
@@ -409,11 +758,12 @@ export function AgentWorkspace() {
         </main>
 
         <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur">
-          <h3 className="text-sm font-semibold uppercase tracking-[0.16em] text-slate-500">Active Brief</h3>
-          <p className="mt-2 text-lg font-semibold text-slate-900">Decision Snapshot</p>
-          <p className="mt-1 text-sm text-slate-700">
-            Keep this panel open to review the current answer, confidence context, and fastest next actions.
-          </p>
+          <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
+            <p className="text-xl font-bold text-slate-100">Snapshot</p>
+            <p className="mt-1 text-sm text-slate-300">
+              Review top signals, confidence context, and suggested next actions.
+            </p>
+          </div>
 
           {latestResponse ? (
             <div className="mt-4 space-y-3">
@@ -425,7 +775,7 @@ export function AgentWorkspace() {
                 <p className="text-xs uppercase tracking-wide text-slate-500">Confidence Basis</p>
                 <p className="mt-1 text-sm text-slate-700">
                   {latestResponse.confidence === "high"
-                    ? "QA checks passed with consistent segment reconciliation."
+                    ? "High confidence: the time window is complete, totals reconcile across views, and the ranked results match the exported source rows."
                     : latestResponse.confidence === "medium"
                       ? "Minor assumptions exist; decision-grade but verify downstream impact."
                       : "Incomplete context requires clarifying constraints before acting."}
@@ -433,9 +783,7 @@ export function AgentWorkspace() {
               </div>
               <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                 <p className="text-xs uppercase tracking-wide text-slate-500">Next Action</p>
-                <p className="mt-1 text-sm text-slate-700">
-                  Use one suggested follow-up to isolate root cause and convert this into an intervention plan.
-                </p>
+                <p className="mt-1 text-sm text-slate-700">{nextActionText(latestResponse.suggestedQuestions[0])}</p>
               </div>
             </div>
           ) : (

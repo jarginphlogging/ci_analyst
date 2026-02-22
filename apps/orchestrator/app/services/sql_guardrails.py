@@ -19,6 +19,7 @@ FORBIDDEN_SQL_PATTERNS = [
 
 TABLE_REF_PATTERN = re.compile(r"\b(?:from|join)\s+([a-zA-Z0-9_.\"]+)", re.IGNORECASE)
 LIMIT_PATTERN = re.compile(r"\blimit\s+(\d+)\b", re.IGNORECASE)
+CTE_NAME_PATTERN = re.compile(r"(?:\bwith\b|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(", re.IGNORECASE)
 
 
 def _normalize_sql(sql: str) -> str:
@@ -35,6 +36,10 @@ def _extract_table_references(sql: str) -> set[str]:
     return refs
 
 
+def _extract_cte_names(sql: str) -> set[str]:
+    return {name.lower() for name in CTE_NAME_PATTERN.findall(sql)}
+
+
 def _enforce_select_only(sql: str) -> None:
     normalized = _normalize_sql(sql).lower()
     if not normalized.startswith("select") and not normalized.startswith("with"):
@@ -46,10 +51,11 @@ def _enforce_select_only(sql: str) -> None:
 
 def _enforce_allowed_tables(sql: str, model: SemanticModel) -> None:
     allowed = {table.name.lower() for table in model.tables}
+    cte_names = _extract_cte_names(sql)
     found = _extract_table_references(sql)
     if not found:
         raise ValueError("Generated SQL did not reference any allowlisted table.")
-    blocked = [table for table in found if table not in allowed]
+    blocked = [table for table in found if table not in allowed and table not in cte_names]
     if blocked:
         raise ValueError(f"Generated SQL referenced non-allowlisted table(s): {', '.join(blocked)}")
 
@@ -82,4 +88,3 @@ def guard_sql(sql: str, model: SemanticModel) -> str:
     _enforce_allowed_tables(sql, model)
     _enforce_restricted_columns(sql, model)
     return _enforce_limit(sql, model)
-

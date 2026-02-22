@@ -57,6 +57,26 @@ class DataTable(BaseModel):
     sourceSql: Optional[str] = None
 
 
+class AnalysisArtifact(BaseModel):
+    id: str
+    kind: Literal[
+        "ranking_breakdown",
+        "comparison_breakdown",
+        "delta_breakdown",
+        "trend_breakdown",
+        "distribution_breakdown",
+    ]
+    title: str
+    description: Optional[str] = None
+    columns: list[str]
+    rows: list[dict[str, JsonValue]]
+    dimensionKey: Optional[str] = None
+    valueKey: Optional[str] = None
+    timeKey: Optional[str] = None
+    expectedGrain: Optional[str] = None
+    detectedGrain: Optional[str] = None
+
+
 class AgentResponse(BaseModel):
     answer: str
     confidence: Literal["high", "medium", "low"]
@@ -68,6 +88,7 @@ class AgentResponse(BaseModel):
     assumptions: list[str]
     trace: list[TraceStep]
     dataTables: list[DataTable] = Field(default_factory=list)
+    artifacts: list[AnalysisArtifact] = Field(default_factory=list)
 
 
 class TurnResult(BaseModel):
@@ -117,6 +138,7 @@ class ResponseEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["response"]
     response: AgentResponse
+    phase: Optional[Literal["draft", "final"]] = None
 
 
 class DoneEvent(BaseModel):

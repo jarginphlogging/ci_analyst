@@ -43,6 +43,25 @@ export interface DataTable {
   sourceSql?: string;
 }
 
+export interface AnalysisArtifact {
+  id: string;
+  kind:
+    | "ranking_breakdown"
+    | "comparison_breakdown"
+    | "delta_breakdown"
+    | "trend_breakdown"
+    | "distribution_breakdown";
+  title: string;
+  description?: string;
+  columns: string[];
+  rows: Array<Record<string, DataCell>>;
+  dimensionKey?: string;
+  valueKey?: string;
+  timeKey?: string;
+  expectedGrain?: string;
+  detectedGrain?: string;
+}
+
 export interface AgentResponse {
   answer: string;
   confidence: "high" | "medium" | "low";
@@ -54,6 +73,7 @@ export interface AgentResponse {
   assumptions: string[];
   trace: TraceStep[];
   dataTables: DataTable[];
+  artifacts?: AnalysisArtifact[];
 }
 
 export interface ChatMessage {
@@ -62,13 +82,16 @@ export interface ChatMessage {
   text: string;
   createdAt: string;
   response?: AgentResponse;
+  draftResponse?: AgentResponse;
+  hasAnswerDeltas?: boolean;
   isStreaming?: boolean;
   statusUpdates?: string[];
+  requestDurationMs?: number;
 }
 
 export type ChatStreamEvent =
   | { type: "status"; message: string }
   | { type: "answer_delta"; delta: string }
-  | { type: "response"; response: AgentResponse }
+  | { type: "response"; response: AgentResponse; phase?: "draft" | "final" }
   | { type: "done" }
   | { type: "error"; message: string };

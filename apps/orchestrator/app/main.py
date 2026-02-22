@@ -56,9 +56,7 @@ async def chat_turn(request: ChatTurnRequest):
 async def chat_stream(request: ChatTurnRequest):
     async def event_stream():
         try:
-            stream_result = await orchestrator.run_stream(request)
-
-            for event in stream_result.events:
+            async for event in orchestrator.stream_events(request):
                 event_type = event.get("type")
                 if event_type == "status":
                     StatusEvent(**event)
