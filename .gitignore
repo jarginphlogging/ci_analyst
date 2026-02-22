@@ -19,15 +19,8 @@ apps/orchestrator/.sandbox/
 .env.local
 .env.*
 !.env.readme
-!apps/orchestrator/.env
 !apps/orchestrator/.env.readme
-!apps/orchestrator/.env.mock
-!apps/orchestrator/.env.sandbox
-!apps/orchestrator/.env.prod
-!apps/web/.env.local
 !apps/web/.env.readme
-!apps/web/.env.web-mock
-!apps/web/.env.orchestrator
 semantic_model.yaml
 
 # OS
