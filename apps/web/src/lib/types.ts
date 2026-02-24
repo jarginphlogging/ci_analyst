@@ -7,6 +7,8 @@ export interface TraceStep {
   status: TraceStatus;
   sql?: string;
   qualityChecks?: string[];
+  stageInput?: Record<string, unknown>;
+  stageOutput?: Record<string, unknown>;
 }
 
 export interface MetricPoint {

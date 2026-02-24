@@ -1,19 +1,29 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional, Protocol
 
 from app.models import AgentResponse, ChatTurnRequest, QueryPlanStep, SqlExecutionResult, ValidationResult
 
 
-class OrchestratorDependencies(Protocol):
-    async def classify_route(self, request: ChatTurnRequest, history: list[str]) -> str: ...
+@dataclass
+class TurnExecutionContext:
+    route: str
+    plan: list[QueryPlanStep]
+    sql_assumptions: list[str] = field(default_factory=list)
 
-    async def create_plan(self, request: ChatTurnRequest, history: list[str]) -> list[QueryPlanStep]: ...
+
+class OrchestratorDependencies(Protocol):
+    async def create_plan(
+        self,
+        request: ChatTurnRequest,
+        history: list[str],
+    ) -> TurnExecutionContext: ...
 
     async def run_sql(
         self,
         request: ChatTurnRequest,
-        plan: list[QueryPlanStep],
+        context: TurnExecutionContext,
         history: list[str],
         progress_callback: Optional[Callable[[str], Awaitable[None] | None]] = None,
     ) -> list[SqlExecutionResult]: ...
@@ -23,6 +33,7 @@ class OrchestratorDependencies(Protocol):
     async def build_response(
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse: ...
@@ -30,6 +41,7 @@ class OrchestratorDependencies(Protocol):
     async def build_fast_response(
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse: ...

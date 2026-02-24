@@ -287,16 +287,6 @@ def _tables_from_sql_results(results: list[SqlExecutionResult]) -> list[DataTabl
     return tables
 
 
-async def mock_classify_route(request: ChatTurnRequest) -> str:
-    lowered = request.message.lower()
-    profile = _query_profile(request.message)
-    if profile in {"q4_yoy", "store_performance"}:
-        return "deep_path"
-    if any(keyword in lowered for keyword in ["compare", "versus", "vs", "driver", "mix", "why"]):
-        return "deep_path"
-    return "fast_path"
-
-
 async def mock_create_plan(request: ChatTurnRequest) -> list[QueryPlanStep]:
     profile = _query_profile(request.message)
     if profile == "state_sales":

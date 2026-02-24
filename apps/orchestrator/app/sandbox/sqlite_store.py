@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 import sqlite3
-from datetime import date
+from calendar import monthrange
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -42,29 +43,34 @@ _STATES: list[tuple[str, str]] = [
 
 _DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _MCCS = ["5411", "5812", "5311", "5732", "5999", "5541"]
+_SEED_VERSION = "2"
+_SEED_DATE_FROM = date(2024, 1, 1)
+_SEED_DATE_THROUGH = date(2025, 12, 31)
 
 
-def _month_points() -> list[date]:
+def _date_points() -> list[date]:
     points: list[date] = []
-    year = 2024
-    month = 1
-    for _ in range(24):
-        points.append(date(year, month, 1))
-        month += 1
-        if month > 12:
-            month = 1
-            year += 1
+    cursor = _SEED_DATE_FROM
+    while cursor <= _SEED_DATE_THROUGH:
+        points.append(cursor)
+        cursor += timedelta(days=1)
     return points
 
 
 def _build_sales_rows() -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
-    for month_index, month_date in enumerate(_month_points()):
-        resp_date = month_date.isoformat()
+    for date_index, resp_day in enumerate(_date_points()):
+        resp_date = resp_day.isoformat()
+        month_index = ((resp_day.year - _SEED_DATE_FROM.year) * 12) + (resp_day.month - 1)
+        intra_month_factor = (resp_day.day - 1) % 7
         for state_index, (state, city) in enumerate(_STATES):
             for channel in ("CP", "CNP"):
-                base_transactions = 820 + (state_index * 23) + (month_index * 15) + (70 if channel == "CNP" else 0)
-                avg_ticket = 30.5 + ((state_index % 6) * 0.9) + (month_index * 0.08) + (1.4 if channel == "CNP" else 0.8)
+                base_transactions = (
+                    820 + (state_index * 23) + (month_index * 15) + (intra_month_factor * 3) + (70 if channel == "CNP" else 0)
+                )
+                avg_ticket = (
+                    30.5 + ((state_index % 6) * 0.9) + (month_index * 0.08) + (intra_month_factor * 0.05) + (1.4 if channel == "CNP" else 0.8)
+                )
                 total_spend = round(base_transactions * avg_ticket, 2)
                 repeat_share = 0.56 + ((state_index % 5) * 0.012) - (0.03 if channel == "CNP" else 0.0)
                 repeat_transactions = int(base_transactions * repeat_share)
@@ -72,9 +78,9 @@ def _build_sales_rows() -> list[tuple[Any, ...]]:
                 repeat_spend = round(total_spend * (repeat_transactions / max(base_transactions, 1)), 2)
                 new_spend = round(total_spend - repeat_spend, 2)
 
-                for repeat_flag in ("Y", "N"):
-                    row_transactions = repeat_transactions if repeat_flag == "Y" else new_transactions
-                    row_spend = repeat_spend if repeat_flag == "Y" else new_spend
+                for repeat_flag in (1, 0):
+                    row_transactions = repeat_transactions if repeat_flag == 1 else new_transactions
+                    row_spend = repeat_spend if repeat_flag == 1 else new_spend
                     cp_transactions = row_transactions if channel == "CP" else 0
                     cnp_transactions = row_transactions if channel == "CNP" else 0
                     cp_spend = row_spend if channel == "CP" else 0.0
@@ -90,13 +96,13 @@ def _build_sales_rows() -> list[tuple[Any, ...]]:
                             channel,
                             repeat_flag,
                             resp_date,
-                            _DAYS[(state_index + month_index) % len(_DAYS)],
-                            f"{8 + ((state_index + month_index) % 10):02d}:30:00",
-                            "consumer" if (state_index % 3) else "commercial",
-                            repeat_transactions if repeat_flag == "Y" else 0,
-                            new_transactions if repeat_flag == "N" else 0,
-                            repeat_spend if repeat_flag == "Y" else 0.0,
-                            new_spend if repeat_flag == "N" else 0.0,
+                            _DAYS[resp_day.weekday()],
+                            f"{8 + ((state_index + date_index) % 10):02d}:30:00",
+                            "Consumer" if (state_index % 3) else "Commercial",
+                            repeat_transactions if repeat_flag == 1 else 0,
+                            new_transactions if repeat_flag == 0 else 0,
+                            repeat_spend if repeat_flag == 1 else 0.0,
+                            new_spend if repeat_flag == 0 else 0.0,
                             cp_transactions,
                             cnp_transactions,
                             cp_spend,
@@ -111,14 +117,24 @@ def _build_sales_rows() -> list[tuple[Any, ...]]:
 def _build_household_rows() -> list[tuple[Any, ...]]:
     rows: list[tuple[Any, ...]] = []
     for state_index, _ in enumerate(_STATES, start=1):
-        rows.append(
-            (
-                f"TD{state_index:03d}01",
-                "2024-01-01",
-                "2025-12-31",
-                5200 + state_index * 130,
+        for td_suffix in range(1, 9):
+            rows.append(
+                (
+                    f"TD{state_index:03d}{td_suffix:02d}",
+                    _SEED_DATE_FROM.isoformat(),
+                    _SEED_DATE_THROUGH.isoformat(),
+                    5200 + state_index * 130 + td_suffix * 17,
+                )
             )
+    # Keep semantic-model sample value represented in the mock dataset.
+    rows.append(
+        (
+            "6182655",
+            _SEED_DATE_FROM.isoformat(),
+            _SEED_DATE_THROUGH.isoformat(),
+            6400,
         )
+    )
     return rows
 
 
@@ -141,7 +157,7 @@ def ensure_sandbox_database(db_path: str, *, reset: bool = False) -> None:
               transaction_city TEXT,
               mcc TEXT,
               channel TEXT,
-              repeat_flag TEXT,
+              repeat_flag INTEGER,
               resp_date TEXT,
               day_of_week TEXT,
               transaction_time TEXT,
@@ -169,9 +185,25 @@ def ensure_sandbox_database(db_path: str, *, reset: bool = False) -> None:
             )
             """
         )
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sandbox_seed_metadata (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            )
+            """
+        )
 
         sales_count = cursor.execute("SELECT COUNT(*) FROM cia_sales_insights_cortex").fetchone()
-        if not sales_count or int(sales_count[0]) == 0:
+        seed_version_row = cursor.execute(
+            "SELECT value FROM sandbox_seed_metadata WHERE key = 'seed_version'"
+        ).fetchone()
+        seed_version = str(seed_version_row[0]) if seed_version_row else ""
+        should_reseed = (not sales_count or int(sales_count[0]) == 0) or seed_version != _SEED_VERSION
+
+        if should_reseed:
+            cursor.execute("DELETE FROM cia_sales_insights_cortex")
+            cursor.execute("DELETE FROM cia_household_insights_cortex")
             cursor.executemany(
                 """
                 INSERT INTO cia_sales_insights_cortex (
@@ -184,14 +216,20 @@ def ensure_sandbox_database(db_path: str, *, reset: bool = False) -> None:
                 _build_sales_rows(),
             )
 
-        household_count = cursor.execute("SELECT COUNT(*) FROM cia_household_insights_cortex").fetchone()
-        if not household_count or int(household_count[0]) == 0:
             cursor.executemany(
                 """
                 INSERT INTO cia_household_insights_cortex (td_id, date_from, date_through, households_count)
                 VALUES (?, ?, ?, ?)
                 """,
                 _build_household_rows(),
+            )
+            cursor.execute(
+                """
+                INSERT INTO sandbox_seed_metadata(key, value)
+                VALUES('seed_version', ?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value
+                """,
+                (_SEED_VERSION,),
             )
 
         cursor.execute(
@@ -212,6 +250,59 @@ def rewrite_sql_for_sqlite(sql: str) -> str:
     return rewritten
 
 
+def _as_date(value: Any) -> date:
+    if isinstance(value, date):
+        return value
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError("Expected a date-like value.")
+    if "T" in text:
+        text = text.split("T", 1)[0]
+    if " " in text:
+        text = text.split(" ", 1)[0]
+    return date.fromisoformat(text)
+
+
+def _add_months(base: date, months: int) -> date:
+    month_index = (base.month - 1) + months
+    year = base.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    day = min(base.day, monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _sqlite_dateadd(part: Any, amount: Any, value: Any) -> str:
+    unit = str(part or "").strip().lower().strip("'\"")
+    delta = int(amount)
+    base = _as_date(value)
+
+    if unit in {"month", "months", "mon"}:
+        return _add_months(base, delta).isoformat()
+    if unit in {"day", "days"}:
+        return (base + timedelta(days=delta)).isoformat()
+    if unit in {"year", "years"}:
+        return _add_months(base, delta * 12).isoformat()
+    raise ValueError(f"Unsupported DATEADD part: {part}")
+
+
+def _sqlite_date_trunc(part: Any, value: Any) -> str:
+    unit = str(part or "").strip().lower().strip("'\"")
+    base = _as_date(value)
+
+    if unit in {"month", "months", "mon"}:
+        return base.replace(day=1).isoformat()
+    if unit in {"year", "years"}:
+        return base.replace(month=1, day=1).isoformat()
+    if unit in {"day", "days"}:
+        return base.isoformat()
+    raise ValueError(f"Unsupported DATE_TRUNC part: {part}")
+
+
+def _sqlite_last_day(value: Any) -> str:
+    base = _as_date(value)
+    return base.replace(day=monthrange(base.year, base.month)[1]).isoformat()
+
+
 def execute_readonly_query(db_path: str, sql: str) -> list[dict[str, Any]]:
     rewritten = rewrite_sql_for_sqlite(sql)
     lowered = rewritten.lstrip().lower()
@@ -220,6 +311,9 @@ def execute_readonly_query(db_path: str, sql: str) -> list[dict[str, Any]]:
 
     ensure_sandbox_database(db_path)
     with sqlite3.connect(Path(db_path).expanduser()) as conn:
+        conn.create_function("DATEADD", 3, _sqlite_dateadd)
+        conn.create_function("DATE_TRUNC", 2, _sqlite_date_trunc)
+        conn.create_function("LAST_DAY", 1, _sqlite_last_day)
         conn.row_factory = sqlite3.Row
         cursor = conn.execute(rewritten)
         rows = cursor.fetchall()

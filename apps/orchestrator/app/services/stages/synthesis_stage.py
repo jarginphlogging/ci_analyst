@@ -3,16 +3,30 @@ from __future__ import annotations
 from typing import Any, Awaitable, Callable, Literal, cast
 
 from app.config import settings
-from app.models import AgentResponse, AnalysisArtifact, EvidenceRow, Insight, SqlExecutionResult, TraceStep
+from app.models import (
+    AgentResponse,
+    AnalysisArtifact,
+    EvidenceRow,
+    Insight,
+    QueryPlanStep,
+    SqlExecutionResult,
+    SynthesisContextPackage,
+    SynthesisExecutedStep,
+    SynthesisPlanStep,
+    SynthesisPortfolioSummary,
+    SynthesisQueryContext,
+    TraceStep,
+)
 from app.prompts.templates import response_prompt
+from app.services.llm_trace import llm_trace_stage
 from app.services.llm_json import as_string_list
+from app.services.stages.data_summarizer_stage import DataSummarizerStage
 from app.services.table_analysis import (
     build_analysis_artifacts,
     build_evidence_rows,
     build_metric_points,
     detect_grain_mismatch,
     results_to_data_tables,
-    summarize_results_for_prompt,
 )
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
@@ -250,23 +264,17 @@ def _normalize_confidence(raw_confidence: str) -> Literal["high", "medium", "low
     return cast(Literal["high", "medium", "low"], confidence)
 
 
-def _answer_delta_tail(fast_answer: str, final_answer: str) -> str:
-    fast = fast_answer.strip()
-    final = final_answer.strip()
-    if final.startswith(fast):
-        return final[len(fast) :].strip()
-    return final
-
-
 class SynthesisStage:
     def __init__(self, *, ask_llm_json: AskLlmJsonFn) -> None:
         self._ask_llm_json = ask_llm_json
+        self._data_summarizer = DataSummarizerStage()
 
     async def build_fast_response(
         self,
         *,
         message: str,
         route: str,
+        plan: list[QueryPlanStep] | None,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
@@ -274,6 +282,7 @@ class SynthesisStage:
         return await self._build_response(
             message=message,
             route=route,
+            plan=plan,
             results=results,
             prior_assumptions=prior_assumptions,
             history=history,
@@ -285,6 +294,7 @@ class SynthesisStage:
         *,
         message: str,
         route: str,
+        plan: list[QueryPlanStep] | None,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
@@ -292,10 +302,75 @@ class SynthesisStage:
         return await self._build_response(
             message=message,
             route=route,
+            plan=plan,
             results=results,
             prior_assumptions=prior_assumptions,
             history=history,
             with_llm=True,
+        )
+
+    def _synthesis_context_package(
+        self,
+        *,
+        message: str,
+        route: str,
+        plan: list[QueryPlanStep] | None,
+        results: list[SqlExecutionResult],
+    ) -> SynthesisContextPackage:
+        _ = route
+        plan_steps = plan or []
+        table_summaries = self._data_summarizer.summarize_tables(results=results, message=message)
+
+        synthesis_plan = [
+            SynthesisPlanStep(
+                id=step.id,
+                goal=step.goal,
+                dependsOn=step.dependsOn,
+                independent=step.independent,
+            )
+            for step in plan_steps
+        ]
+
+        executed_steps: list[SynthesisExecutedStep] = []
+        for index, result in enumerate(results, start=1):
+            step = plan_steps[index - 1] if index - 1 < len(plan_steps) else None
+            table_summary = table_summaries[index - 1] if index - 1 < len(table_summaries) else {}
+            plan_step = (
+                SynthesisPlanStep(
+                    id=step.id,
+                    goal=step.goal,
+                    dependsOn=step.dependsOn,
+                    independent=step.independent,
+                )
+                if step
+                else SynthesisPlanStep(
+                    id=f"step_{index}",
+                    goal="No explicit plan step was available.",
+                    dependsOn=[],
+                    independent=True,
+                )
+            )
+            executed_steps.append(
+                SynthesisExecutedStep(
+                    stepIndex=index,
+                    planStep=plan_step,
+                    executedSql=result.sql,
+                    rowCount=result.rowCount,
+                    tableSummary=table_summary,
+                )
+            )
+
+        return SynthesisContextPackage(
+            queryContext=SynthesisQueryContext(
+                originalUserQuery=message,
+                route="standard",
+            ),
+            plan=synthesis_plan,
+            executedSteps=executed_steps,
+            portfolioSummary=SynthesisPortfolioSummary(
+                tableCount=len(results),
+                totalRows=sum(result.rowCount for result in results),
+            ),
         )
 
     async def _build_response(
@@ -303,6 +378,7 @@ class SynthesisStage:
         *,
         message: str,
         route: str,
+        plan: list[QueryPlanStep] | None,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
@@ -312,7 +388,13 @@ class SynthesisStage:
         artifacts = build_analysis_artifacts(results, message=message)
         metrics = build_metric_points(results, evidence, message=message)
         data_tables = results_to_data_tables(results)
-        result_summary = summarize_results_for_prompt(results)
+        synthesis_context = self._synthesis_context_package(
+            message=message,
+            route=route,
+            plan=plan,
+            results=results,
+        )
+        result_summary = synthesis_context.model_dump_json()
         evidence_summary = str([row.model_dump() for row in evidence[:8]])
 
         llm_payload: dict[str, Any] = {}
@@ -325,11 +407,18 @@ class SynthesisStage:
                     evidence_summary,
                     history,
                 )
-                llm_payload = await self._ask_llm_json(
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    max_tokens=settings.real_llm_max_tokens,
-                )
+                with llm_trace_stage(
+                    "synthesis_final",
+                    {
+                        "planStepCount": len(plan or []),
+                        "historyDepth": len(history),
+                    },
+                ):
+                    llm_payload = await self._ask_llm_json(
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        max_tokens=settings.real_llm_max_tokens,
+                    )
             except Exception:
                 llm_payload = {}
 
@@ -349,9 +438,8 @@ class SynthesisStage:
         assumptions = as_string_list(llm_payload.get("assumptions"), max_items=4)
         assumptions.extend(prior_assumptions[:6])
         assumptions.append("SQL is constrained to the semantic model allowlist.")
-        assumptions.append(
-            "Deep path was selected for multi-step reasoning." if route == "deep_path" else "Fast path was selected for low latency."
-        )
+        assumptions.append("Final synthesis used planner tasks, executed SQL, and deterministic table summaries.")
+        assumptions.append("Standard execution pipeline was used.")
 
         if grain_mismatch:
             requested, detected = grain_mismatch
@@ -363,7 +451,7 @@ class SynthesisStage:
             TraceStep(
                 id="t1",
                 title="Resolve intent and policy scope",
-                summary="Classified route and bounded plan depth for deterministic orchestration.",
+                summary="Validated relevance and generated a bounded delegation plan for deterministic orchestration.",
                 status="done",
             ),
             TraceStep(
@@ -377,9 +465,9 @@ class SynthesisStage:
                 id="t3",
                 title="Profile results and render adaptive insight modules",
                 summary=(
-                    "Built deterministic insights and modules from result shape."
+                    "Built deterministic summary modules from planner+SQL output."
                     if not with_llm
-                    else "Combined deterministic result profiling with LLM narrative constrained to retrieved evidence."
+                    else "Combined planner context, executed SQL, and deterministic table summaries with constrained narrative synthesis."
                 ),
                 status="done",
             ),

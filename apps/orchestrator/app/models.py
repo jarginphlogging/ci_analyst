@@ -23,6 +23,8 @@ class TraceStep(BaseModel):
     status: Literal["done", "running", "blocked"]
     sql: Optional[str] = None
     qualityChecks: Optional[list[str]] = None
+    stageInput: Optional[dict[str, Any]] = None
+    stageOutput: Optional[dict[str, Any]] = None
 
 
 class MetricPoint(BaseModel):
@@ -100,6 +102,40 @@ class TurnResult(BaseModel):
 class QueryPlanStep(BaseModel):
     id: str
     goal: str
+    dependsOn: list[str] = Field(default_factory=list)
+    independent: bool = True
+
+
+class SynthesisQueryContext(BaseModel):
+    originalUserQuery: str
+    route: str
+
+
+class SynthesisPlanStep(BaseModel):
+    id: str
+    goal: str
+    dependsOn: list[str] = Field(default_factory=list)
+    independent: bool = True
+
+
+class SynthesisExecutedStep(BaseModel):
+    stepIndex: int
+    planStep: SynthesisPlanStep
+    executedSql: str
+    rowCount: int
+    tableSummary: dict[str, Any] = Field(default_factory=dict)
+
+
+class SynthesisPortfolioSummary(BaseModel):
+    tableCount: int
+    totalRows: int
+
+
+class SynthesisContextPackage(BaseModel):
+    queryContext: SynthesisQueryContext
+    plan: list[SynthesisPlanStep] = Field(default_factory=list)
+    executedSteps: list[SynthesisExecutedStep] = Field(default_factory=list)
+    portfolioSummary: SynthesisPortfolioSummary
 
 
 class SqlExecutionResult(BaseModel):

@@ -150,6 +150,22 @@ function parseDateValue(value: unknown): Date | null {
 
   const trimmed = value.trim();
   if (!trimmed) return null;
+  const dateOnlyMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]);
+    const day = Number(dateOnlyMatch[3]);
+    const localDate = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(localDate.getTime()) ||
+      localDate.getFullYear() !== year ||
+      localDate.getMonth() !== month - 1 ||
+      localDate.getDate() !== day
+    ) {
+      return null;
+    }
+    return localDate;
+  }
   if (!/\d{4}-\d{2}-\d{2}/.test(trimmed)) return null;
 
   const parsed = new Date(trimmed);
@@ -331,6 +347,10 @@ function buildRenderableTables(response: AgentResponse): DataTable[] {
   ];
 }
 
+function isFailureResponse(response: AgentResponse): boolean {
+  return (response.trace ?? []).some((step) => step.status === "blocked");
+}
+
 type EnvironmentLabel = "Mock" | "Sandbox" | "Production";
 
 interface AgentWorkspaceProps {
@@ -358,6 +378,10 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   const latestResponse = useMemo(
     () => [...messages].reverse().find((message) => message.role === "assistant" && message.response)?.response,
     [messages],
+  );
+  const latestResponseIsFailure = useMemo(
+    () => (latestResponse ? isFailureResponse(latestResponse) : false),
+    [latestResponse],
   );
   const showStarterPrompts = useMemo(() => !messages.some((message) => message.role === "user"), [messages]);
 
@@ -574,6 +598,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   </article>
                 );
               }
+              const responseIsFailure = message.response ? isFailureResponse(message.response) : false;
 
               return (
                 <article key={message.id} className="animate-fade-up space-y-3 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
@@ -582,7 +607,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                       <p className="text-xs uppercase tracking-[0.16em] text-cyan-700">Agent Response</p>
                       <p className="text-sm text-slate-600">{messageTime(message.createdAt)}</p>
                     </div>
-                    {message.response ? (
+                    {message.response && !responseIsFailure ? (
                       <span
                         className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
                           message.response.confidence === "high"
@@ -618,97 +643,109 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   ) : null}
 
                   {message.response ? (
-                    <>
-                      <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                        <p className="text-xs uppercase tracking-wide text-slate-500">Why It Matters</p>
-                        <p className="mt-1.5 text-sm text-slate-700">{message.response.whyItMatters}</p>
-                      </section>
+                    responseIsFailure ? (
+                      <>
+                        <section className="rounded-xl border border-rose-200 bg-rose-50 p-3">
+                          <p className="text-xs uppercase tracking-wide text-rose-700">Request Failed</p>
+                          <p className="mt-1.5 text-sm text-rose-900">
+                            No governed result payload was returned. Review the trace for failure details.
+                          </p>
+                        </section>
+                        <AnalysisTrace steps={message.response.trace} />
+                      </>
+                    ) : (
+                      <>
+                        <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                          <p className="text-xs uppercase tracking-wide text-slate-500">Why It Matters</p>
+                          <p className="mt-1.5 text-sm text-slate-700">{message.response.whyItMatters}</p>
+                        </section>
 
-                      {(() => {
-                        const userQuery =
-                          [...messages.slice(0, messageIndex)].reverse().find((entry) => entry.role === "user")?.text ?? "";
-                        const metricPeriodLabel = deriveMetricPeriodLabel(message.response, userQuery, message.createdAt);
-                        const rowsRetrieved = rowsRetrievedCount(message.response);
-                        const runtime = formatRuntime(message.requestDurationMs, message.isStreaming);
-                        return (
-                          <>
-                            <section className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">{metricPeriodLabel}</span>
-                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
-                                  Rows: {integerFormatter.format(rowsRetrieved)}
-                                </span>
-                                <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">Runtime: {runtime}</span>
-                              </div>
-                            </section>
-
-                            <section className="grid gap-3 sm:grid-cols-3">
-                              {kpiMetrics(message.response).map((metric, index) => (
-                                <div key={`${metric.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                                  <p className="text-xs uppercase tracking-wide text-slate-500">{normalizeMetricLabel(metric.label)}</p>
-                                  <p className="mt-2 text-xl font-bold text-slate-900">{formatMetric(metric)}</p>
+                        {(() => {
+                          const userQuery =
+                            [...messages.slice(0, messageIndex)].reverse().find((entry) => entry.role === "user")?.text ?? "";
+                          const metricPeriodLabel = deriveMetricPeriodLabel(message.response, userQuery, message.createdAt);
+                          const rowsRetrieved = rowsRetrievedCount(message.response);
+                          const runtime = formatRuntime(message.requestDurationMs, message.isStreaming);
+                          return (
+                            <>
+                              <section className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">{metricPeriodLabel}</span>
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                                    Rows: {integerFormatter.format(rowsRetrieved)}
+                                  </span>
+                                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">Runtime: {runtime}</span>
                                 </div>
+                              </section>
+
+                              <section className="grid gap-3 sm:grid-cols-3">
+                                {kpiMetrics(message.response).map((metric, index) => (
+                                  <div key={`${metric.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">{normalizeMetricLabel(metric.label)}</p>
+                                    <p className="mt-2 text-xl font-bold text-slate-900">{formatMetric(metric)}</p>
+                                  </div>
+                                ))}
+                              </section>
+                            </>
+                          );
+                        })()}
+
+                        <EvidenceTable rows={message.response.evidence} artifacts={message.response.artifacts} />
+                        <DataExplorer tables={buildRenderableTables(message.response)} />
+
+                        <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">
+                          <h3 className="text-sm font-semibold tracking-wide text-slate-900">Priority Insights</h3>
+                          <div className="mt-3 grid gap-2 md:grid-cols-3">
+                            {[...message.response.insights]
+                              .sort((a, b) => insightImportanceRank[a.importance] - insightImportanceRank[b.importance])
+                              .slice(0, 3)
+                              .map((insight) => (
+                              <article key={insight.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                                <p
+                                  className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
+                                    insight.importance === "high"
+                                      ? "bg-rose-100 text-rose-700"
+                                      : "bg-amber-100 text-amber-800"
+                                  }`}
+                                >
+                                  {insight.importance} importance
+                                </p>
+                                <p className="mt-2 text-sm font-semibold text-slate-900">{insight.title}</p>
+                                <p className="mt-1 text-sm leading-relaxed text-slate-700">{insight.detail}</p>
+                              </article>
                               ))}
-                            </section>
-                          </>
-                        );
-                      })()}
-
-                      <EvidenceTable rows={message.response.evidence} artifacts={message.response.artifacts} />
-                      <DataExplorer tables={buildRenderableTables(message.response)} />
-
-                      <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">
-                        <h3 className="text-sm font-semibold tracking-wide text-slate-900">Priority Insights</h3>
-                        <div className="mt-3 grid gap-2 md:grid-cols-3">
-                          {[...message.response.insights]
-                            .sort((a, b) => insightImportanceRank[a.importance] - insightImportanceRank[b.importance])
-                            .slice(0, 3)
-                            .map((insight) => (
-                            <article key={insight.id} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                              <p
-                                className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-semibold ${
-                                  insight.importance === "high"
-                                    ? "bg-rose-100 text-rose-700"
-                                    : "bg-amber-100 text-amber-800"
-                                }`}
-                              >
-                                {insight.importance} importance
-                              </p>
-                              <p className="mt-2 text-sm font-semibold text-slate-900">{insight.title}</p>
-                              <p className="mt-1 text-sm leading-relaxed text-slate-700">{insight.detail}</p>
-                            </article>
-                            ))}
-                        </div>
-                      </section>
-
-                      <AnalysisTrace steps={message.response.trace} />
-
-                      <section className="grid gap-3 md:grid-cols-2">
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-wide text-slate-500">Assumptions</p>
-                          <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-700 marker:text-slate-400">
-                            {message.response.assumptions.map((item) => (
-                              <li key={item}>{item}</li>
-                            ))}
-                          </ul>
-                        </div>
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                          <p className="text-xs uppercase tracking-wide text-slate-500">Suggested Next Questions</p>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            {message.response.suggestedQuestions.map((question) => (
-                              <button
-                                key={question}
-                                onClick={() => setInput(question)}
-                                className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-left text-xs font-medium text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
-                                type="button"
-                              >
-                                {question}
-                              </button>
-                            ))}
                           </div>
-                        </div>
-                      </section>
-                    </>
+                        </section>
+
+                        <AnalysisTrace steps={message.response.trace} />
+
+                        <section className="grid gap-3 md:grid-cols-2">
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Assumptions</p>
+                            <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-700 marker:text-slate-400">
+                              {message.response.assumptions.map((item) => (
+                                <li key={item}>{item}</li>
+                              ))}
+                            </ul>
+                          </div>
+                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                            <p className="text-xs uppercase tracking-wide text-slate-500">Suggested Next Questions</p>
+                            <div className="mt-2 flex flex-wrap gap-2">
+                              {message.response.suggestedQuestions.map((question) => (
+                                <button
+                                  key={question}
+                                  onClick={() => setInput(question)}
+                                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-left text-xs font-medium text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
+                                  type="button"
+                                >
+                                  {question}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </section>
+                      </>
+                    )
                   ) : null}
                 </article>
               );
@@ -761,31 +798,39 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <p className="text-xl font-bold text-slate-100">Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">
-              Review top signals, confidence context, and suggested next actions.
+              {latestResponseIsFailure
+                ? "Latest request failed. Open the trace for diagnostics."
+                : "Review top signals, confidence context, and suggested next actions."}
             </p>
           </div>
 
           {latestResponse ? (
-            <div className="mt-4 space-y-3">
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Top Signal</p>
-                <p className="mt-1 text-sm font-semibold text-slate-900">{latestResponse.insights[0]?.title ?? "No insight yet"}</p>
+            latestResponseIsFailure ? (
+              <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
+                The latest run did not return a governed result. Inspect the analysis trace in the conversation panel.
               </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Confidence Basis</p>
-                <p className="mt-1 text-sm text-slate-700">
-                  {latestResponse.confidence === "high"
-                    ? "High confidence: the time window is complete, totals reconcile across views, and the ranked results match the exported source rows."
-                    : latestResponse.confidence === "medium"
-                      ? "Minor assumptions exist; decision-grade but verify downstream impact."
-                      : "Incomplete context requires clarifying constraints before acting."}
-                </p>
+            ) : (
+              <div className="mt-4 space-y-3">
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Top Signal</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{latestResponse.insights[0]?.title ?? "No insight yet"}</p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Confidence Basis</p>
+                  <p className="mt-1 text-sm text-slate-700">
+                    {latestResponse.confidence === "high"
+                      ? "High confidence: the time window is complete, totals reconcile across views, and the ranked results match the exported source rows."
+                      : latestResponse.confidence === "medium"
+                        ? "Minor assumptions exist; decision-grade but verify downstream impact."
+                        : "Incomplete context requires clarifying constraints before acting."}
+                  </p>
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Next Action</p>
+                  <p className="mt-1 text-sm text-slate-700">{nextActionText(latestResponse.suggestedQuestions[0])}</p>
+                </div>
               </div>
-              <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                <p className="text-xs uppercase tracking-wide text-slate-500">Next Action</p>
-                <p className="mt-1 text-sm text-slate-700">{nextActionText(latestResponse.suggestedQuestions[0])}</p>
-              </div>
-            </div>
+            )
           ) : (
             <div className="mt-4 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600">
               Ask a question to populate a real-time decision brief.

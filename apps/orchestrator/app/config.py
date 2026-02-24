@@ -98,7 +98,6 @@ class Settings:
     semantic_model_path: Optional[str] = os.getenv("SEMANTIC_MODEL_PATH")
     real_fast_plan_steps: int = _as_int(os.getenv("REAL_FAST_PLAN_STEPS"), 2)
     real_deep_plan_steps: int = _as_int(os.getenv("REAL_DEEP_PLAN_STEPS"), 4)
-    real_enable_parallel_sql: bool = _as_bool(os.getenv("REAL_ENABLE_PARALLEL_SQL"), False)
     real_max_parallel_queries: int = _as_int(os.getenv("REAL_MAX_PARALLEL_QUERIES"), 3)
     real_llm_temperature: float = _as_float(os.getenv("REAL_LLM_TEMPERATURE"), 0.1)
     real_llm_max_tokens: int = _as_int(os.getenv("REAL_LLM_MAX_TOKENS"), 1400)

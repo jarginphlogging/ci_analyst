@@ -13,9 +13,10 @@ FastAPI orchestration service for conversational analytics.
 1. classify route (`fast_path` or `deep_path`)
 2. generate bounded plan
 3. execute governed SQL steps
-4. run numeric validation checks
-5. build answer + evidence + insights + trace + retrievable tables
-6. carry forward bounded prior-turn context into route/plan/sql/response prompts
+4. build deterministic pandas-based table summaries (no LLM) for synthesis context
+5. run numeric validation checks
+6. synthesize final insights from original query + plan + executed SQL + table summaries
+7. carry forward bounded prior-turn context into route/plan/sql/response prompts
 
 Provider modes:
 - `mock`: static deterministic demo responses
@@ -26,7 +27,7 @@ Provider modes:
 - Azure OpenAI for routing, planning, SQL generation, and narrative synthesis
 - Snowflake Cortex SQL execution adapter
 - deterministic SQL guardrails and validation checks
-- optional bounded parallel SQL execution (disabled by default)
+- bounded parallel execution for independent steps, with serial fallback for dependent steps
 
 `sandbox` mode uses:
 - Anthropic Messages API for routing/planning/sql/synthesis
@@ -101,11 +102,12 @@ npm --workspace @ci/orchestrator run test
 - `app/providers/factory.py`
 - `app/providers/protocols.py`
 - `app/services/dependencies.py`
-- `app/sandbox/cortex_service.py`
+- `app/sandbox/sandbox_sca_service.py`
 - `app/sandbox/sqlite_store.py`
 - stage modules:
   - `app/services/stages/planner_stage.py`
   - `app/services/stages/sql_stage.py`
+  - `app/services/stages/data_summarizer_stage.py`
   - `app/services/stages/validation_stage.py`
   - `app/services/stages/synthesis_stage.py`
 - prompt templates: `app/prompts/templates.py`
@@ -120,17 +122,15 @@ Set these in `.env` to slow down and visualize the live run:
 - `MOCK_STREAM_TOKEN_DELAY_MS` (default `120`)
 - `MOCK_STREAM_RESPONSE_DELAY_MS` (default `450`)
 
-## Real SQL Parallelism (Optional)
+## SQL Execution Concurrency
 
-Enable bounded parallel SQL execution only when your warehouse and governance controls support it:
-
-- `REAL_ENABLE_PARALLEL_SQL=false` (default)
-- `REAL_MAX_PARALLEL_QUERIES=3`
-
-Behavior:
-- SQL planning/generation remains deterministic and sequential.
-- Query execution can run in parallel with bounded concurrency.
+Execution behavior:
+- Independent step levels execute in parallel on sandbox/prod warehouse targets.
+- Dependent step levels execute serially.
 - Final result ordering remains deterministic by plan step index.
+
+Concurrency controls:
+- `REAL_MAX_PARALLEL_QUERIES=3`
 
 ## Mode Selection
 

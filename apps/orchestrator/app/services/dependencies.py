@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -8,51 +7,51 @@ from app.config import settings
 from app.models import (
     AgentResponse,
     ChatTurnRequest,
-    QueryPlanStep,
     SqlExecutionResult,
     ValidationResult,
 )
 from app.providers.factory import build_provider_bundle
 from app.providers.mock_provider import (
     mock_build_response,
-    mock_classify_route,
     mock_create_plan,
     mock_run_sql,
     mock_validate_results,
 )
 from app.providers.protocols import AnalystFn, LlmFn, SqlFn
 from app.services.llm_json import parse_json_object
+from app.services.llm_trace import record_llm_trace
 from app.services.semantic_model import SemanticModel, load_semantic_model
-from app.services.stages import PlannerStage, SqlExecutionStage, SynthesisStage, ValidationStage, heuristic_route
-from app.services.types import OrchestratorDependencies
+from app.services.stages import (
+    PlannerBlockedError,
+    PlannerStage,
+    SqlExecutionStage,
+    SynthesisStage,
+    ValidationStage,
+)
+from app.services.types import OrchestratorDependencies, TurnExecutionContext
 
 ProgressCallback = Optional[Callable[[str], Optional[Awaitable[None]]]]
-
-
-def _request_key(request: ChatTurnRequest) -> str:
-    session_id = str(request.sessionId or "anonymous")
-    role = (request.role or "").strip().lower()
-    message = request.message.strip().lower()
-    filters = json.dumps(request.explicitFilters or {}, sort_keys=True)
-    return f"{session_id}|{role}|{message}|{filters}"
+EXECUTION_MODE = "standard"
 
 
 @dataclass
 class MockDependencies:
-    async def classify_route(self, request: ChatTurnRequest, history: list[str]) -> str:  # noqa: ARG002
-        return await mock_classify_route(request)
-
-    async def create_plan(self, request: ChatTurnRequest, history: list[str]) -> list[QueryPlanStep]:  # noqa: ARG002
-        return await mock_create_plan(request)
+    async def create_plan(
+        self,
+        request: ChatTurnRequest,
+        history: list[str],  # noqa: ARG002
+    ) -> TurnExecutionContext:
+        plan = await mock_create_plan(request)
+        return TurnExecutionContext(route=EXECUTION_MODE, plan=plan)
 
     async def run_sql(
         self,
         request: ChatTurnRequest,
-        plan: list[QueryPlanStep],
+        context: TurnExecutionContext,
         history: list[str],  # noqa: ARG002
         progress_callback: ProgressCallback = None,  # noqa: ARG002
     ) -> list[SqlExecutionResult]:
-        return await mock_run_sql(request, plan)
+        return await mock_run_sql(request, context.plan)
 
     async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult:
         return await mock_validate_results(results)
@@ -60,6 +59,7 @@ class MockDependencies:
     async def build_response(
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,  # noqa: ARG002
         results: list[SqlExecutionResult],
         history: list[str],  # noqa: ARG002
     ) -> AgentResponse:
@@ -68,6 +68,7 @@ class MockDependencies:
     async def build_fast_response(
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,  # noqa: ARG002
         results: list[SqlExecutionResult],
         history: list[str],  # noqa: ARG002
     ) -> AgentResponse:
@@ -97,8 +98,6 @@ class RealDependencies:
         if self._llm_fn is None or self._sql_fn is None:
             raise RuntimeError("Provider wiring failed to initialize.")
         self._model = model or load_semantic_model()
-        self._route_cache: dict[str, str] = {}
-        self._assumption_cache: dict[str, list[str]] = {}
         self._planner_stage = PlannerStage(model=self._model, ask_llm_json=self._ask_llm_json)
         self._sql_stage = SqlExecutionStage(
             model=self._model,
@@ -110,42 +109,67 @@ class RealDependencies:
         self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_llm_json)
 
     async def _ask_llm_json(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:
-        response = await self._llm_fn(
-            system_prompt=system_prompt,
-            user_prompt=user_prompt,
-            temperature=settings.real_llm_temperature,
-            max_tokens=max_tokens,
-            response_json=True,
-        )
-        return parse_json_object(response)
+        raw_response: str | None = None
+        try:
+            raw_response = await self._llm_fn(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                temperature=settings.real_llm_temperature,
+                max_tokens=max_tokens,
+                response_json=True,
+            )
+            parsed_response = parse_json_object(raw_response)
+            record_llm_trace(
+                provider="llm",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                temperature=settings.real_llm_temperature,
+                raw_response=raw_response,
+                parsed_response=parsed_response,
+            )
+            return parsed_response
+        except Exception as error:
+            record_llm_trace(
+                provider="llm",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                temperature=settings.real_llm_temperature,
+                raw_response=raw_response,
+                error=str(error),
+            )
+            raise
 
-    async def classify_route(self, request: ChatTurnRequest, history: list[str]) -> str:
-        route = await self._planner_stage.classify_route(request.message, history)
-        self._route_cache[_request_key(request)] = route
-        return route
-
-    async def create_plan(self, request: ChatTurnRequest, history: list[str]) -> list[QueryPlanStep]:
-        route = self._route_cache.get(_request_key(request)) or heuristic_route(request.message)
-        return await self._planner_stage.create_plan(request.message, route, history)
+    async def create_plan(
+        self,
+        request: ChatTurnRequest,
+        history: list[str],
+    ) -> TurnExecutionContext:
+        decision = await self._planner_stage.create_plan(request.message, history)
+        if decision.stop_reason != "none":
+            raise PlannerBlockedError(
+                stop_reason=decision.stop_reason,
+                user_message=decision.stop_message or "Unable to process request.",
+            )
+        return TurnExecutionContext(route=EXECUTION_MODE, plan=decision.steps)
 
     async def run_sql(
         self,
         request: ChatTurnRequest,
-        plan: list[QueryPlanStep],
+        context: TurnExecutionContext,
         history: list[str],
         progress_callback: ProgressCallback = None,
     ) -> list[SqlExecutionResult]:
-        request_key = _request_key(request)
-        route = self._route_cache.get(request_key) or heuristic_route(request.message)
         results, accumulated_assumptions = await self._sql_stage.run_sql(
             message=request.message,
-            route=route,
-            plan=plan,
+            route=context.route,
+            plan=context.plan,
             history=history,
             conversation_id=str(request.sessionId or "anonymous"),
             progress_callback=progress_callback,
         )
-        self._assumption_cache[request_key] = accumulated_assumptions
+        context.sql_assumptions = accumulated_assumptions
         return results
 
     async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult:
@@ -154,36 +178,32 @@ class RealDependencies:
     async def build_response(
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse:
-        request_key = _request_key(request)
-        route = self._route_cache.get(request_key) or heuristic_route(request.message)
-        try:
-            return await self._synthesis_stage.build_response(
-                message=request.message,
-                route=route,
-                results=results,
-                prior_assumptions=self._assumption_cache.get(request_key, []),
-                history=history,
-            )
-        finally:
-            self._route_cache.pop(request_key, None)
-            self._assumption_cache.pop(request_key, None)
+        return await self._synthesis_stage.build_response(
+            message=request.message,
+            route=context.route,
+            plan=context.plan,
+            results=results,
+            prior_assumptions=context.sql_assumptions,
+            history=history,
+        )
 
     async def build_fast_response(
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse:
-        request_key = _request_key(request)
-        route = self._route_cache.get(request_key) or heuristic_route(request.message)
         return await self._synthesis_stage.build_fast_response(
             message=request.message,
-            route=route,
+            route=context.route,
+            plan=context.plan,
             results=results,
-            prior_assumptions=self._assumption_cache.get(request_key, []),
+            prior_assumptions=context.sql_assumptions,
             history=history,
         )
 

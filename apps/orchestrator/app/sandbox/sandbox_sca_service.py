@@ -12,6 +12,7 @@ from app.providers.anthropic_llm import chat_completion as anthropic_chat_comple
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 from app.services.llm_json import as_string_list, parse_json_object
 from app.services.semantic_model import SemanticModel, load_semantic_model, semantic_model_summary
+from app.services.semantic_model_yaml import load_semantic_model_yaml, semantic_model_yaml_prompt_context
 from app.services.sql_guardrails import guard_sql
 
 
@@ -33,13 +34,15 @@ class MessageRequest(BaseModel):
 
 _CONVERSATION_MEMORY: dict[str, list[str]] = {}
 _SEMANTIC_MODEL: SemanticModel | None = None
+_SEMANTIC_YAML_CONTEXT: str | None = None
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    global _SEMANTIC_MODEL
+    global _SEMANTIC_MODEL, _SEMANTIC_YAML_CONTEXT
     ensure_sandbox_database(settings.sandbox_sqlite_path, reset=settings.sandbox_seed_reset)
     _SEMANTIC_MODEL = load_semantic_model()
+    _SEMANTIC_YAML_CONTEXT = semantic_model_yaml_prompt_context(load_semantic_model_yaml())
     yield
 
 
@@ -59,6 +62,12 @@ def _model() -> SemanticModel:
     if _SEMANTIC_MODEL is None:
         return load_semantic_model()
     return _SEMANTIC_MODEL
+
+
+def _semantic_yaml_context() -> str:
+    if _SEMANTIC_YAML_CONTEXT:
+        return _SEMANTIC_YAML_CONTEXT
+    return semantic_model_yaml_prompt_context(load_semantic_model_yaml())
 
 
 def _conversation_history(conversation_id: str, incoming_history: list[str]) -> list[str]:
@@ -119,32 +128,29 @@ def _needs_clarification(message: str) -> bool:
     return any(marker in lowered for marker in vague_markers)
 
 
-def _default_sql() -> str:
-    return (
-        "SELECT transaction_state, "
-        "SUM(spend) AS spend_total, "
-        "SUM(transactions) AS transaction_total "
-        "FROM cia_sales_insights_cortex "
-        "GROUP BY transaction_state "
-        "ORDER BY spend_total DESC "
-        "LIMIT 25"
-    )
+_MAX_SQL_ATTEMPTS = 2
 
 
-async def _generate_sql_from_message(message: str, conversation_history: list[str]) -> tuple[str, str, list[str]]:
+async def _generate_sql_from_message(message: str, conversation_history: list[str]) -> dict[str, Any]:
     model = _model()
     system_prompt = (
-        "You are a sandbox Cortex Analyst SQL engine for banking analytics. "
-        "Generate one Snowflake-style read-only SQL query from the user request and conversation context. "
+        "You are a sandbox Snowflake Cortex Analyst emulator for banking analytics. "
+        "For each request, return exactly one outcome: sql_ready, clarification, or not_relevant. "
+        "Use semantic_model.yaml context to determine scope. "
+        "When sql_ready, generate one Snowflake-style read-only SQL query from conversation context. "
         "Return strict JSON only."
     )
     user_prompt = (
+        f"{_semantic_yaml_context()}\n\n"
         f"{semantic_model_summary(model)}\n\n"
         f"Conversation history:\n{_history_text(conversation_history)}\n\n"
         f"User question:\n{message}\n\n"
         "Return JSON with keys:\n"
-        '- "sql": string\n'
+        '- "type": one of sql_ready|clarification|not_relevant\n'
+        '- "sql": string (required when type=sql_ready)\n'
         '- "lightResponse": short one-sentence summary\n'
+        '- "clarificationQuestion": string (required when type=clarification)\n'
+        '- "notRelevantReason": string (required when type=not_relevant)\n'
         '- "assumptions": array of strings\n'
     )
 
@@ -156,12 +162,31 @@ async def _generate_sql_from_message(message: str, conversation_history: list[st
         response_json=True,
     )
     payload = parse_json_object(llm_text)
+    response_type = str(payload.get("type", "sql_ready")).strip().lower().replace("-", "_")
+    if response_type not in {"sql_ready", "clarification", "not_relevant"}:
+        response_type = "sql_ready"
+
     sql = str(payload.get("sql", "")).strip()
-    if not sql:
-        raise RuntimeError("LLM response did not include SQL.")
     light_response = str(payload.get("lightResponse", "")).strip()
+    clarification_question = str(payload.get("clarificationQuestion", "")).strip()
+    not_relevant_reason = str(payload.get("notRelevantReason", "")).strip()
     assumptions = as_string_list(payload.get("assumptions"), max_items=4)
-    return sql, light_response, assumptions
+
+    if response_type == "sql_ready" and not sql:
+        response_type = "clarification"
+        clarification_question = (
+            clarification_question
+            or "Could you clarify the metric, grain, and time window so I can generate the right SQL?"
+        )
+
+    return {
+        "type": response_type,
+        "sql": sql,
+        "lightResponse": light_response,
+        "clarificationQuestion": clarification_question,
+        "notRelevantReason": not_relevant_reason,
+        "assumptions": assumptions,
+    }
 
 
 def _execute_guarded_sql(sql: str) -> tuple[str, list[dict[str, Any]]]:
@@ -210,42 +235,86 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
     clarification_question = ""
     assumptions: list[str] = []
 
-    sql_text = _default_sql()
-    light_response = "Returned a high-level state summary for spend and transactions."
-    response_type = "answer"
+    guarded_sql = ""
+    rows: list[dict[str, Any]] = []
+    sql_text = ""
+    light_response = "Returned a governed summary for the requested customer-insights metric."
+    response_type = "sql_ready"
+    not_relevant_reason = ""
 
     if _needs_clarification(user_message):
         response_type = "clarification"
         clarification_question = (
             "Could you clarify the metric and time window? For example: spend vs transactions, and which month/quarter."
         )
-        assumptions.append("Question was interpreted as broad; returning default state-level summary.")
+        assumptions.append("Question was interpreted as broad; clarification is required before SQL generation.")
     else:
-        try:
-            sql_text, generated_summary, generated_assumptions = await _generate_sql_from_message(
-                user_message,
-                conversation_history,
-            )
-            light_response = generated_summary or light_response
-            assumptions.extend(generated_assumptions)
-        except Exception as error:  # noqa: BLE001
-            assumptions.append(f"Anthropic SQL generation fallback used: {error}")
+        generation_history = list(conversation_history)
+        for attempt in range(1, _MAX_SQL_ATTEMPTS + 1):
+            try:
+                generated = await _generate_sql_from_message(user_message, generation_history)
+            except Exception as error:  # noqa: BLE001
+                assumptions.append(f"SQL generation attempt {attempt} failed: {error}")
+                if attempt >= _MAX_SQL_ATTEMPTS:
+                    response_type = "clarification"
+                    clarification_question = (
+                        "I couldn't generate valid SQL for that task. Please restate the metric, grain, and time window."
+                    )
+                    break
+                generation_history = [*conversation_history, f"Previous generation error: {error}"]
+                continue
 
-    try:
-        guarded_sql, rows = _execute_guarded_sql(sql_text)
-    except Exception as error:  # noqa: BLE001
-        if sql_text != _default_sql():
-            assumptions.append(f"SQL execution fallback used: {error}")
-            guarded_sql, rows = _execute_guarded_sql(_default_sql())
-        else:
-            raise HTTPException(status_code=400, detail=f"Sandbox analyst execution failed: {error}") from error
+            response_type = str(generated.get("type", "sql_ready"))
+            sql_text = str(generated.get("sql", "")).strip()
+            light_response = str(generated.get("lightResponse", "")).strip() or light_response
+            clarification_question = str(generated.get("clarificationQuestion", "")).strip()
+            not_relevant_reason = str(generated.get("notRelevantReason", "")).strip()
+            assumptions.extend(as_string_list(generated.get("assumptions"), max_items=4))
+
+            if response_type != "sql_ready":
+                break
+            if not sql_text:
+                response_type = "clarification"
+                clarification_question = (
+                    clarification_question
+                    or "I need a clearer metric, grain, and time window before generating SQL."
+                )
+                break
+
+            try:
+                guarded_sql, rows = _execute_guarded_sql(sql_text)
+                break
+            except Exception as error:  # noqa: BLE001
+                assumptions.append(f"SQL execution attempt {attempt} failed: {error}")
+                if attempt >= _MAX_SQL_ATTEMPTS:
+                    response_type = "clarification"
+                    clarification_question = (
+                        "I couldn't execute a valid query for that task. Please restate the metric, grain, and time window."
+                    )
+                    sql_text = ""
+                    break
+                generation_history = [
+                    *conversation_history,
+                    f"Previous SQL failed to execute: {error}",
+                    f"Previous SQL:\n{sql_text}",
+                ]
+
+    if response_type == "sql_ready":
+        if not guarded_sql:
+            if not sql_text:
+                raise HTTPException(status_code=400, detail="Sandbox analyst did not return executable SQL.")
+            try:
+                guarded_sql, rows = _execute_guarded_sql(sql_text)
+            except Exception as error:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"Sandbox analyst execution failed: {error}") from error
 
     return {
-        "type": response_type,
+        "type": "answer" if response_type == "sql_ready" else response_type,
         "conversationId": payload.conversationId,
         "sql": guarded_sql,
         "lightResponse": light_response,
         "clarificationQuestion": clarification_question,
+        "notRelevantReason": not_relevant_reason,
         "rows": rows,
         "rowCount": len(rows),
         "assumptions": assumptions[:6],
@@ -262,4 +331,4 @@ async def history(conversation_id: str, authorization: Optional[str] = Header(de
 
 
 if __name__ == "__main__":
-    uvicorn.run("app.sandbox.cortex_service:app", host="0.0.0.0", port=8788, reload=False)
+    uvicorn.run("app.sandbox.sandbox_sca_service:app", host="0.0.0.0", port=8788, reload=False)

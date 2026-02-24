@@ -283,6 +283,7 @@ It evaluates token hits, numeric assertions, expected route, and route-specific 
 
 - `/Users/joe/Code/ci_analyst/docs/conversational-analytics-master-plan.md`
 - `/Users/joe/Code/ci_analyst/docs/implementation-blueprint.md`
+- `/Users/joe/Code/ci_analyst/docs/backend-deep-dive.md`
 - `/Users/joe/Code/ci_analyst/docs/api-contracts.md`
 - `/Users/joe/Code/ci_analyst/docs/prompts-and-policies.md`
 - `/Users/joe/Code/ci_analyst/docs/evaluation-and-tests.md`

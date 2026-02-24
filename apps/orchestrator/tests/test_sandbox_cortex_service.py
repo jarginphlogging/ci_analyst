@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.sandbox.cortex_service import app
+from app.sandbox.sandbox_sca_service import app
 
 
 def test_sandbox_cortex_query_endpoint(tmp_path: Path) -> None:
@@ -62,9 +62,10 @@ def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> Non
         )
         assert answer_response.status_code == 200
         answer_payload = answer_response.json()
-        assert answer_payload["type"] == "answer"
-        assert answer_payload["sql"]
-        assert isinstance(answer_payload["rows"], list)
+        assert answer_payload["type"] == "clarification"
+        assert answer_payload["clarificationQuestion"]
+        assert answer_payload["sql"] == ""
+        assert answer_payload["rowCount"] == 0
 
         history_response = client.get(
             "/api/v2/cortex/analyst/history/conv-1",
@@ -73,6 +74,39 @@ def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> Non
         assert history_response.status_code == 200
         history_payload = history_response.json()
         assert len(history_payload["history"]) >= 2
+    finally:
+        object.__setattr__(settings, "sandbox_sqlite_path", original_path)
+        object.__setattr__(settings, "sandbox_cortex_api_key", original_key)
+        object.__setattr__(settings, "anthropic_api_key", original_anthropic_key)
+
+
+def test_sandbox_cortex_message_total_sales_last_month_returns_clarification_when_generation_unavailable(tmp_path: Path) -> None:
+    db_path = str(tmp_path / "cortex_sandbox.db")
+
+    original_path = settings.sandbox_sqlite_path
+    original_key = settings.sandbox_cortex_api_key
+    original_anthropic_key = settings.anthropic_api_key
+    try:
+        object.__setattr__(settings, "sandbox_sqlite_path", db_path)
+        object.__setattr__(settings, "sandbox_cortex_api_key", "test-key")
+        object.__setattr__(settings, "anthropic_api_key", None)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v2/cortex/analyst/message",
+            headers={"Authorization": "Bearer test-key"},
+            json={
+                "conversationId": "conv-total-month",
+                "message": "Calculate the total sales for last month. Return the aggregate sales amount for the complete prior calendar month.",
+            },
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["type"] == "clarification"
+        assert payload["clarificationQuestion"]
+        assert payload["sql"] == ""
+        assert payload["rowCount"] == 0
     finally:
         object.__setattr__(settings, "sandbox_sqlite_path", original_path)
         object.__setattr__(settings, "sandbox_cortex_api_key", original_key)

@@ -236,6 +236,7 @@ function storeRows(): Array<Record<string, string | number>> {
 }
 
 function buildTrace(query: string, sql: string): TraceStep[] {
+  const queryPreview = query.trim().slice(0, 160);
   return [
     {
       id: "t1",
@@ -243,6 +244,14 @@ function buildTrace(query: string, sql: string): TraceStep[] {
       summary: `Mapped request to semantic model entities and resolved latest RESP_DATE context for "${query.slice(0, 100)}".`,
       status: "done",
       qualityChecks: ["Date context resolved", "Semantic model entities matched"],
+      stageInput: {
+        message: queryPreview,
+        historyDepth: 0,
+      },
+      stageOutput: {
+        route: "standard",
+        domainScope: "customer_insights",
+      },
     },
     {
       id: "t2",
@@ -251,6 +260,14 @@ function buildTrace(query: string, sql: string): TraceStep[] {
       status: "done",
       sql,
       qualityChecks: ["Allowlist guard passed", "Read-only SQL guard passed"],
+      stageInput: {
+        route: "standard",
+        planStepIds: ["step_1"],
+      },
+      stageOutput: {
+        queryCount: 1,
+        sqlPreview: sql.slice(0, 220),
+      },
     },
     {
       id: "t3",
@@ -258,6 +275,13 @@ function buildTrace(query: string, sql: string): TraceStep[] {
       summary: "Reconciled aggregates and prioritized findings by impact and decision relevance.",
       status: "done",
       qualityChecks: ["Totals reconcile", "No restricted columns accessed"],
+      stageInput: {
+        queryCount: 1,
+      },
+      stageOutput: {
+        passed: true,
+        confidence: "high",
+      },
     },
   ];
 }

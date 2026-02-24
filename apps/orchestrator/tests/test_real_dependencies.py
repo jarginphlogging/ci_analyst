@@ -7,25 +7,26 @@ import pytest
 from app.models import ChatTurnRequest
 from app.services.dependencies import RealDependencies
 from app.services.semantic_model import load_semantic_model
+from app.services.stages import PlannerBlockedError, SqlGenerationBlockedError
 
 
 async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
     system_prompt = kwargs.get("system_prompt", "")
 
-    if "routing model" in system_prompt:
-        return '{"route":"deep_path","reason":"multi-step decomposition requested"}'
-
-    if "deterministic analytics plans" in system_prompt:
+    if "Customer Insights analytics" in system_prompt and "Return strict JSON only." in system_prompt:
         return (
-            '{"steps":['
-            '{"goal":"Retrieve spend and transactions trend by state","primaryMetric":"spend","grain":"transaction_state","timeWindow":"last quarter"},'
-            '{"goal":"Decompose by card-present versus card-not-present channel","primaryMetric":"spend","grain":"channel","timeWindow":"last quarter"}'
-            "]}")
+            '{"relevance":"in_domain","relevanceReason":"Customer insights metrics and segments were requested.","tooComplex":false,'
+            '"tasks":['
+            '{"task":"Retrieve spend and transactions trend by state for the requested time window."},'
+            '{"task":"Decompose results by card-present versus card-not-present channel for the same window."}'
+            "]}"
+        )
 
     if "SQL generator" in system_prompt:
         return (
-            '{"sql":"SELECT region AS segment, 0.82 AS prior, 1.26 AS current, 44 AS changeBps, 0.61 AS contribution '
-            'FROM cia_sales_insights_cortex LIMIT 50",'
+            '{"generationType":"sql_ready",'
+            '"sql":"SELECT transaction_state, SUM(spend) AS current_value, SUM(transactions) AS prior_value '
+            'FROM cia_sales_insights_cortex GROUP BY transaction_state LIMIT 50",'
             '"assumptions":["latest settled quarter used"]}'
         )
 
@@ -49,6 +50,10 @@ async def fake_sql(_: str) -> list[dict[str, float | str]]:
     ]
 
 
+async def failing_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+    raise RuntimeError("analyst unavailable")
+
+
 async def failing_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
     raise RuntimeError("llm unavailable")
 
@@ -56,16 +61,15 @@ async def failing_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
 @pytest.mark.asyncio
 async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     request = ChatTurnRequest(sessionId=uuid4(), message="What were my sales by state and how did channel mix change?")
-    deps = RealDependencies(llm_fn=fake_llm, sql_fn=fake_sql, model=load_semantic_model())
+    deps = RealDependencies(llm_fn=fake_llm, sql_fn=fake_sql, analyst_fn=failing_analyst, model=load_semantic_model())
 
-    route = await deps.classify_route(request, [])
-    plan = await deps.create_plan(request, [])
-    results = await deps.run_sql(request, plan, [])
+    context = await deps.create_plan(request, [])
+    results = await deps.run_sql(request, context, [])
     validation = await deps.validate_results(results)
-    response = await deps.build_response(request, results, [])
+    response = await deps.build_response(request, context, results, [])
 
-    assert route == "deep_path"
-    assert len(plan) >= 1
+    assert context.route == "standard"
+    assert len(context.plan) >= 1
     assert validation.passed
     assert response.answer
     assert response.dataTables
@@ -74,19 +78,45 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
 
 
 @pytest.mark.asyncio
-async def test_real_dependencies_pipeline_fallbacks_without_llm() -> None:
+async def test_real_dependencies_requires_sql_generation_provider_when_analyst_is_unavailable() -> None:
     request = ChatTurnRequest(sessionId=uuid4(), message="Show transaction trends by state")
-    deps = RealDependencies(llm_fn=failing_llm, sql_fn=fake_sql, model=load_semantic_model())
+    deps = RealDependencies(
+        llm_fn=failing_llm,
+        sql_fn=fake_sql,
+        analyst_fn=failing_analyst,
+        model=load_semantic_model(),
+    )
 
-    route = await deps.classify_route(request, [])
-    plan = await deps.create_plan(request, [])
-    results = await deps.run_sql(request, plan, [])
-    validation = await deps.validate_results(results)
-    response = await deps.build_response(request, results, [])
+    context = await deps.create_plan(request, [])
+    with pytest.raises(SqlGenerationBlockedError) as blocked:
+        await deps.run_sql(request, context, [])
 
-    assert route in {"fast_path", "deep_path"}
-    assert len(plan) >= 1
-    assert len(results) >= 1
-    assert validation.passed
-    assert response.answer
-    assert response.insights
+    assert context.route == "standard"
+    assert len(context.plan) >= 1
+    assert blocked.value.stop_reason == "clarification"
+
+
+@pytest.mark.asyncio
+async def test_real_dependencies_blocks_out_of_domain_request() -> None:
+    async def out_of_domain_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
+        system_prompt = kwargs.get("system_prompt", "")
+        if "Customer Insights analytics" in system_prompt and "Return strict JSON only." in system_prompt:
+            return (
+                '{"relevance":"out_of_domain","relevanceReason":"No semantic model entities are relevant.",'
+                '"tooComplex":false,"tasks":[]}'
+            )
+        return "{}"
+
+    request = ChatTurnRequest(sessionId=uuid4(), message="What is the weather today?")
+    deps = RealDependencies(
+        llm_fn=out_of_domain_llm,
+        sql_fn=fake_sql,
+        analyst_fn=failing_analyst,
+        model=load_semantic_model(),
+    )
+
+    with pytest.raises(PlannerBlockedError) as blocked:
+        await deps.create_plan(request, [])
+
+    assert blocked.value.stop_reason == "out_of_domain"
+    assert "Customer Insights" in blocked.value.user_message

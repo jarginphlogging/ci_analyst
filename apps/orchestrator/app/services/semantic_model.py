@@ -136,3 +136,86 @@ def semantic_model_summary(model: SemanticModel) -> str:
         f"- Max row limit: {model.policy.max_row_limit}"
     )
 
+
+def _short_text(text: str, *, max_chars: int = 140) -> str:
+    collapsed = " ".join(text.split())
+    if len(collapsed) <= max_chars:
+        return collapsed
+    return f"{collapsed[: max_chars - 3]}..."
+
+
+def _collect_business_concepts(model: SemanticModel, *, max_concepts: int = 14) -> list[str]:
+    sources: list[str] = [model.description]
+    for table in model.tables:
+        sources.append(table.description)
+        sources.extend(item.replace("_", " ") for item in table.dimensions)
+        sources.extend(item.replace("_", " ") for item in table.metrics)
+    corpus = " ".join(sources).lower()
+
+    concepts: list[str] = []
+    if "spend" in corpus:
+        concepts.append("spend")
+    if "transaction" in corpus:
+        concepts.append("transactions")
+    if "channel" in corpus:
+        concepts.append("channel mix")
+    if "repeat" in corpus or "new " in corpus or "new_" in corpus:
+        concepts.append("repeat vs new behavior")
+    if any(token in corpus for token in ["state", "city", "location", "store"]):
+        concepts.append("geographic breakdowns")
+    if "household" in corpus:
+        concepts.append("household/store relationships")
+    if "consumer" in corpus or "commercial" in corpus:
+        concepts.append("consumer vs commercial mix")
+    if any(token in corpus for token in ["cnp", "card not present", "card-not-present", "cp_spend", "cp_transactions"]):
+        concepts.append("card-present vs card-not-present mix")
+    if "mcc" in corpus or "merchant category" in corpus:
+        concepts.append("merchant category behavior")
+
+    if not concepts:
+        concepts = ["spend", "transactions", "channel mix"]
+    return concepts[:max_concepts]
+
+
+def _collect_time_semantics(model: SemanticModel) -> list[str]:
+    found: set[str] = set()
+    for table in model.tables:
+        for field in [*table.dimensions, *table.metrics]:
+            lowered = field.lower()
+            if "date" in lowered:
+                found.add("date")
+                found.update({"day", "week", "month", "quarter", "year"})
+            if "time" in lowered:
+                found.add("time")
+            if "day" in lowered:
+                found.add("day")
+            if "week" in lowered:
+                found.add("week")
+            if "month" in lowered:
+                found.add("month")
+            if "quarter" in lowered:
+                found.add("quarter")
+            if "year" in lowered:
+                found.add("year")
+    ordered = ["date", "time", "day", "week", "month", "quarter", "year"]
+    return [token for token in ordered if token in found]
+
+
+def semantic_model_planner_context(
+    model: SemanticModel,
+    *,
+    max_concepts: int = 14,
+) -> str:
+    concepts = _collect_business_concepts(model, max_concepts=max_concepts)
+    time_semantics = _collect_time_semantics(model)
+    concept_text = ", ".join(concepts) if concepts else "none"
+    time_text = ", ".join(time_semantics) if time_semantics else "none"
+    return (
+        "Planning scope (minimum context):\n"
+        f"- Domain: {_short_text(model.description, max_chars=180)}\n"
+        "- Planner responsibility: decide relevance and delegate the minimum independent task set to specialist sub-analysts.\n"
+        f"- In-domain business concepts: {concept_text}\n"
+        f"- Time semantics: {time_text}\n"
+        "- Keep planner tasks free of physical schema details (no table or column names).\n"
+        "- Mark as out_of_domain only when the request is clearly unrelated to this business scope."
+    )

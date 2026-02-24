@@ -764,21 +764,3 @@ def build_metric_points(results: list[SqlExecutionResult], evidence: list[Eviden
 
     return metrics[:3]
 
-
-def summarize_results_for_prompt(results: list[SqlExecutionResult], max_rows: int = 5) -> str:
-    if not results:
-        return "No SQL results were returned."
-
-    chunks: list[str] = []
-    for index, result in enumerate(results, start=1):
-        columns = list(result.rows[0].keys()) if result.rows else []
-        column_text = ", ".join(columns) if columns else "none"
-        sample = result.rows[:max_rows]
-        chunks.append(
-            f"Step {index}:\n"
-            f"- SQL: {result.sql}\n"
-            f"- Row count: {result.rowCount}\n"
-            f"- Columns: {column_text}\n"
-            f"- Sample rows: {sample}"
-        )
-    return "\n\n".join(chunks)

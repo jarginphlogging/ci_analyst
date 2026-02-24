@@ -16,34 +16,34 @@ from app.models import (
     ValidationResult,
 )
 from app.services.orchestrator import ConversationalOrchestrator
+from app.services.types import TurnExecutionContext
 
 
 class HistorySpyDependencies:
     def __init__(self) -> None:
-        self.classify_histories: list[list[str]] = []
         self.plan_histories: list[list[str]] = []
         self.sql_histories: list[list[str]] = []
         self.response_histories: list[list[str]] = []
-
-    async def classify_route(self, request: ChatTurnRequest, history: list[str]) -> str:  # noqa: ARG002
-        self.classify_histories.append(list(history))
-        return "fast_path"
 
     async def create_plan(  # noqa: ARG002
         self,
         request: ChatTurnRequest,
         history: list[str],
-    ) -> list[QueryPlanStep]:
+    ) -> TurnExecutionContext:
         self.plan_histories.append(list(history))
-        return [QueryPlanStep(id="step_1", goal="Retrieve primary KPI")]
+        return TurnExecutionContext(
+            route="fast_path",
+            plan=[QueryPlanStep(id="step_1", goal="Retrieve primary KPI")],
+        )
 
     async def run_sql(  # noqa: ARG002
         self,
         request: ChatTurnRequest,
-        plan: list[QueryPlanStep],
+        context: TurnExecutionContext,
         history: list[str],
         progress_callback=None,
     ) -> list[SqlExecutionResult]:
+        _ = context
         self.sql_histories.append(list(history))
         return [
             SqlExecutionResult(
@@ -67,9 +67,11 @@ class HistorySpyDependencies:
     async def build_response(  # noqa: ARG002
         self,
         request: ChatTurnRequest,
+        context: TurnExecutionContext,
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse:
+        _ = context
         self.response_histories.append(list(history))
         return AgentResponse(
             answer="Answer",
@@ -99,6 +101,15 @@ class HistorySpyDependencies:
             ],
         )
 
+    async def build_fast_response(  # noqa: ARG002
+        self,
+        request: ChatTurnRequest,
+        context: TurnExecutionContext,
+        results: list[SqlExecutionResult],
+        history: list[str],
+    ) -> AgentResponse:
+        return await self.build_response(request, context, results, history)
+
 
 @pytest.mark.asyncio
 async def test_orchestrator_carries_prior_history_only() -> None:
@@ -112,13 +123,11 @@ async def test_orchestrator_carries_prior_history_only() -> None:
     await orchestrator.run_turn(first)
     second_turn = await orchestrator.run_turn(second)
 
-    assert dependencies.classify_histories[0] == []
     assert dependencies.plan_histories[0] == []
     assert dependencies.sql_histories[0] == []
     assert dependencies.response_histories[0] == []
 
     expected_history = ["Show sales by state"]
-    assert dependencies.classify_histories[1] == expected_history
     assert dependencies.plan_histories[1] == expected_history
     assert dependencies.sql_histories[1] == expected_history
     assert dependencies.response_histories[1] == expected_history
