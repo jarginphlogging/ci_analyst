@@ -131,6 +131,7 @@ Execution behavior:
 
 Concurrency controls:
 - `REAL_MAX_PARALLEL_QUERIES=3`
+- `SQL_MAX_ATTEMPTS=3` (max SQL rewrite/execute attempts before surfacing clarification)
 
 ## Mode Selection
 

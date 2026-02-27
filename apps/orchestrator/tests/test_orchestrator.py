@@ -102,6 +102,30 @@ class DeterministicDependencies:
         return response.model_copy(update={"answer": "Draft answer"})
 
 
+class RetryFeedbackDependencies(DeterministicDependencies):
+    async def run_sql(  # noqa: ARG002
+        self,
+        request: ChatTurnRequest,
+        context: TurnExecutionContext,
+        history: list[str],
+        progress_callback=None,
+    ) -> list[SqlExecutionResult]:
+        _ = request
+        _ = history
+        _ = progress_callback
+        context.sql_assumptions = ["SQL execution retry 1 failed for step_1: invalid identifier BOGUS_COL"]
+        context.sql_retry_feedback = [
+            {
+                "phase": "sql_execution",
+                "stepId": "step_1",
+                "attempt": 1,
+                "error": "invalid identifier BOGUS_COL",
+                "failedSql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex WHERE bogus_col = 1",
+            }
+        ]
+        return await super().run_sql(request, context, history, progress_callback)
+
+
 @pytest.mark.asyncio
 async def test_run_turn_returns_payload() -> None:
     orchestrator = ConversationalOrchestrator(DeterministicDependencies())
@@ -129,3 +153,22 @@ async def test_run_stream_returns_done_event() -> None:
     assert stream_result.events[-1]["type"] == "done"
     assert any(event["type"] == "answer_delta" for event in stream_result.events)
     assert any(event["type"] == "response" for event in stream_result.events)
+
+
+@pytest.mark.asyncio
+async def test_trace_exposes_retry_feedback_and_warehouse_errors() -> None:
+    orchestrator = ConversationalOrchestrator(RetryFeedbackDependencies())
+    result = await orchestrator.run_turn(
+        ChatTurnRequest(sessionId=uuid4(), message="What changed in charge-off risk this quarter?")
+    )
+
+    sql_trace = result.response.trace[1]
+    assert sql_trace.id == "t2"
+    assert sql_trace.stageOutput is not None
+    retry_feedback = sql_trace.stageOutput.get("retryFeedback")
+    warehouse_errors = sql_trace.stageOutput.get("warehouseErrors")
+    assert isinstance(retry_feedback, list)
+    assert isinstance(warehouse_errors, list)
+    assert retry_feedback
+    assert warehouse_errors
+    assert "invalid identifier BOGUS_COL" in str(warehouse_errors[0].get("error", ""))

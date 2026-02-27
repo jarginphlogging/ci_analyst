@@ -64,6 +64,7 @@ class ClarificationDependencies:
         raise SqlGenerationBlockedError(
             stop_reason="clarification",
             user_message="Which metric and time window should I use?",
+            detail={"failedSql": "SELECT SUM(spend) AS total_sales FROM bad_schema.bad_table"},
         )
 
     async def validate_results(self, results):  # noqa: ARG002
@@ -197,13 +198,35 @@ async def test_run_turn_returns_clarification_when_sql_generation_blocks() -> No
         ChatTurnRequest(sessionId=uuid4(), message="Show me details")
     )
 
-    assert result.response.answer == GENERIC_FAILURE
-    assert result.response.trace[0].status == "blocked"
-    assert result.response.trace[0].stageOutput is not None
+    assert result.response.answer == "Which metric and time window should I use?"
+    assert len(result.response.trace) == 2
+    assert result.response.trace[0].id == "t1"
+    assert result.response.trace[0].status == "done"
+    assert result.response.trace[1].id == "t2"
+    assert result.response.trace[1].status == "blocked"
+    assert result.response.trace[1].stageOutput is not None
+    assert "bad_schema.bad_table" in str(result.response.trace[1].stageOutput.get("failedSql", ""))
     assert result.response.dataTables == []
     assert result.response.insights == []
     assert result.response.suggestedQuestions == []
     assert result.response.assumptions == []
+
+
+@pytest.mark.asyncio
+async def test_run_stream_includes_planner_and_sql_trace_when_sql_generation_blocks() -> None:
+    orchestrator = ConversationalOrchestrator(ClarificationDependencies())
+    stream_result = await orchestrator.run_stream(
+        ChatTurnRequest(sessionId=uuid4(), message="Show me details")
+    )
+
+    response_events = [event for event in stream_result.events if event.get("type") == "response"]
+    assert response_events
+    payload = response_events[-1]["response"]
+    assert payload["answer"] == "Which metric and time window should I use?"
+    assert [step["id"] for step in payload["trace"]] == ["t1", "t2"]
+    assert payload["trace"][0]["status"] == "done"
+    assert payload["trace"][1]["status"] == "blocked"
+    assert "bad_schema.bad_table" in str(payload["trace"][1]["stageOutput"].get("failedSql", ""))
 
 
 @pytest.mark.asyncio
@@ -213,11 +236,14 @@ async def test_run_turn_returns_trace_when_sql_runtime_fails_unexpectedly() -> N
         ChatTurnRequest(sessionId=uuid4(), message="what were my total sales for last month")
     )
 
-    assert result.response.answer == GENERIC_FAILURE
-    assert result.response.trace[0].id == "t2"
-    assert result.response.trace[0].status == "blocked"
-    assert result.response.trace[0].stageOutput is not None
-    failure = result.response.trace[0].stageOutput.get("failureDetail", {})
+    assert "failed unexpectedly" in result.response.answer
+    assert len(result.response.trace) == 2
+    assert result.response.trace[0].id == "t1"
+    assert result.response.trace[0].status == "done"
+    assert result.response.trace[1].id == "t2"
+    assert result.response.trace[1].status == "blocked"
+    assert result.response.trace[1].stageOutput is not None
+    failure = result.response.trace[1].stageOutput.get("failureDetail", {})
     assert "DATE_TRUNC" in str(failure.get("error", ""))
 
 

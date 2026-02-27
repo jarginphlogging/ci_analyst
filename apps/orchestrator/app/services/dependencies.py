@@ -152,7 +152,12 @@ class RealDependencies:
                 stop_reason=decision.stop_reason,
                 user_message=decision.stop_message or "Unable to process request.",
             )
-        return TurnExecutionContext(route=EXECUTION_MODE, plan=decision.steps)
+        return TurnExecutionContext(
+            route=EXECUTION_MODE,
+            plan=decision.steps,
+            analysis_type=decision.analysis_type,
+            secondary_analysis_type=decision.secondary_analysis_type,
+        )
 
     async def run_sql(
         self,
@@ -161,16 +166,19 @@ class RealDependencies:
         history: list[str],
         progress_callback: ProgressCallback = None,
     ) -> list[SqlExecutionResult]:
-        results, accumulated_assumptions = await self._sql_stage.run_sql(
-            message=request.message,
-            route=context.route,
-            plan=context.plan,
-            history=history,
-            conversation_id=str(request.sessionId or "anonymous"),
-            progress_callback=progress_callback,
-        )
-        context.sql_assumptions = accumulated_assumptions
-        return results
+        try:
+            results, accumulated_assumptions = await self._sql_stage.run_sql(
+                message=request.message,
+                route=context.route,
+                plan=context.plan,
+                history=history,
+                conversation_id=str(request.sessionId or "anonymous"),
+                progress_callback=progress_callback,
+            )
+            context.sql_assumptions = accumulated_assumptions
+            return results
+        finally:
+            context.sql_retry_feedback = self._sql_stage.latest_retry_feedback
 
     async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult:
         return self._validation_stage.validate_results(results)
@@ -186,6 +194,8 @@ class RealDependencies:
             message=request.message,
             route=context.route,
             plan=context.plan,
+            analysis_type=context.analysis_type,
+            secondary_analysis_type=context.secondary_analysis_type,
             results=results,
             prior_assumptions=context.sql_assumptions,
             history=history,
@@ -202,6 +212,8 @@ class RealDependencies:
             message=request.message,
             route=context.route,
             plan=context.plan,
+            analysis_type=context.analysis_type,
+            secondary_analysis_type=context.secondary_analysis_type,
             results=results,
             prior_assumptions=context.sql_assumptions,
             history=history,

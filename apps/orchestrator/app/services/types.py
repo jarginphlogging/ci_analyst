@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, Optional, Protocol
+from typing import Any, Awaitable, Callable, Optional, Protocol
 
-from app.models import AgentResponse, ChatTurnRequest, QueryPlanStep, SqlExecutionResult, ValidationResult
+from app.models import AnalysisType, AgentResponse, ChatTurnRequest, QueryPlanStep, SqlExecutionResult, ValidationResult
 
 
 @dataclass
 class TurnExecutionContext:
     route: str
     plan: list[QueryPlanStep]
+    analysis_type: AnalysisType = "aggregation_summary_stats"
+    secondary_analysis_type: AnalysisType | None = None
     sql_assumptions: list[str] = field(default_factory=list)
+    sql_retry_feedback: list[dict[str, Any]] = field(default_factory=list)
 
 
 class OrchestratorDependencies(Protocol):

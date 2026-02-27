@@ -99,6 +99,7 @@ class Settings:
     real_fast_plan_steps: int = _as_int(os.getenv("REAL_FAST_PLAN_STEPS"), 2)
     real_deep_plan_steps: int = _as_int(os.getenv("REAL_DEEP_PLAN_STEPS"), 4)
     real_max_parallel_queries: int = _as_int(os.getenv("REAL_MAX_PARALLEL_QUERIES"), 3)
+    sql_max_attempts: int = max(1, _as_int(os.getenv("SQL_MAX_ATTEMPTS"), 3))
     real_llm_temperature: float = _as_float(os.getenv("REAL_LLM_TEMPERATURE"), 0.1)
     real_llm_max_tokens: int = _as_int(os.getenv("REAL_LLM_MAX_TOKENS"), 1400)
     mock_stream_status_delay_ms: int = _as_int(os.getenv("MOCK_STREAM_STATUS_DELAY_MS"), 700)

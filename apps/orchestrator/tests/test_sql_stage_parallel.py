@@ -132,6 +132,7 @@ async def test_sql_stage_raises_clarification_when_analyst_requests_it() -> None
         return {
             "type": "clarification",
             "clarificationQuestion": "Which metric and time window should I use?",
+            "failedSql": "SELECT SUM(spend) FROM bad_schema.bad_table",
             "assumptions": ["user intent is broad"],
         }
 
@@ -149,6 +150,55 @@ async def test_sql_stage_raises_clarification_when_analyst_requests_it() -> None
 
     assert blocked.value.stop_reason == "clarification"
     assert "Which metric and time window" in blocked.value.user_message
+    assert "bad_schema.bad_table" in str(blocked.value.detail.get("failedSql", ""))
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_retries_after_blocked_generation_with_failed_sql() -> None:
+    model = load_semantic_model()
+    analyst_calls = 0
+    analyst_retry_feedback: list[list[dict[str, object]]] = []
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        assert "cia_sales_insights_cortex" in sql.lower()
+        return [{"total_spend": 321.0}]
+
+    async def fake_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal analyst_calls
+        analyst_retry_feedback.append(list(kwargs.get("retry_feedback", []) or []))
+        analyst_calls += 1
+        if analyst_calls == 1:
+            return {
+                "type": "clarification",
+                "clarificationQuestion": "I couldn't execute a valid query for that task.",
+                "failedSql": "SELECT SUM(spend) FROM cia_sales_insights_cortex WHERE bogus_col = 1",
+                "assumptions": ["SQL execution attempt 1 failed: invalid identifier BOGUS_COL"],
+            }
+        return {
+            "type": "sql_ready",
+            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex",
+            "assumptions": [],
+        }
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=_fake_ask_llm_json, sql_fn=fake_sql, analyst_fn=fake_analyst)
+    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
+
+    results, assumptions = await stage.run_sql(
+        message="What is my total spend?",
+        route="standard",
+        plan=plan,
+        history=[],
+        conversation_id="conv-retry-blocked",
+    )
+
+    assert analyst_calls == 2
+    assert len(analyst_retry_feedback[0]) == 0
+    assert len(analyst_retry_feedback[1]) == 1
+    assert analyst_retry_feedback[1][0]["phase"] == "sql_generation_blocked"
+    assert "bogus_col" in str(analyst_retry_feedback[1][0]["failedSql"]).lower()
+    assert results
+    assert results[0].rows[0]["total_spend"] == 321.0
+    assert any("SQL generation retry 1 triggered for step-1 after blocked attempt." in item for item in assumptions)
 
 
 @pytest.mark.asyncio
@@ -331,10 +381,11 @@ async def test_sql_stage_retries_generation_after_execution_failure() -> None:
     model = load_semantic_model()
     llm_calls = 0
     sql_calls: list[str] = []
+    user_prompts: list[str] = []
 
     async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
         nonlocal llm_calls
-        _ = kwargs
+        user_prompts.append(str(kwargs.get("user_prompt", "")))
         llm_calls += 1
         if llm_calls == 1:
             return {
@@ -369,7 +420,99 @@ async def test_sql_stage_retries_generation_after_execution_failure() -> None:
     assert results
     assert results[0].rows[0]["total_spend"] == 123.45
     assert "bogus_col" not in results[0].sql.lower()
+    assert len(user_prompts) == 2
+    assert "Retry feedback from prior attempts" in user_prompts[1]
+    assert "invalid identifier BOGUS_COL" in user_prompts[1]
     assert any("SQL execution retry 1 failed" in item for item in assumptions)
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_execution_failure_does_not_request_user_clarification_before_exhausting_retries() -> None:
+    model = load_semantic_model()
+    llm_calls = 0
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal llm_calls
+        _ = kwargs
+        llm_calls += 1
+        if llm_calls == 1:
+            return {
+                "generationType": "sql_ready",
+                "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex WHERE bogus_col = 1",
+                "assumptions": [],
+            }
+        return {
+            "generationType": "clarification",
+            "clarificationQuestion": "Which metric and time window should I use?",
+            "assumptions": [],
+        }
+
+    async def fake_sql(_: str) -> list[dict[str, object]]:
+        raise RuntimeError("invalid identifier BOGUS_COL")
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
+
+    with pytest.raises(SqlGenerationBlockedError) as blocked:
+        await stage.run_sql(
+            message="What is my total spend?",
+            route="standard",
+            plan=plan,
+            history=[],
+        )
+
+    assert blocked.value.stop_reason == "technical_failure"
+    assert "review the trace" in blocked.value.user_message.lower()
+    assert blocked.value.detail.get("phase") == "sql_execution"
+    assert "invalid identifier" in str(blocked.value.detail.get("error", "")).lower()
+    assert llm_calls == 3
+    retry_feedback = blocked.value.detail.get("retryFeedback")
+    assert isinstance(retry_feedback, list)
+    assert any(str(item.get("phase", "")).startswith("sql_execution") for item in retry_feedback if isinstance(item, dict))
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_retries_when_sql_returns_all_null_rows() -> None:
+    model = load_semantic_model()
+    llm_calls = 0
+    sql_calls: list[str] = []
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal llm_calls
+        _ = kwargs
+        llm_calls += 1
+        if llm_calls == 1:
+            return {
+                "generationType": "sql_ready",
+                "sql": "SELECT SUM(spend) AS total_sales, MIN(resp_date) AS data_from FROM cia_sales_insights_cortex",
+                "assumptions": [],
+            }
+        return {
+            "generationType": "sql_ready",
+            "sql": "SELECT SUM(spend) AS total_sales, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex",
+            "assumptions": [],
+        }
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        sql_calls.append(sql)
+        if len(sql_calls) == 1:
+            return [{"total_sales": None, "data_from": None}]
+        return [{"total_sales": 123.45, "data_through": "2025-11-30"}]
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [QueryPlanStep(id="step-1", goal="Calculate total sales")]
+
+    results, assumptions = await stage.run_sql(
+        message="What is my total sales?",
+        route="standard",
+        plan=plan,
+        history=[],
+    )
+
+    assert llm_calls == 2
+    assert len(sql_calls) == 2
+    assert results[0].rows[0]["total_sales"] == 123.45
+    assert any("only null values" in item.lower() for item in assumptions)
 
 
 @pytest.mark.asyncio
@@ -391,3 +534,34 @@ async def test_sql_stage_blocks_execution_above_five_steps() -> None:
         )
 
     assert "too complex" in blocked.value.user_message.lower()
+
+
+@pytest.mark.asyncio
+async def test_sql_prompt_includes_deterministic_ordering_rules() -> None:
+    model = load_semantic_model()
+    captured_prompt = ""
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal captured_prompt
+        captured_prompt = str(kwargs.get("user_prompt", ""))
+        return {
+            "generationType": "sql_ready",
+            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex",
+            "assumptions": [],
+        }
+
+    async def fake_sql(_: str) -> list[dict[str, object]]:
+        return [{"total_spend": 1.0}]
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
+
+    await stage.run_sql(
+        message="What is my total spend?",
+        route="standard",
+        plan=plan,
+        history=[],
+    )
+
+    assert "For set operations (UNION/UNION ALL), ensure final ORDER BY uses projected output columns only." in captured_prompt
+    assert "Include deterministic tie-breakers in ORDER BY" in captured_prompt

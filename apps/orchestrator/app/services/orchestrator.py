@@ -88,10 +88,10 @@ class ConversationalOrchestrator:
             raise
         except Exception as error:  # noqa: BLE001
             blocked = SqlGenerationBlockedError(
-                stop_reason="clarification",
+                stop_reason="technical_failure",
                 user_message=(
                     "The SQL stage failed unexpectedly before a governed result was returned. "
-                    "Please retry, or restate the metric, grain, and time window."
+                    "Please review the trace and retry."
                 ),
                 detail={
                     "phase": "sql_execution",
@@ -124,6 +124,8 @@ class ConversationalOrchestrator:
 
     def _plan_summary(self, context: TurnExecutionContext) -> dict[str, Any]:
         return {
+            "analysisType": context.analysis_type,
+            "secondaryAnalysisType": context.secondary_analysis_type,
             "stepCount": len(context.plan),
             "steps": [
                 {
@@ -173,9 +175,13 @@ class ConversationalOrchestrator:
 
     def _response_summary(self, response: AgentResponse) -> dict[str, Any]:
         return {
+            "analysisType": response.analysisType,
+            "secondaryAnalysisType": response.secondaryAnalysisType,
             "confidence": response.confidence,
             "answerPreview": self._preview_text(response.answer, max_chars=260),
             "metricLabels": [metric.label for metric in response.metrics[:5]],
+            "summaryCardLabels": [card.label for card in response.summaryCards[:5]],
+            "primaryVisual": response.primaryVisual.model_dump() if response.primaryVisual else None,
             "insightTitles": [insight.title for insight in response.insights[:5]],
             "suggestedQuestions": response.suggestedQuestions[:3],
             "tableCount": len(response.dataTables),
@@ -210,6 +216,37 @@ class ConversationalOrchestrator:
             for entry in llm_entries
         ]
 
+    def _sql_retry_feedback(self, llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
+        collected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for entry in llm_entries:
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            raw_feedback = metadata.get("retryFeedback")
+            if not isinstance(raw_feedback, list):
+                continue
+            for item in raw_feedback:
+                if not isinstance(item, dict):
+                    continue
+                key = str(item)
+                if key in seen:
+                    continue
+                seen.add(key)
+                collected.append(item)
+        return collected[:6]
+
+    @staticmethod
+    def _warehouse_errors(retry_feedback: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        errors: list[dict[str, Any]] = []
+        for item in retry_feedback:
+            phase = str(item.get("phase", "")).strip().lower()
+            error = item.get("error")
+            if "sql_execution" not in phase and "sql_regeneration_blocked" not in phase:
+                continue
+            if not isinstance(error, str) or not error.strip():
+                continue
+            errors.append(item)
+        return errors[:6]
+
     def _build_trace(
         self,
         *,
@@ -229,6 +266,8 @@ class ConversationalOrchestrator:
         plan_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
         sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
         synthesis_llm_entries = self._llm_entries_for_stages(llm_entries, {"synthesis_final"}) if phase == "final" else []
+        sql_retry_feedback = context.sql_retry_feedback or self._sql_retry_feedback(sql_llm_entries)
+        warehouse_errors = self._warehouse_errors(sql_retry_feedback)
 
         return [
             TraceStep(
@@ -261,6 +300,8 @@ class ConversationalOrchestrator:
                 stageOutput={
                     **result_summary,
                     "executionNotes": context.sql_assumptions,
+                    "retryFeedback": sql_retry_feedback,
+                    "warehouseErrors": warehouse_errors,
                     "llmResponses": self._llm_response_payload(sql_llm_entries),
                 },
             ),
@@ -324,6 +365,31 @@ class ConversationalOrchestrator:
             },
         )
 
+    def _planner_completed_trace_step(
+        self,
+        *,
+        request: ChatTurnRequest,
+        prior_history: list[str],
+        context: TurnExecutionContext,
+        llm_entries: list[LlmTraceEntry],
+    ) -> TraceStep:
+        planner_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
+        return TraceStep(
+            id="t1",
+            title="Build plan",
+            summary="Generated ordered analysis plan under semantic-model policy guardrails.",
+            status="done",
+            stageInput={
+                "message": request.message,
+                **self._history_summary(prior_history),
+                "llmPrompts": self._llm_prompt_payload(planner_llm_entries),
+            },
+            stageOutput={
+                **self._plan_summary(context),
+                "llmResponses": self._llm_response_payload(planner_llm_entries),
+            },
+        )
+
     def _sql_generation_blocked_trace_step(
         self,
         *,
@@ -334,13 +400,38 @@ class ConversationalOrchestrator:
         llm_entries: list[LlmTraceEntry],
     ) -> TraceStep:
         sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
+        detail_retry_feedback = blocked.detail.get("retryFeedback") if blocked.detail else None
+        if isinstance(detail_retry_feedback, list):
+            retry_feedback = [item for item in detail_retry_feedback if isinstance(item, dict)]
+        else:
+            retry_feedback = context.sql_retry_feedback or self._sql_retry_feedback(sql_llm_entries)
         stage_output: dict[str, Any] = {
             "stopReason": blocked.stop_reason,
             "userMessage": blocked.user_message,
+            "retryFeedback": retry_feedback,
+            "warehouseErrors": self._warehouse_errors(retry_feedback),
             "llmResponses": self._llm_response_payload(sql_llm_entries),
         }
+        derived_failed_sql = ""
+        for entry in sql_llm_entries:
+            parsed = entry.parsed_response if isinstance(entry.parsed_response, dict) else None
+            if not parsed:
+                continue
+            candidate = parsed.get("failedSql")
+            if not candidate:
+                candidate = parsed.get("sql")
+            if isinstance(candidate, str) and candidate.strip():
+                derived_failed_sql = candidate
+                break
         if blocked.detail:
             stage_output["failureDetail"] = blocked.detail
+            failed_sql = blocked.detail.get("failedSql")
+            if isinstance(failed_sql, str) and failed_sql.strip():
+                stage_output["failedSql"] = failed_sql
+            elif derived_failed_sql:
+                stage_output["failedSql"] = derived_failed_sql
+        elif derived_failed_sql:
+            stage_output["failedSql"] = derived_failed_sql
         return TraceStep(
             id="t2",
             title="Generate and execute SQL",
@@ -354,6 +445,31 @@ class ConversationalOrchestrator:
             },
             stageOutput=stage_output,
         )
+
+    def _trace_until_sql_failure(
+        self,
+        *,
+        request: ChatTurnRequest,
+        prior_history: list[str],
+        context: TurnExecutionContext,
+        blocked: SqlGenerationBlockedError,
+        llm_entries: list[LlmTraceEntry],
+    ) -> list[TraceStep]:
+        return [
+            self._planner_completed_trace_step(
+                request=request,
+                prior_history=prior_history,
+                context=context,
+                llm_entries=llm_entries,
+            ),
+            self._sql_generation_blocked_trace_step(
+                request=request,
+                prior_history=prior_history,
+                context=context,
+                blocked=blocked,
+                llm_entries=llm_entries,
+            ),
+        ]
 
     def _finalize_response(
         self,
@@ -458,22 +574,27 @@ class ConversationalOrchestrator:
         *,
         blocked: SqlGenerationBlockedError,
         session_depth: int,
-        trace_step: TraceStep | None = None,
+        trace_steps: list[TraceStep] | None = None,
     ) -> AgentResponse:
         _ = session_depth
+        why = (
+            "SQL generation/execution is blocked until this clarification is resolved."
+            if blocked.stop_reason == "clarification"
+            else "SQL generation/execution failed due to a technical issue. Review trace details and retry."
+        )
 
         return AgentResponse(
-            answer=GENERIC_FAILURE_MESSAGE,
+            answer=blocked.user_message,
             confidence="low",
-            whyItMatters=GENERIC_FAILURE_WHY,
+            whyItMatters=why,
             metrics=[],
             evidence=[],
             insights=[],
             suggestedQuestions=[],
             assumptions=[],
-            trace=[
-                trace_step
-                or TraceStep(
+            trace=trace_steps
+            or [
+                TraceStep(
                     id="t2",
                     title="Generate and execute SQL",
                     summary="SQL generation blocked and returned guidance.",
@@ -531,7 +652,7 @@ class ConversationalOrchestrator:
             response = self._sql_generation_blocked_response(
                 blocked=blocked,
                 session_depth=len(self._session_history.get(session_id, [])),
-                trace_step=self._sql_generation_blocked_trace_step(
+                trace_steps=self._trace_until_sql_failure(
                     request=request,
                     prior_history=prior_history,
                     context=blocked_context,
@@ -593,7 +714,7 @@ class ConversationalOrchestrator:
                         blocked_response = self._sql_generation_blocked_response(
                             blocked=blocked,
                             session_depth=len(self._session_history.get(session_id, [])),
-                            trace_step=self._sql_generation_blocked_trace_step(
+                            trace_steps=self._trace_until_sql_failure(
                                 request=request,
                                 prior_history=prior_history,
                                 context=blocked_context,

@@ -40,6 +40,7 @@ async def analyze_message(
     history: list[str] | None = None,
     route: str | None = None,
     step_id: str | None = None,
+    retry_feedback: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     request_payload: dict[str, Any] = {
         "conversationId": conversation_id,
@@ -47,6 +48,7 @@ async def analyze_message(
         "history": history or [],
         "route": route,
         "stepId": step_id,
+        "retryFeedback": retry_feedback or [],
     }
 
     headers: dict[str, str] = {"Content-Type": "application/json"}

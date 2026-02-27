@@ -15,7 +15,8 @@ async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
 
     if "Customer Insights analytics" in system_prompt and "Return strict JSON only." in system_prompt:
         return (
-            '{"relevance":"in_domain","relevanceReason":"Customer insights metrics and segments were requested.","tooComplex":false,'
+            '{"relevance":"in_domain","relevanceReason":"Customer insights metrics and segments were requested.",'
+            '"analysisType":"comparison","secondaryAnalysisType":"composition_breakdown","tooComplex":false,'
             '"tasks":['
             '{"task":"Retrieve spend and transactions trend by state for the requested time window."},'
             '{"task":"Decompose results by card-present versus card-not-present channel for the same window."}'
@@ -35,6 +36,9 @@ async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
             '{"answer":"Spend increased with concentration in a few states and channel mix shifting toward CNP.",'
             '"whyItMatters":"State and channel concentration creates targeted optimization opportunities.",'
             '"confidence":"high",'
+            '"confidenceReason":"High confidence because comparison and composition outputs are complete and consistent.",'
+            '"summaryCards":[{"label":"Current Spend","value":"$1.94","detail":"Sample value from test pipeline"},{"label":"Prior Spend","value":"$1.37"}],'
+            '"primaryVisual":{"title":"Comparison by State","description":"Primary view for comparison intent.","artifactKind":"comparison_breakdown"},'
             '"insights":[{"title":"Concentration signal","detail":"Top states account for most of the movement.","importance":"high"}],'
             '"suggestedQuestions":["Which states drove the increase?","What changed by channel?","How much came from repeat customers?"],'
             '"assumptions":["Data reflects settled transactions only."]}'
@@ -69,9 +73,13 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     response = await deps.build_response(request, context, results, [])
 
     assert context.route == "standard"
+    assert context.analysis_type == "comparison"
+    assert context.secondary_analysis_type == "composition_breakdown"
     assert len(context.plan) >= 1
     assert validation.passed
     assert response.answer
+    assert response.summaryCards
+    assert response.primaryVisual is not None
     assert response.dataTables
     assert response.trace
     assert response.metrics
@@ -93,7 +101,7 @@ async def test_real_dependencies_requires_sql_generation_provider_when_analyst_i
 
     assert context.route == "standard"
     assert len(context.plan) >= 1
-    assert blocked.value.stop_reason == "clarification"
+    assert blocked.value.stop_reason == "technical_failure"
 
 
 @pytest.mark.asyncio
@@ -103,7 +111,7 @@ async def test_real_dependencies_blocks_out_of_domain_request() -> None:
         if "Customer Insights analytics" in system_prompt and "Return strict JSON only." in system_prompt:
             return (
                 '{"relevance":"out_of_domain","relevanceReason":"No semantic model entities are relevant.",'
-                '"tooComplex":false,"tasks":[]}'
+                '"analysisType":"aggregation_summary_stats","tooComplex":false,"tasks":[]}'
             )
         return "{}"
 

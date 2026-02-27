@@ -105,6 +105,7 @@ npm run dev:web
 
 Backend env file:
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+  - Optional retry control: `SQL_MAX_ATTEMPTS=3`
 
 Frontend env file:
 - `/Users/joe/Code/ci_analyst/apps/web/.env.local`
