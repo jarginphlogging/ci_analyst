@@ -7,6 +7,32 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 JsonValue = Optional[Union[str, int, float, bool]]
+AnalysisType = Literal[
+    "trend_over_time",
+    "ranking_top_n_bottom_n",
+    "comparison",
+    "composition_breakdown",
+    "aggregation_summary_stats",
+    "point_in_time_snapshot",
+    "period_over_period_change",
+    "anomaly_outlier_detection",
+    "drill_down_root_cause",
+    "correlation_relationship",
+    "cohort_analysis",
+    "distribution_histogram",
+    "forecasting_projection",
+    "threshold_filter_segmentation",
+    "cumulative_running_total",
+    "rate_ratio_efficiency",
+]
+ArtifactKind = Literal[
+    "ranking_breakdown",
+    "comparison_breakdown",
+    "delta_breakdown",
+    "trend_breakdown",
+    "distribution_breakdown",
+]
+VisualType = Literal["trend", "ranking", "comparison", "distribution", "snapshot", "table"]
 
 
 class ChatTurnRequest(BaseModel):
@@ -61,13 +87,7 @@ class DataTable(BaseModel):
 
 class AnalysisArtifact(BaseModel):
     id: str
-    kind: Literal[
-        "ranking_breakdown",
-        "comparison_breakdown",
-        "delta_breakdown",
-        "trend_breakdown",
-        "distribution_breakdown",
-    ]
+    kind: ArtifactKind
     title: str
     description: Optional[str] = None
     columns: list[str]
@@ -79,16 +99,34 @@ class AnalysisArtifact(BaseModel):
     detectedGrain: Optional[str] = None
 
 
+class SummaryCard(BaseModel):
+    label: str
+    value: str
+    detail: str = ""
+
+
+class PrimaryVisual(BaseModel):
+    title: str
+    description: str = ""
+    visualType: VisualType = "snapshot"
+    artifactKind: Optional[ArtifactKind] = None
+
+
 class AgentResponse(BaseModel):
     answer: str
     confidence: Literal["high", "medium", "low"]
+    confidenceReason: str = ""
     whyItMatters: str
+    analysisType: AnalysisType = "aggregation_summary_stats"
+    secondaryAnalysisType: Optional[AnalysisType] = None
     metrics: list[MetricPoint]
     evidence: list[EvidenceRow]
     insights: list[Insight]
     suggestedQuestions: list[str]
     assumptions: list[str]
     trace: list[TraceStep]
+    summaryCards: list[SummaryCard] = Field(default_factory=list)
+    primaryVisual: Optional[PrimaryVisual] = None
     dataTables: list[DataTable] = Field(default_factory=list)
     artifacts: list[AnalysisArtifact] = Field(default_factory=list)
 
@@ -109,6 +147,14 @@ class QueryPlanStep(BaseModel):
 class SynthesisQueryContext(BaseModel):
     originalUserQuery: str
     route: str
+    analysisType: AnalysisType = "aggregation_summary_stats"
+    secondaryAnalysisType: Optional[AnalysisType] = None
+
+
+class SynthesisVisualArtifact(BaseModel):
+    kind: ArtifactKind
+    title: str
+    rowCount: int
 
 
 class SynthesisPlanStep(BaseModel):
@@ -135,6 +181,7 @@ class SynthesisContextPackage(BaseModel):
     queryContext: SynthesisQueryContext
     plan: list[SynthesisPlanStep] = Field(default_factory=list)
     executedSteps: list[SynthesisExecutedStep] = Field(default_factory=list)
+    availableVisualArtifacts: list[SynthesisVisualArtifact] = Field(default_factory=list)
     portfolioSummary: SynthesisPortfolioSummary
 
 

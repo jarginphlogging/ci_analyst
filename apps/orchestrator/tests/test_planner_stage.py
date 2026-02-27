@@ -16,6 +16,7 @@ async def test_planner_marks_out_of_domain_request() -> None:
         return {
             "relevance": "out_of_domain",
             "relevanceReason": "No semantic entities matched.",
+            "analysisType": "aggregation_summary_stats",
             "tooComplex": False,
             "tasks": [],
         }
@@ -25,6 +26,7 @@ async def test_planner_marks_out_of_domain_request() -> None:
 
     assert decision.stop_reason == "out_of_domain"
     assert decision.stop_message == OUT_OF_DOMAIN_MESSAGE
+    assert decision.analysis_type == "aggregation_summary_stats"
     assert decision.steps == []
 
 
@@ -34,6 +36,7 @@ async def test_planner_marks_too_complex_request() -> None:
         return {
             "relevance": "in_domain",
             "relevanceReason": "In scope but needs too many independent tasks.",
+            "analysisType": "drill_down_root_cause",
             "tooComplex": True,
             "tasks": [],
         }
@@ -43,6 +46,7 @@ async def test_planner_marks_too_complex_request() -> None:
 
     assert decision.stop_reason == "too_complex"
     assert decision.stop_message == TOO_COMPLEX_MESSAGE
+    assert decision.analysis_type == "drill_down_root_cause"
     assert decision.steps == []
 
 
@@ -52,6 +56,8 @@ async def test_planner_accepts_unclear_relevance_and_outputs_tasks() -> None:
         return {
             "relevance": "unclear",
             "relevanceReason": "Some intent is ambiguous.",
+            "analysisType": "ranking_top_n_bottom_n",
+            "secondaryAnalysisType": "comparison",
             "tooComplex": False,
             "tasks": [
                 {"task": "Compute top and bottom stores for Q4 2025 with spend and transactions."},
@@ -68,6 +74,8 @@ async def test_planner_accepts_unclear_relevance_and_outputs_tasks() -> None:
 
     assert decision.stop_reason == "none"
     assert decision.relevance == "unclear"
+    assert decision.analysis_type == "ranking_top_n_bottom_n"
+    assert decision.secondary_analysis_type == "comparison"
     assert len(decision.steps) == 3
 
 
@@ -80,6 +88,7 @@ async def test_planner_falls_back_when_llm_unavailable() -> None:
     decision = await stage.create_plan("Show me spend by state.", [])
 
     assert decision.stop_reason == "none"
+    assert decision.analysis_type in {"comparison", "composition_breakdown", "aggregation_summary_stats", "threshold_filter_segmentation"}
     assert len(decision.steps) >= 1
 
 
@@ -89,6 +98,7 @@ async def test_planner_fast_path_forces_single_direct_task() -> None:
         return {
             "relevance": "in_domain",
             "relevanceReason": "Sales request is in scope.",
+            "analysisType": "aggregation_summary_stats",
             "tooComplex": False,
             "tasks": [
                 {
@@ -104,6 +114,7 @@ async def test_planner_fast_path_forces_single_direct_task() -> None:
     decision = await stage.create_plan("What were my total sales for last month?", [])
 
     assert decision.stop_reason == "none"
+    assert decision.analysis_type == "aggregation_summary_stats"
     assert len(decision.steps) == 1
     assert decision.steps[0].goal.startswith("Calculate total sales for last month")
     assert "cia_sales_insights_cortex" not in decision.steps[0].goal
@@ -115,6 +126,8 @@ async def test_planner_deep_path_strips_physical_schema_terms() -> None:
         return {
             "relevance": "in_domain",
             "relevanceReason": "Comparison request is in scope.",
+            "analysisType": "comparison",
+            "secondaryAnalysisType": "period_over_period_change",
             "tooComplex": False,
             "tasks": [
                 {
@@ -137,8 +150,33 @@ async def test_planner_deep_path_strips_physical_schema_terms() -> None:
     )
 
     assert decision.stop_reason == "none"
+    assert decision.analysis_type == "comparison"
+    assert decision.secondary_analysis_type == "period_over_period_change"
     assert len(decision.steps) == 2
     for step in decision.steps:
         assert "cia_sales_insights_cortex" not in step.goal
         assert "repeat_spend" not in step.goal
         assert "new_spend" not in step.goal
+
+
+@pytest.mark.asyncio
+async def test_planner_prompt_includes_general_step_minimization_policy() -> None:
+    captured_user_prompt = ""
+
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal captured_user_prompt
+        captured_user_prompt = str(kwargs.get("user_prompt", ""))
+        return {
+            "relevance": "in_domain",
+            "relevanceReason": "Request is in scope.",
+            "analysisType": "ranking_top_n_bottom_n",
+            "tooComplex": False,
+            "tasks": [{"task": "Return one ranked table for the requested scope."}],
+        }
+
+    stage = PlannerStage(model=load_semantic_model(), ask_llm_json=fake_ask_llm_json)
+    decision = await stage.create_plan("What are my top and bottom states by sales in 2025?", [])
+
+    assert decision.stop_reason == "none"
+    assert "Default to one task when requested outputs share the same business scope" in captured_user_prompt
+    assert "Split into multiple tasks only when a single readable output would be materially worse or impossible" in captured_user_prompt

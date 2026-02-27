@@ -4,18 +4,24 @@ from typing import Any, Awaitable, Callable, Literal, cast
 
 from app.config import settings
 from app.models import (
+    AnalysisType,
     AgentResponse,
     AnalysisArtifact,
+    ArtifactKind,
     EvidenceRow,
     Insight,
+    PrimaryVisual,
     QueryPlanStep,
+    SummaryCard,
     SqlExecutionResult,
     SynthesisContextPackage,
     SynthesisExecutedStep,
     SynthesisPlanStep,
     SynthesisPortfolioSummary,
     SynthesisQueryContext,
+    SynthesisVisualArtifact,
     TraceStep,
+    VisualType,
 )
 from app.prompts.templates import response_prompt
 from app.services.llm_trace import llm_trace_stage
@@ -66,6 +72,202 @@ def _sanitize_insights(raw: Any) -> list[Insight]:
             )
         )
     return items
+
+
+def _sanitize_summary_cards(raw: Any) -> list[SummaryCard]:
+    if not isinstance(raw, list):
+        return []
+
+    cards: list[SummaryCard] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in raw[:3]:
+        if not isinstance(entry, dict):
+            continue
+        label = str(entry.get("label", "")).strip()
+        value = str(entry.get("value", "")).strip()
+        detail = str(entry.get("detail", "")).strip()
+        if not label or not value:
+            continue
+        key = (label.lower(), value.lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        cards.append(SummaryCard(label=label, value=value, detail=detail))
+    return cards
+
+
+INTENT_VISUAL_POLICY: dict[AnalysisType, tuple[VisualType, tuple[ArtifactKind, ...]]] = {
+    "trend_over_time": ("trend", ("trend_breakdown",)),
+    "ranking_top_n_bottom_n": ("ranking", ("ranking_breakdown",)),
+    "comparison": ("comparison", ("comparison_breakdown", "delta_breakdown")),
+    "composition_breakdown": ("ranking", ("ranking_breakdown", "comparison_breakdown")),
+    "aggregation_summary_stats": ("snapshot", ()),
+    "point_in_time_snapshot": ("snapshot", ()),
+    "period_over_period_change": ("comparison", ("delta_breakdown", "comparison_breakdown")),
+    "anomaly_outlier_detection": ("trend", ("trend_breakdown", "distribution_breakdown")),
+    "drill_down_root_cause": ("comparison", ("comparison_breakdown", "delta_breakdown", "ranking_breakdown")),
+    "correlation_relationship": ("comparison", ("comparison_breakdown", "distribution_breakdown")),
+    "cohort_analysis": ("trend", ("trend_breakdown", "comparison_breakdown")),
+    "distribution_histogram": ("distribution", ("distribution_breakdown",)),
+    "forecasting_projection": ("trend", ("trend_breakdown",)),
+    "threshold_filter_segmentation": ("table", ()),
+    "cumulative_running_total": ("trend", ("trend_breakdown",)),
+    "rate_ratio_efficiency": ("comparison", ("comparison_breakdown", "delta_breakdown")),
+}
+
+
+def _format_metric_value(metric: Any) -> str:
+    value = _as_float(getattr(metric, "value", None))
+    if value is None:
+        return "-"
+    unit = getattr(metric, "unit", "count")
+    if unit == "usd":
+        if abs(value) >= 1_000_000_000:
+            return f"${value / 1_000_000_000:.2f}B"
+        if abs(value) >= 1_000_000:
+            return f"${value / 1_000_000:.2f}M"
+        if abs(value) >= 1_000:
+            return f"${value / 1_000:.1f}K"
+        return f"${value:,.2f}"
+    if unit == "pct":
+        pct = value * 100 if abs(value) <= 1 else value
+        return f"{pct:.2f}%"
+    if unit == "bps":
+        return f"{value:.0f} bps"
+    return f"{value:,.0f}"
+
+
+def _fallback_summary_cards(metrics: list[Any]) -> list[SummaryCard]:
+    cards: list[SummaryCard] = []
+    seen_labels: set[str] = set()
+    for metric in metrics:
+        label = str(getattr(metric, "label", "")).strip()
+        if not label or label.lower() == "rows retrieved":
+            continue
+        normalized = label.lower()
+        if normalized in seen_labels:
+            continue
+        seen_labels.add(normalized)
+        cards.append(SummaryCard(label=label, value=_format_metric_value(metric)))
+        if len(cards) >= 3:
+            break
+    return cards
+
+
+def _sanitize_primary_visual(raw: Any) -> PrimaryVisual | None:
+    if not isinstance(raw, dict):
+        return None
+    title = str(raw.get("title", "")).strip()
+    description = str(raw.get("description", "")).strip()
+    artifact_raw = str(raw.get("artifactKind", "")).strip()
+    visual_type_raw = str(raw.get("visualType", "")).strip().lower()
+    artifact_kind: ArtifactKind | None = None
+    visual_type: VisualType = "snapshot"
+    if artifact_raw in {
+        "ranking_breakdown",
+        "comparison_breakdown",
+        "delta_breakdown",
+        "trend_breakdown",
+        "distribution_breakdown",
+    }:
+        artifact_kind = artifact_raw  # type: ignore[assignment]
+    if visual_type_raw in {"trend", "ranking", "comparison", "distribution", "snapshot", "table"}:
+        visual_type = cast(VisualType, visual_type_raw)
+    if not title and not artifact_kind:
+        return None
+    return PrimaryVisual(
+        title=title or "Primary visual",
+        description=description,
+        visualType=visual_type,
+        artifactKind=artifact_kind,
+    )
+
+
+def _artifact_is_finished(artifact: AnalysisArtifact) -> bool:
+    if not artifact.rows:
+        return False
+    if artifact.kind == "trend_breakdown":
+        return len(artifact.rows) >= 2
+    return True
+
+
+def _first_artifact_by_kinds(
+    artifacts: list[AnalysisArtifact],
+    kinds: tuple[ArtifactKind, ...],
+) -> AnalysisArtifact | None:
+    for kind in kinds:
+        for artifact in artifacts:
+            if artifact.kind == kind and _artifact_is_finished(artifact):
+                return artifact
+    return None
+
+
+def _default_visual_title(analysis_type: AnalysisType, visual_type: VisualType) -> str:
+    labels = {
+        "trend_over_time": "Trend Over Time",
+        "ranking_top_n_bottom_n": "Ranking",
+        "comparison": "Comparison",
+        "composition_breakdown": "Composition Breakdown",
+        "aggregation_summary_stats": "Summary Snapshot",
+        "point_in_time_snapshot": "Point-in-Time Snapshot",
+        "period_over_period_change": "Period-over-Period Change",
+        "anomaly_outlier_detection": "Anomaly View",
+        "drill_down_root_cause": "Root Cause Breakdown",
+        "correlation_relationship": "Relationship View",
+        "cohort_analysis": "Cohort View",
+        "distribution_histogram": "Distribution",
+        "forecasting_projection": "Projection Trend",
+        "threshold_filter_segmentation": "Filtered Segment List",
+        "cumulative_running_total": "Cumulative Trend",
+        "rate_ratio_efficiency": "Rate and Ratio Comparison",
+    }
+    return labels.get(analysis_type, f"{visual_type.title()} View")
+
+
+def _resolve_primary_visual(
+    *,
+    analysis_type: AnalysisType,
+    llm_visual: PrimaryVisual | None,
+    artifacts: list[AnalysisArtifact],
+) -> PrimaryVisual:
+    preferred_visual_type, preferred_kinds = INTENT_VISUAL_POLICY.get(analysis_type, ("snapshot", ()))
+
+    chosen_artifact: AnalysisArtifact | None = None
+    if llm_visual and llm_visual.artifactKind and llm_visual.artifactKind in preferred_kinds:
+        candidate = next((artifact for artifact in artifacts if artifact.kind == llm_visual.artifactKind), None)
+        if candidate and _artifact_is_finished(candidate):
+            chosen_artifact = candidate
+    if not chosen_artifact:
+        chosen_artifact = _first_artifact_by_kinds(artifacts, preferred_kinds)
+
+    visual_type = preferred_visual_type
+    artifact_kind: ArtifactKind | None = chosen_artifact.kind if chosen_artifact else None
+    if visual_type in {"trend", "ranking", "comparison", "distribution"} and not artifact_kind:
+        if any(_artifact_is_finished(artifact) for artifact in artifacts):
+            visual_type = "table"
+        else:
+            visual_type = "snapshot"
+
+    title = ""
+    if llm_visual and llm_visual.title.strip():
+        title = llm_visual.title.strip()
+    elif chosen_artifact:
+        title = chosen_artifact.title
+    if not title:
+        title = _default_visual_title(analysis_type, visual_type)
+
+    description = ""
+    if llm_visual and llm_visual.description.strip():
+        description = llm_visual.description.strip()
+    elif chosen_artifact and chosen_artifact.description:
+        description = chosen_artifact.description
+
+    return PrimaryVisual(
+        title=title,
+        description=description,
+        visualType=visual_type,
+        artifactKind=artifact_kind if visual_type in {"trend", "ranking", "comparison", "distribution"} else None,
+    )
 
 
 def _artifact_by_kind(artifacts: list[AnalysisArtifact], *kinds: str) -> AnalysisArtifact | None:
@@ -275,6 +477,8 @@ class SynthesisStage:
         message: str,
         route: str,
         plan: list[QueryPlanStep] | None,
+        analysis_type: AnalysisType,
+        secondary_analysis_type: AnalysisType | None,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
@@ -283,6 +487,8 @@ class SynthesisStage:
             message=message,
             route=route,
             plan=plan,
+            analysis_type=analysis_type,
+            secondary_analysis_type=secondary_analysis_type,
             results=results,
             prior_assumptions=prior_assumptions,
             history=history,
@@ -295,6 +501,8 @@ class SynthesisStage:
         message: str,
         route: str,
         plan: list[QueryPlanStep] | None,
+        analysis_type: AnalysisType,
+        secondary_analysis_type: AnalysisType | None,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
@@ -303,6 +511,8 @@ class SynthesisStage:
             message=message,
             route=route,
             plan=plan,
+            analysis_type=analysis_type,
+            secondary_analysis_type=secondary_analysis_type,
             results=results,
             prior_assumptions=prior_assumptions,
             history=history,
@@ -315,7 +525,10 @@ class SynthesisStage:
         message: str,
         route: str,
         plan: list[QueryPlanStep] | None,
+        analysis_type: AnalysisType,
+        secondary_analysis_type: AnalysisType | None,
         results: list[SqlExecutionResult],
+        artifacts: list[AnalysisArtifact],
     ) -> SynthesisContextPackage:
         _ = route
         plan_steps = plan or []
@@ -364,9 +577,16 @@ class SynthesisStage:
             queryContext=SynthesisQueryContext(
                 originalUserQuery=message,
                 route="standard",
+                analysisType=analysis_type,
+                secondaryAnalysisType=secondary_analysis_type,
             ),
             plan=synthesis_plan,
             executedSteps=executed_steps,
+            availableVisualArtifacts=[
+                SynthesisVisualArtifact(kind=artifact.kind, title=artifact.title, rowCount=len(artifact.rows))
+                for artifact in artifacts
+                if artifact.rows
+            ],
             portfolioSummary=SynthesisPortfolioSummary(
                 tableCount=len(results),
                 totalRows=sum(result.rowCount for result in results),
@@ -379,6 +599,8 @@ class SynthesisStage:
         message: str,
         route: str,
         plan: list[QueryPlanStep] | None,
+        analysis_type: AnalysisType,
+        secondary_analysis_type: AnalysisType | None,
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
@@ -392,7 +614,10 @@ class SynthesisStage:
             message=message,
             route=route,
             plan=plan,
+            analysis_type=analysis_type,
+            secondary_analysis_type=secondary_analysis_type,
             results=results,
+            artifacts=artifacts,
         )
         result_summary = synthesis_context.model_dump_json()
         evidence_summary = str([row.model_dump() for row in evidence[:8]])
@@ -431,7 +656,21 @@ class SynthesisStage:
         if grain_mismatch and confidence == "high":
             confidence = "medium"
 
+        confidence_reason = str(llm_payload.get("confidenceReason", "")).strip()
+        if not confidence_reason:
+            llm_assumptions = as_string_list(llm_payload.get("assumptions"), max_items=1)
+            if llm_assumptions:
+                confidence_reason = llm_assumptions[0]
+        if not confidence_reason:
+            confidence_reason = str(llm_payload.get("whyItMatters", "")).strip()
+
         insights = _sanitize_insights(llm_payload.get("insights")) or _default_insights(evidence, artifacts)
+        summary_cards = _sanitize_summary_cards(llm_payload.get("summaryCards")) or _fallback_summary_cards(metrics)
+        primary_visual = _resolve_primary_visual(
+            analysis_type=analysis_type,
+            llm_visual=_sanitize_primary_visual(llm_payload.get("primaryVisual")),
+            artifacts=artifacts,
+        )
         suggested_questions = (
             as_string_list(llm_payload.get("suggestedQuestions"), max_items=3) or _default_questions(artifacts)
         )
@@ -476,13 +715,18 @@ class SynthesisStage:
         return AgentResponse(
             answer=answer,
             confidence=confidence,
+            confidenceReason=confidence_reason,
             whyItMatters=why_it_matters,
+            analysisType=analysis_type,
+            secondaryAnalysisType=secondary_analysis_type,
             metrics=metrics[:3],
             evidence=evidence[:10],
             insights=insights,
             suggestedQuestions=suggested_questions,
             assumptions=assumptions[:8],
             trace=trace,
+            summaryCards=summary_cards,
+            primaryVisual=primary_visual,
             dataTables=data_tables,
             artifacts=artifacts,
         )

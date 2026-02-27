@@ -64,16 +64,52 @@ export interface AnalysisArtifact {
   detectedGrain?: string;
 }
 
+export type AnalysisType =
+  | "trend_over_time"
+  | "ranking_top_n_bottom_n"
+  | "comparison"
+  | "composition_breakdown"
+  | "aggregation_summary_stats"
+  | "point_in_time_snapshot"
+  | "period_over_period_change"
+  | "anomaly_outlier_detection"
+  | "drill_down_root_cause"
+  | "correlation_relationship"
+  | "cohort_analysis"
+  | "distribution_histogram"
+  | "forecasting_projection"
+  | "threshold_filter_segmentation"
+  | "cumulative_running_total"
+  | "rate_ratio_efficiency";
+
+export interface SummaryCard {
+  label: string;
+  value: string;
+  detail?: string;
+}
+
+export interface PrimaryVisual {
+  title: string;
+  description?: string;
+  visualType?: "trend" | "ranking" | "comparison" | "distribution" | "snapshot" | "table";
+  artifactKind?: AnalysisArtifact["kind"];
+}
+
 export interface AgentResponse {
   answer: string;
   confidence: "high" | "medium" | "low";
+  confidenceReason?: string;
   whyItMatters: string;
+  analysisType?: AnalysisType;
+  secondaryAnalysisType?: AnalysisType;
   metrics: MetricPoint[];
   evidence: EvidenceRow[];
   insights: Insight[];
   suggestedQuestions: string[];
   assumptions: string[];
   trace: TraceStep[];
+  summaryCards?: SummaryCard[];
+  primaryVisual?: PrimaryVisual;
   dataTables: DataTable[];
   artifacts?: AnalysisArtifact[];
 }

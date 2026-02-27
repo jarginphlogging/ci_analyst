@@ -12,7 +12,10 @@ const statusClass: Record<TraceStep["status"], string> = {
 function renderPayload(payload: Record<string, unknown> | undefined): string {
   if (!payload) return "{}";
   try {
-    return JSON.stringify(payload, null, 2);
+    const sanitized = { ...payload };
+    delete sanitized.llmPrompts;
+    delete sanitized.llmResponses;
+    return JSON.stringify(sanitized, null, 2);
   } catch {
     return "{\n  \"error\": \"unable to render payload\"\n}";
   }
@@ -47,6 +50,31 @@ function asLlmResponseEntries(step: TraceStep): LlmResponseEntry[] {
   return candidate.filter((entry): entry is LlmResponseEntry => Boolean(entry) && typeof entry === "object");
 }
 
+function failedSqlForStep(step: TraceStep): string {
+  if (step.status !== "blocked") return "";
+
+  const fromTop = step.stageOutput?.["failedSql"];
+  if (typeof fromTop === "string" && fromTop.trim()) return fromTop;
+
+  const failureDetail = step.stageOutput?.["failureDetail"];
+  if (failureDetail && typeof failureDetail === "object") {
+    const fromDetail = (failureDetail as Record<string, unknown>).failedSql;
+    if (typeof fromDetail === "string" && fromDetail.trim()) return fromDetail;
+  }
+
+  const responses = asLlmResponseEntries(step);
+  for (const response of responses) {
+    const parsed = response.parsedResponse;
+    if (!parsed || typeof parsed !== "object") continue;
+    const parsedRecord = parsed as Record<string, unknown>;
+    const fromParsed = parsedRecord.failedSql;
+    if (typeof fromParsed === "string" && fromParsed.trim()) return fromParsed;
+    const parsedSql = parsedRecord.sql;
+    if (typeof parsedSql === "string" && parsedSql.trim()) return parsedSql;
+  }
+  return "";
+}
+
 export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
   const [open, setOpen] = useState(false);
 
@@ -73,6 +101,8 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
               {(() => {
                 const llmPrompts = asLlmPromptEntries(step);
                 const llmResponses = asLlmResponseEntries(step);
+                const llmEntryCount = Math.max(llmPrompts.length, llmResponses.length);
+                const failedSql = failedSqlForStep(step);
                 return (
                   <>
               <div className="flex items-center justify-between gap-2">
@@ -82,39 +112,52 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                 </span>
               </div>
               <p className="mt-2 text-sm leading-relaxed text-slate-700">{step.summary}</p>
-              {llmPrompts.length ? (
+              {llmEntryCount ? (
                 <div className="mt-3 space-y-3">
-                  {llmPrompts.map((prompt, index) => (
-                    <div key={`prompt-${index}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                        LLM Prompt {index + 1} ({prompt.provider ?? "llm"})
-                      </p>
-                      <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
-                        <code>{prompt.systemPrompt ?? ""}</code>
-                      </pre>
-                      <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-900 p-2 text-[11px] leading-relaxed text-slate-100">
-                        <code>{prompt.userPrompt ?? ""}</code>
-                      </pre>
-                    </div>
-                  ))}
+                  {Array.from({ length: llmEntryCount }).map((_, index) => {
+                    const prompt = llmPrompts[index];
+                    const response = llmResponses[index];
+                    return (
+                      <div key={`llm-entry-${index}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
+                          LLM Exchange {index + 1} ({prompt?.provider ?? response?.provider ?? "llm"})
+                        </p>
+                        {prompt ? (
+                          <>
+                            <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Prompt</p>
+                            <pre className="mt-1 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                              <code>{prompt.systemPrompt ?? ""}</code>
+                            </pre>
+                            <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-900 p-2 text-[11px] leading-relaxed text-slate-100">
+                              <code>{prompt.userPrompt ?? ""}</code>
+                            </pre>
+                          </>
+                        ) : null}
+                        {response ? (
+                          <>
+                            <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Response</p>
+                            <pre className="mt-1 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                              <code>{response.rawResponse ?? JSON.stringify(response.parsedResponse ?? {}, null, 2)}</code>
+                            </pre>
+                            {response.error ? (
+                              <p className="mt-2 text-xs font-medium text-rose-700">Error: {response.error}</p>
+                            ) : null}
+                          </>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               ) : null}
-              {llmResponses.length ? (
-                <div className="mt-3 space-y-3">
-                  {llmResponses.map((response, index) => (
-                    <div key={`response-${index}`} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                        LLM Response {index + 1} ({response.provider ?? "llm"})
-                      </p>
-                      <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
-                        <code>{response.rawResponse ?? JSON.stringify(response.parsedResponse ?? {}, null, 2)}</code>
-                      </pre>
-                      {response.error ? (
-                        <p className="mt-2 text-xs font-medium text-rose-700">Error: {response.error}</p>
-                      ) : null}
-                    </div>
-                  ))}
+              {failedSql ? (
+                <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Failed SQL</p>
+                  <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
+                    <code>{failedSql}</code>
+                  </pre>
                 </div>
+              ) : step.status === "blocked" ? (
+                <p className="mt-3 text-xs text-slate-600">No SQL was attempted in this blocked path.</p>
               ) : null}
               {step.sql ? (
                 <pre className="mt-3 overflow-x-auto rounded-lg bg-slate-950 p-3 text-xs leading-relaxed text-slate-100">

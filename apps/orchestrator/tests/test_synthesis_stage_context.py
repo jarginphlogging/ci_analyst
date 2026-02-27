@@ -17,6 +17,16 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
             "answer": "Synthesis answer",
             "whyItMatters": "Synthesis impact",
             "confidence": "high",
+            "confidenceReason": "High confidence due to complete and consistent table outputs.",
+            "summaryCards": [
+                {"label": "Total Sales", "value": "$98.4M", "detail": "Full month aggregate"},
+                {"label": "MoM Change", "value": "+4.2%"},
+            ],
+            "primaryVisual": {
+                "title": "Sales Trend by State",
+                "description": "Trend view for the selected period.",
+                "artifactKind": "trend_breakdown",
+            },
             "insights": [
                 {
                     "title": "Top movement",
@@ -65,15 +75,23 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
         message="Compare Q4 2025 performance by state.",
         route="deep_path",
         plan=plan,
+        analysis_type="comparison",
+        secondary_analysis_type="trend_over_time",
         results=results,
         prior_assumptions=[],
         history=[],
     )
 
     assert response.answer == "Synthesis answer"
+    assert response.confidenceReason
+    assert response.summaryCards
+    assert response.primaryVisual is not None
     prompt_text = captured_prompts["user"]
     assert '"originalUserQuery":"Compare Q4 2025 performance by state."' in prompt_text
+    assert '"analysisType":"comparison"' in prompt_text
+    assert '"secondaryAnalysisType":"trend_over_time"' in prompt_text
     assert '"plan":[{"id":"step_1","goal":"Compute spend and transaction trend by state for Q4 2025."' in prompt_text
     assert '"executedSql":"SELECT transaction_state, current_value, prior_value, change_value FROM cia_sales_insights_cortex"' in prompt_text
+    assert '"availableVisualArtifacts"' in prompt_text
     assert '"tableSummary":' in prompt_text
     assert '"numericStats"' in prompt_text

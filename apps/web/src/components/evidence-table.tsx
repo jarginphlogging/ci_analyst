@@ -1,12 +1,32 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { AnalysisArtifact, DataCell, EvidenceRow } from "@/lib/types";
+import type { AnalysisArtifact, AnalysisType, DataCell, DataTable, EvidenceRow, PrimaryVisual } from "@/lib/types";
 
 type LegacySortKey = "segment" | "prior" | "current" | "changeBps" | "contribution";
 type RankingSortKey = "rank" | "label" | "value" | "share";
 type ComparisonSortKey = "label" | "prior" | "current" | "change";
 type SortDirection = "asc" | "desc";
+type VisualType = NonNullable<PrimaryVisual["visualType"]>;
+
+const ANALYSIS_VISUAL_POLICY: Record<AnalysisType, VisualType> = {
+  trend_over_time: "trend",
+  ranking_top_n_bottom_n: "ranking",
+  comparison: "comparison",
+  composition_breakdown: "ranking",
+  aggregation_summary_stats: "snapshot",
+  point_in_time_snapshot: "snapshot",
+  period_over_period_change: "comparison",
+  anomaly_outlier_detection: "trend",
+  drill_down_root_cause: "comparison",
+  correlation_relationship: "comparison",
+  cohort_analysis: "trend",
+  distribution_histogram: "distribution",
+  forecasting_projection: "trend",
+  threshold_filter_segmentation: "table",
+  cumulative_running_total: "trend",
+  rate_ratio_efficiency: "comparison",
+};
 
 const legacySortOptions: { key: LegacySortKey; label: string }[] = [
   { key: "contribution", label: "Contribution" },
@@ -69,10 +89,79 @@ function formatCell(value: DataCell): string {
   return value;
 }
 
+function formatMonthLabel(value: DataCell): string {
+  if (value === null) return "-";
+  const raw = String(value).trim();
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+  if (dateOnly) {
+    const year = Number(dateOnly[1]);
+    const monthIndex = Number(dateOnly[2]) - 1;
+    const day = Number(dateOnly[3]);
+    const utcDate = new Date(Date.UTC(year, monthIndex, day));
+    return new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric", timeZone: "UTC" }).format(utcDate);
+  }
+  const parsed = Date.parse(raw);
+  if (!Number.isFinite(parsed)) return raw;
+  return new Intl.DateTimeFormat(undefined, { month: "short", year: "numeric" }).format(new Date(parsed));
+}
+
 function parseTime(value: DataCell | undefined): number {
   if (!value) return Number.POSITIVE_INFINITY;
   const parsed = Date.parse(String(value));
   return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+}
+
+function deltaColorClass(value: number | null): string {
+  if (value === null || value === 0) return "text-slate-600";
+  return value > 0 ? "text-emerald-700" : "text-rose-700";
+}
+
+function Sparkline({
+  values,
+}: {
+  values: number[];
+}) {
+  if (values.length < 2) return null;
+  const width = 760;
+  const height = 160;
+  const paddingX = 16;
+  const paddingY = 14;
+  const minValue = Math.min(...values);
+  const maxValue = Math.max(...values);
+  const range = maxValue - minValue || 1;
+  const step = (width - paddingX * 2) / Math.max(1, values.length - 1);
+
+  const points = values.map((value, index) => {
+    const x = paddingX + step * index;
+    const y = paddingY + ((maxValue - value) / range) * (height - paddingY * 2);
+    return { x, y };
+  });
+
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(" ");
+  const lastPoint = points[points.length - 1];
+
+  return (
+    <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 px-2 py-2">
+      <svg viewBox={`0 0 ${width} ${height}`} className="h-36 w-full" role="img" aria-label="Trend line chart">
+        <line x1={paddingX} y1={height - paddingY} x2={width - paddingX} y2={height - paddingY} stroke="#cbd5e1" strokeWidth="1" />
+        <polyline fill="none" stroke="#0284c7" strokeWidth="3" strokeLinejoin="round" strokeLinecap="round" points={polyline} />
+        {points.map((point, index) => (
+          <circle key={index} cx={point.x} cy={point.y} r={index === points.length - 1 ? 4 : 2.5} fill={index === points.length - 1 ? "#0369a1" : "#0ea5e9"} />
+        ))}
+        <text x={paddingX} y={height - 2} fontSize="11" fill="#64748b">
+          Start
+        </text>
+        <text x={width - paddingX} y={height - 2} textAnchor="end" fontSize="11" fill="#64748b">
+          End
+        </text>
+        {lastPoint ? (
+          <text x={lastPoint.x} y={Math.max(12, lastPoint.y - 8)} textAnchor="end" fontSize="11" fill="#0f172a">
+            Latest
+          </text>
+        ) : null}
+      </svg>
+    </div>
+  );
 }
 
 function artifactLabel(kind: AnalysisArtifact["kind"]): string {
@@ -88,6 +177,42 @@ function artifactDescription(artifact: AnalysisArtifact): string {
     return "Ranked distribution computed from retrieved SQL output. Shows share by entity.";
   }
   return artifact.description ?? "Adaptive analysis module from retrieved SQL output.";
+}
+
+function isArtifactFinished(artifact: AnalysisArtifact): boolean {
+  if (!artifact.rows.length) return false;
+  if (artifact.kind === "trend_breakdown") return artifact.rows.length >= 2;
+  return true;
+}
+
+function artifactKindsForVisualType(visualType: VisualType): AnalysisArtifact["kind"][] {
+  if (visualType === "trend") return ["trend_breakdown"];
+  if (visualType === "ranking") return ["ranking_breakdown"];
+  if (visualType === "comparison") return ["comparison_breakdown", "delta_breakdown"];
+  if (visualType === "distribution") return ["distribution_breakdown"];
+  return [];
+}
+
+function resolveVisualType({
+  analysisType,
+  primaryVisual,
+  artifacts,
+  dataTables,
+}: {
+  analysisType?: AnalysisType;
+  primaryVisual?: PrimaryVisual;
+  artifacts: AnalysisArtifact[];
+  dataTables?: DataTable[];
+}): VisualType {
+  const intended = analysisType ? ANALYSIS_VISUAL_POLICY[analysisType] : primaryVisual?.visualType;
+  const requested: VisualType = intended ?? primaryVisual?.visualType ?? "snapshot";
+  if (requested === "snapshot" || requested === "table") return requested;
+
+  const allowedKinds = new Set(artifactKindsForVisualType(requested));
+  const hasCompatibleArtifact = artifacts.some((artifact) => allowedKinds.has(artifact.kind) && isArtifactFinished(artifact));
+  if (hasCompatibleArtifact) return requested;
+  if ((dataTables?.length ?? 0) > 0) return "table";
+  return "snapshot";
 }
 
 function contributionWidth(value: number): number {
@@ -276,51 +401,93 @@ function TrendModule({ artifact }: { artifact: AnalysisArtifact }) {
   const timeKey = artifact.timeKey ?? artifact.columns[0] ?? "period";
   const valueKey = artifact.valueKey ?? artifact.columns[1] ?? "value";
 
-  const sortedRows = useMemo(
-    () => [...artifact.rows].sort((a, b) => parseTime(a[timeKey]) - parseTime(b[timeKey])),
-    [artifact.rows, timeKey],
-  );
+  const trendRows = useMemo(() => {
+    const ordered = [...artifact.rows].sort((a, b) => parseTime(a[timeKey]) - parseTime(b[timeKey]));
+    return ordered.map((row, index) => {
+      const value = asNumber(row[valueKey]) ?? 0;
+      const prevValue = index > 0 ? asNumber(ordered[index - 1][valueKey]) : null;
+      const parsedDelta = asNumber(row.period_change);
+      const delta = parsedDelta ?? (prevValue === null ? null : value - prevValue);
+      const deltaPct = delta === null || prevValue === null || prevValue === 0 ? null : (delta / prevValue) * 100;
+      return {
+        period: row[timeKey] ?? null,
+        value,
+        delta,
+        deltaPct,
+      };
+    });
+  }, [artifact.rows, timeKey, valueKey]);
 
-  const values = sortedRows.map((row) => asNumber(row[valueKey]) ?? 0);
-  const maxAbs = Math.max(1, ...values.map((value) => Math.abs(value)));
+  const firstValue = trendRows[0]?.value ?? null;
+  const lastValue = trendRows[trendRows.length - 1]?.value ?? null;
+  const netDelta = firstValue !== null && lastValue !== null ? lastValue - firstValue : null;
+  const netDeltaPct = firstValue && netDelta !== null ? (netDelta / firstValue) * 100 : null;
+  const strongestGain = trendRows.reduce<{ delta: number; period: DataCell } | null>((best, row) => {
+    if (row.delta === null || row.delta <= 0) return best;
+    if (!best || row.delta > best.delta) return { delta: row.delta, period: row.period };
+    return best;
+  }, null);
+  const strongestDrop = trendRows.reduce<{ delta: number; period: DataCell } | null>((best, row) => {
+    if (row.delta === null || row.delta >= 0) return best;
+    if (!best || row.delta < best.delta) return { delta: row.delta, period: row.period };
+    return best;
+  }, null);
 
   return (
-    <div className="mt-3 overflow-x-auto">
-      <table className="w-full min-w-[620px] border-separate border-spacing-y-2 text-left text-sm">
-        <thead>
-          <tr className="text-xs uppercase tracking-wide text-slate-500">
-            <th className="px-2 py-1">{prettifyColumn(timeKey)}</th>
-            <th className="px-2 py-1">{prettifyColumn(valueKey)}</th>
-            <th className="px-2 py-1">Period Change</th>
-            <th className="px-2 py-1">Signal</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sortedRows.map((row, index) => {
-            const value = asNumber(row[valueKey]) ?? 0;
-            const delta = asNumber(row.period_change);
-            const width = Math.max(4, (Math.abs(value) / maxAbs) * 100);
-            return (
-              <tr key={`${String(row[timeKey])}-${index}`} className="rounded-xl bg-slate-50 text-slate-800">
-                <td className="rounded-l-xl px-2 py-2 font-medium">{String(row[timeKey] ?? "-")}</td>
-                <td className="px-2 py-2">{formatValue(value, valueKey)}</td>
-                <td className={`px-2 py-2 font-semibold ${delta === null || delta >= 0 ? "text-rose-700" : "text-emerald-700"}`}>
-                  {delta === null ? "-" : formatValue(delta, "delta")}
+    <>
+      <div className="mt-3 grid gap-2 sm:grid-cols-3">
+        <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Net Change</p>
+          <p className={`mt-1.5 text-sm font-semibold ${deltaColorClass(netDelta)}`}>
+            {netDelta === null ? "-" : formatValue(netDelta, valueKey)}
+          </p>
+          <p className="mt-1 text-xs text-slate-600">{netDeltaPct === null ? "-" : `${netDeltaPct.toFixed(2)}%`}</p>
+        </article>
+        <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Strongest Increase</p>
+          <p className="mt-1.5 text-sm font-semibold text-emerald-700">
+            {strongestGain ? formatValue(strongestGain.delta, valueKey) : "-"}
+          </p>
+          <p className="mt-1 text-xs text-slate-600">{strongestGain ? formatMonthLabel(strongestGain.period) : "-"}</p>
+        </article>
+        <article className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Strongest Decline</p>
+          <p className="mt-1.5 text-sm font-semibold text-rose-700">
+            {strongestDrop ? formatValue(strongestDrop.delta, valueKey) : "-"}
+          </p>
+          <p className="mt-1 text-xs text-slate-600">{strongestDrop ? formatMonthLabel(strongestDrop.period) : "-"}</p>
+        </article>
+      </div>
+
+      <Sparkline values={trendRows.map((row) => row.value)} />
+
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[620px] border-separate border-spacing-y-2 text-left text-sm">
+          <thead>
+            <tr className="text-xs uppercase tracking-wide text-slate-500">
+              <th className="px-2 py-1">{prettifyColumn(timeKey)}</th>
+              <th className="px-2 py-1">{prettifyColumn(valueKey)}</th>
+              <th className="px-2 py-1">MoM Change</th>
+              <th className="px-2 py-1">MoM %</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trendRows.map((row, index) => (
+              <tr key={`${String(row.period)}-${index}`} className="rounded-xl bg-slate-50 text-slate-800">
+                <td className="rounded-l-xl px-2 py-2 font-medium">{formatMonthLabel(row.period)}</td>
+                <td className="px-2 py-2">{formatValue(row.value, valueKey)}</td>
+                <td className={`px-2 py-2 font-semibold ${deltaColorClass(row.delta)}`}>
+                  {row.delta === null ? "-" : formatValue(row.delta, valueKey)}
                 </td>
-                <td className="rounded-r-xl px-2 py-2">
-                  <div className="h-2.5 w-40 rounded-full bg-slate-200">
-                    <div
-                      className="h-2.5 rounded-full bg-gradient-to-r from-sky-500 to-cyan-500"
-                      style={{ width: `${width}%` }}
-                    />
-                  </div>
+                <td className={`rounded-r-xl px-2 py-2 font-semibold ${deltaColorClass(row.delta)}`}>
+                  {row.deltaPct === null ? "-" : `${row.deltaPct.toFixed(2)}%`}
                 </td>
               </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
   );
 }
 
@@ -372,27 +539,154 @@ function GenericModule({ artifact }: { artifact: AnalysisArtifact }) {
   );
 }
 
-export function EvidenceTable({ rows, artifacts }: { rows: EvidenceRow[]; artifacts?: AnalysisArtifact[] }) {
+function SnapshotModule({ table }: { table: DataTable }) {
+  const row = table.rows[0] ?? {};
+  const entries = table.columns
+    .map((column) => ({ column, value: row[column] ?? null }))
+    .filter((entry) => entry.value !== null)
+    .slice(0, 8);
+
+  if (entries.length === 0) {
+    return <p className="mt-3 text-sm text-slate-600">No snapshot rows were returned for this request.</p>;
+  }
+
+  return (
+    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {entries.map((entry) => (
+        <article key={entry.column} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{prettifyColumn(entry.column)}</p>
+          <p className="mt-1.5 text-sm font-semibold text-slate-900">{formatCell(entry.value)}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function SnapshotArtifactModule({ artifact }: { artifact: AnalysisArtifact }) {
+  const row = artifact.rows[0] ?? {};
+  const entries = artifact.columns
+    .map((column) => ({ column, value: row[column] ?? null }))
+    .filter((entry) => entry.value !== null)
+    .slice(0, 8);
+
+  if (entries.length === 0) {
+    return <p className="mt-3 text-sm text-slate-600">No snapshot rows were returned for this request.</p>;
+  }
+
+  return (
+    <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+      {entries.map((entry) => (
+        <article key={entry.column} className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">{prettifyColumn(entry.column)}</p>
+          <p className="mt-1.5 text-sm font-semibold text-slate-900">{formatCell(entry.value)}</p>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function TableModule({ table }: { table: DataTable }) {
+  const limitedRows = table.rows.slice(0, 20);
+  return (
+    <div className="mt-3 overflow-x-auto">
+      <table className="w-full min-w-[620px] border-separate border-spacing-y-2 text-left text-sm">
+        <thead>
+          <tr className="text-xs uppercase tracking-wide text-slate-500">
+            {table.columns.map((column) => (
+              <th key={column} className="px-2 py-1">
+                {prettifyColumn(column)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {limitedRows.map((row, index) => (
+            <tr key={`${table.id}-${index}`} className="rounded-xl bg-slate-50 text-slate-800">
+              {table.columns.map((column, colIndex) => (
+                <td
+                  key={`${table.id}-${index}-${column}`}
+                  className={`px-2 py-2 ${colIndex === 0 ? "rounded-l-xl font-medium" : ""} ${
+                    colIndex === table.columns.length - 1 ? "rounded-r-xl" : ""
+                  }`}
+                >
+                  {formatCell(row[column] ?? null)}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {table.rowCount > limitedRows.length ? (
+        <p className="mt-2 text-xs text-slate-600">Showing first {limitedRows.length} of {table.rowCount} rows.</p>
+      ) : null}
+    </div>
+  );
+}
+
+function preferredArtifact(
+  artifacts: AnalysisArtifact[],
+  primaryVisual: PrimaryVisual | undefined,
+): AnalysisArtifact | undefined {
+  const preferredKind = primaryVisual?.artifactKind;
+  if (!preferredKind) return artifacts[0];
+  return artifacts.find((artifact) => artifact.kind === preferredKind) ?? artifacts[0];
+}
+
+export function EvidenceTable({
+  rows,
+  artifacts,
+  primaryVisual,
+  analysisType,
+  dataTables,
+}: {
+  rows: EvidenceRow[];
+  artifacts?: AnalysisArtifact[];
+  primaryVisual?: PrimaryVisual;
+  analysisType?: AnalysisType;
+  dataTables?: DataTable[];
+}) {
   const [legacySortBy, setLegacySortBy] = useState<LegacySortKey>("contribution");
   const [activeArtifactId, setActiveArtifactId] = useState<string>("");
 
   const moduleArtifacts = useMemo(() => (artifacts ?? []).filter((artifact) => artifact.rows.length > 0), [artifacts]);
+  const resolvedVisualType = useMemo(
+    () =>
+      resolveVisualType({
+        analysisType,
+        primaryVisual,
+        artifacts: moduleArtifacts,
+        dataTables,
+      }),
+    [analysisType, primaryVisual, moduleArtifacts, dataTables],
+  );
+  const compatibleArtifacts = useMemo(() => {
+    const allowedKinds = artifactKindsForVisualType(resolvedVisualType);
+    if (!allowedKinds.length) return moduleArtifacts;
+    const allowed = new Set(allowedKinds);
+    return moduleArtifacts.filter((artifact) => allowed.has(artifact.kind) && isArtifactFinished(artifact));
+  }, [moduleArtifacts, resolvedVisualType]);
 
   useEffect(() => {
-    if (moduleArtifacts.length === 0) {
+    if (compatibleArtifacts.length === 0) {
       setActiveArtifactId("");
       return;
     }
-    const hasActive = moduleArtifacts.some((artifact) => artifact.id === activeArtifactId);
+    const hasActive = compatibleArtifacts.some((artifact) => artifact.id === activeArtifactId);
     if (!hasActive) {
-      setActiveArtifactId(moduleArtifacts[0].id);
+      const preferred = preferredArtifact(compatibleArtifacts, primaryVisual);
+      setActiveArtifactId(preferred?.id ?? compatibleArtifacts[0].id);
     }
-  }, [moduleArtifacts, activeArtifactId]);
+  }, [compatibleArtifacts, activeArtifactId, primaryVisual]);
 
   const activeArtifact = useMemo(
-    () => moduleArtifacts.find((artifact) => artifact.id === activeArtifactId) ?? moduleArtifacts[0],
-    [moduleArtifacts, activeArtifactId],
+    () => compatibleArtifacts.find((artifact) => artifact.id === activeArtifactId) ?? compatibleArtifacts[0],
+    [compatibleArtifacts, activeArtifactId],
   );
+  const fallbackSnapshotArtifact = useMemo(
+    () => moduleArtifacts.find((artifact) => isArtifactFinished(artifact)),
+    [moduleArtifacts],
+  );
+  const firstDataTable = dataTables?.[0];
 
   const sortedLegacyRows = useMemo(() => {
     return [...rows].sort((a, b) => {
@@ -401,22 +695,58 @@ export function EvidenceTable({ rows, artifacts }: { rows: EvidenceRow[]; artifa
     });
   }, [rows, legacySortBy]);
 
-  if (activeArtifact) {
+  if (resolvedVisualType === "snapshot" || resolvedVisualType === "table") {
     return (
       <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold tracking-wide text-slate-900">{activeArtifact.title}</h3>
-            <p className="text-xs text-slate-600">{artifactDescription(activeArtifact)}</p>
+            <h3 className="text-sm font-semibold tracking-wide text-slate-900">
+              {primaryVisual?.title?.trim() || (resolvedVisualType === "snapshot" ? "Snapshot" : "Data Table")}
+            </h3>
+            {primaryVisual?.description?.trim() ? <p className="text-xs text-slate-600">{primaryVisual.description.trim()}</p> : null}
+          </div>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700">
+            {resolvedVisualType === "snapshot" ? "Snapshot" : "Table"}
+          </span>
+        </div>
+
+        {resolvedVisualType === "snapshot" ? (
+          firstDataTable ? (
+            <SnapshotModule table={firstDataTable} />
+          ) : fallbackSnapshotArtifact ? (
+            <SnapshotArtifactModule artifact={fallbackSnapshotArtifact} />
+          ) : (
+            <p className="mt-3 text-sm text-slate-600">No snapshot rows were returned for this request.</p>
+          )
+        ) : firstDataTable ? (
+          <TableModule table={firstDataTable} />
+        ) : fallbackSnapshotArtifact ? (
+          <GenericModule artifact={fallbackSnapshotArtifact} />
+        ) : (
+          <p className="mt-3 text-sm text-slate-600">No table rows were returned for this request.</p>
+        )}
+      </section>
+    );
+  }
+
+  if (activeArtifact) {
+    const visualTitle = primaryVisual?.title?.trim() || activeArtifact.title;
+    const visualDescription = primaryVisual?.description?.trim() || artifactDescription(activeArtifact);
+    return (
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-semibold tracking-wide text-slate-900">{visualTitle}</h3>
+            <p className="text-xs text-slate-600">{visualDescription}</p>
           </div>
           <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold text-slate-700">
             {artifactLabel(activeArtifact.kind)}
           </span>
         </div>
 
-        {moduleArtifacts.length > 1 ? (
+        {compatibleArtifacts.length > 1 ? (
           <div className="mt-3 inline-flex max-w-full items-center gap-1 overflow-x-auto rounded-full bg-slate-100 p-1">
-            {moduleArtifacts.map((artifact) => (
+            {compatibleArtifacts.map((artifact) => (
               <button
                 key={artifact.id}
                 type="button"

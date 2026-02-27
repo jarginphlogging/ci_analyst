@@ -5,7 +5,7 @@ import { AnalysisTrace } from "@/components/analysis-trace";
 import { DataExplorer } from "@/components/data-explorer";
 import { EvidenceTable } from "@/components/evidence-table";
 import { readNdjsonStream } from "@/lib/stream";
-import type { AgentResponse, ChatMessage, ChatStreamEvent, DataTable, MetricPoint } from "@/lib/types";
+import type { AgentResponse, ChatMessage, ChatStreamEvent, DataTable, MetricPoint, SummaryCard } from "@/lib/types";
 
 const starterPrompts = [
   "Show me my sales in each state in descending order.",
@@ -140,6 +140,24 @@ function kpiMetrics(response: AgentResponse): KpiMetric[] {
   }
 
   return selected.slice(0, 3);
+}
+
+function summaryCardsForResponse(response: AgentResponse): SummaryCard[] {
+  const fromContract = (response.summaryCards ?? [])
+    .map((card) => ({
+      label: (card.label ?? "").trim(),
+      value: (card.value ?? "").trim(),
+      detail: (card.detail ?? "").trim(),
+    }))
+    .filter((card) => card.label && card.value)
+    .slice(0, 3);
+  if (fromContract.length > 0) return fromContract;
+
+  return kpiMetrics(response).map((metric) => ({
+    label: normalizeMetricLabel(metric.label),
+    value: formatMetric(metric),
+    detail: "",
+  }));
 }
 
 function parseDateValue(value: unknown): Date | null {
@@ -312,11 +330,10 @@ function formatRuntime(durationMs: number | undefined, isStreaming: boolean | un
   return `${minutes}m ${seconds}s`;
 }
 
-function nextActionText(question: string | undefined): string {
-  if (!question) {
-    return "Select a suggested follow-up question to continue the analysis.";
-  }
-  return `Run this next: ${question}`;
+function nextActionBody(questions: string[] | undefined): string {
+  const primary = questions?.[0]?.trim();
+  if (primary) return primary;
+  return "Ask a follow-up question to continue the analysis.";
 }
 
 function messageTime(iso: string): string {
@@ -383,6 +400,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     () => (latestResponse ? isFailureResponse(latestResponse) : false),
     [latestResponse],
   );
+  const latestNextAction = useMemo(() => nextActionBody(latestResponse?.suggestedQuestions), [latestResponse]);
   const showStarterPrompts = useMemo(() => !messages.some((message) => message.role === "user"), [messages]);
 
   useEffect(() => {
@@ -679,10 +697,11 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                               </section>
 
                               <section className="grid gap-3 sm:grid-cols-3">
-                                {kpiMetrics(message.response).map((metric, index) => (
-                                  <div key={`${metric.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                                    <p className="text-xs uppercase tracking-wide text-slate-500">{normalizeMetricLabel(metric.label)}</p>
-                                    <p className="mt-2 text-xl font-bold text-slate-900">{formatMetric(metric)}</p>
+                                {summaryCardsForResponse(message.response).map((card, index) => (
+                                  <div key={`${card.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                                    <p className="mt-2 text-xl font-bold text-slate-900">{card.value}</p>
+                                    {card.detail ? <p className="mt-1 text-sm text-slate-700">{card.detail}</p> : null}
                                   </div>
                                 ))}
                               </section>
@@ -690,7 +709,13 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                           );
                         })()}
 
-                        <EvidenceTable rows={message.response.evidence} artifacts={message.response.artifacts} />
+                        <EvidenceTable
+                          rows={message.response.evidence}
+                          artifacts={message.response.artifacts}
+                          primaryVisual={message.response.primaryVisual}
+                          analysisType={message.response.analysisType}
+                          dataTables={message.response.dataTables}
+                        />
                         <DataExplorer tables={buildRenderableTables(message.response)} />
 
                         <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">
@@ -814,20 +839,20 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Top Signal</p>
                   <p className="mt-1 text-sm font-semibold text-slate-900">{latestResponse.insights[0]?.title ?? "No insight yet"}</p>
-                </div>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-xs uppercase tracking-wide text-slate-500">Confidence Basis</p>
-                  <p className="mt-1 text-sm text-slate-700">
-                    {latestResponse.confidence === "high"
-                      ? "High confidence: the time window is complete, totals reconcile across views, and the ranked results match the exported source rows."
-                      : latestResponse.confidence === "medium"
-                        ? "Minor assumptions exist; decision-grade but verify downstream impact."
-                        : "Incomplete context requires clarifying constraints before acting."}
+                  <p className="mt-1 text-sm leading-relaxed text-slate-700">
+                    {latestResponse.insights[0]?.detail ?? "Run an analysis to populate signal context."}
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                  <p className="text-xs uppercase tracking-wide text-slate-500">Confidence Basis</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{toTitleCase(latestResponse.confidence)} confidence</p>
+                  {latestResponse.confidenceReason?.trim() ? (
+                    <p className="mt-1 text-sm leading-relaxed text-slate-700">{latestResponse.confidenceReason.trim()}</p>
+                  ) : null}
+                </div>
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Next Action</p>
-                  <p className="mt-1 text-sm text-slate-700">{nextActionText(latestResponse.suggestedQuestions[0])}</p>
+                  <p className="mt-1 text-sm leading-relaxed text-slate-700">{latestNextAction}</p>
                 </div>
               </div>
             )

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from app.config import settings
 from app.services.semantic_model import SemanticModel
 
 
@@ -20,6 +21,7 @@ FORBIDDEN_SQL_PATTERNS = [
 TABLE_REF_PATTERN = re.compile(r"\b(?:from|join)\s+([a-zA-Z0-9_.\"]+)", re.IGNORECASE)
 LIMIT_PATTERN = re.compile(r"\blimit\s+(\d+)\b", re.IGNORECASE)
 CTE_NAME_PATTERN = re.compile(r"(?:\bwith\b|,)\s*([a-zA-Z_][a-zA-Z0-9_]*)\s+as\s*\(", re.IGNORECASE)
+TABLE_REF_REWRITE_PATTERN = re.compile(r"\b(from|join)\s+([a-zA-Z0-9_.\"]+)", re.IGNORECASE)
 
 
 def _normalize_sql(sql: str) -> str:
@@ -34,6 +36,26 @@ def _extract_table_references(sql: str) -> set[str]:
             continue
         refs.add(cleaned)
     return refs
+
+
+def _canonical_table_name(raw_ref: str) -> str:
+    cleaned = raw_ref.strip().strip('"').lower()
+    parts = [part.strip('"').strip() for part in cleaned.split(".") if part.strip()]
+    return parts[-1] if parts else cleaned
+
+
+def _rewrite_qualified_table_refs_for_sandbox(sql: str, model: SemanticModel) -> str:
+    allowed = {table.name.lower() for table in model.tables}
+
+    def _replace(match: re.Match[str]) -> str:
+        keyword = match.group(1)
+        raw_ref = match.group(2)
+        canonical = _canonical_table_name(raw_ref)
+        if canonical in allowed and canonical != raw_ref.strip().strip('"').lower():
+            return f"{keyword} {canonical}"
+        return match.group(0)
+
+    return TABLE_REF_REWRITE_PATTERN.sub(_replace, sql)
 
 
 def _extract_cte_names(sql: str) -> set[str]:
@@ -84,7 +106,12 @@ def _enforce_limit(sql: str, model: SemanticModel) -> str:
 
 
 def guard_sql(sql: str, model: SemanticModel) -> str:
-    _enforce_select_only(sql)
-    _enforce_allowed_tables(sql, model)
-    _enforce_restricted_columns(sql, model)
-    return _enforce_limit(sql, model)
+    canonical_sql = sql
+    # Sandbox SCA may emit fully qualified table refs (db.schema.table) while the
+    # semantic-model allowlist stores canonical table names. Normalize only in sandbox mode.
+    if settings.provider_mode == "sandbox":
+        canonical_sql = _rewrite_qualified_table_refs_for_sandbox(sql, model)
+    _enforce_select_only(canonical_sql)
+    _enforce_allowed_tables(canonical_sql, model)
+    _enforce_restricted_columns(canonical_sql, model)
+    return _enforce_limit(canonical_sql, model)
