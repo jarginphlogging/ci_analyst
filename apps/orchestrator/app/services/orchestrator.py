@@ -121,8 +121,7 @@ class ConversationalOrchestrator:
 
     def _plan_summary(self, context: TurnExecutionContext) -> dict[str, Any]:
         return {
-            "analysisType": context.analysis_type,
-            "secondaryAnalysisType": context.secondary_analysis_type,
+            "presentationIntent": context.presentation_intent.model_dump(),
             "stepCount": len(context.plan),
             "steps": [
                 {
@@ -172,14 +171,14 @@ class ConversationalOrchestrator:
 
     def _response_summary(self, response: AgentResponse) -> dict[str, Any]:
         return {
-            "analysisType": response.analysisType,
-            "secondaryAnalysisType": response.secondaryAnalysisType,
+            "presentationIntent": response.presentationIntent.model_dump() if response.presentationIntent else None,
+            "chartConfig": response.chartConfig.model_dump() if response.chartConfig else None,
+            "tableConfig": response.tableConfig.model_dump() if response.tableConfig else None,
             "confidence": response.confidence,
             "answerPreview": self._preview_text(response.answer, max_chars=260),
             "metricLabels": [metric.label for metric in response.metrics[:5]],
             "summaryCardLabels": [card.label for card in response.summaryCards[:5]],
             "primaryVisual": response.primaryVisual.model_dump() if response.primaryVisual else None,
-            "presentationPlan": response.presentationPlan.model_dump() if response.presentationPlan else None,
             "insightTitles": [insight.title for insight in response.insights[:5]],
             "suggestedQuestions": response.suggestedQuestions[:3],
             "tableCount": len(response.dataTables),
@@ -476,17 +475,14 @@ class ConversationalOrchestrator:
         validation: ValidationResult,
         session_depth: int,
     ) -> AgentResponse:
+        _ = session_depth
         validation_step_id = "t3" if any(step.id == "t3" for step in response.trace) else "t4"
         response.trace = [
             (step.model_copy(update={"qualityChecks": validation.checks}) if step.id == validation_step_id else step)
             for step in response.trace
         ]
 
-        assumptions = [
-            *response.assumptions,
-            "Standard execution pipeline was used.",
-            f"Session memory depth: {session_depth} turn(s).",
-        ]
+        assumptions = list(response.assumptions)
         deduped: list[str] = []
         for item in assumptions:
             if item not in deduped:

@@ -54,54 +54,12 @@ def plan_prompt(
     max_steps: int,
     history: list[str],
 ) -> tuple[str, str]:
-    # Planner prompt intentionally keeps the contract strict and lets the LLM
-    # choose decomposition semantics. Python only validates the returned schema.
-    analysis_taxonomy = (
-        "trend_over_time, ranking_top_n_bottom_n, comparison, composition_breakdown, aggregation_summary_stats, "
-        "point_in_time_snapshot, period_over_period_change, anomaly_outlier_detection, drill_down_root_cause, "
-        "correlation_relationship, cohort_analysis, distribution_histogram, forecasting_projection, "
-        "threshold_filter_segmentation, cumulative_running_total, rate_ratio_efficiency"
-    )
-    analysis_taxonomy_guidance = (
-        "Analysis taxonomy guidance:\n"
-        "- trend_over_time: How has X changed over period Y? Revenue by quarter, loan originations month-over-month, headcount growth year-over-year. "
-        "Primary visual shape: time-ordered series.\n"
-        "- ranking_top_n_bottom_n: Who are the top 10 clients by AUM? What are the worst-performing products? Which branches have the most delinquencies? "
-        "Primary visual shape: ranked entities with metric values.\n"
-        "- comparison: How does A compare to B? Region vs region, product vs product, this year vs last year, actuals vs budget/forecast. "
-        "Primary visual shape: side-by-side groups/periods with deltas when relevant.\n"
-        "- composition_breakdown: What makes up the whole? Revenue by business line, loan portfolio by risk rating, expenses by category. "
-        "Primary visual shape: parts-of-whole breakdown.\n"
-        "- aggregation_summary_stats: What is the total, average, median, count, min, max of X? "
-        "Primary visual shape: compact KPI/snapshot summary.\n"
-        "- point_in_time_snapshot: What is the current state of X? Outstanding balance right now, current headcount, today's pipeline value. "
-        "Primary visual shape: as-of snapshot values.\n"
-        "- period_over_period_change: Specifically about deltas: what is the MoM growth rate, QoQ change, YoY variance. "
-        "Primary visual shape: prior vs current with change values/percent.\n"
-        "- anomaly_outlier_detection: What looks unusual? Spikes, drops, values outside expected ranges. "
-        "Primary visual shape: series/distribution highlighting outliers.\n"
-        "- drill_down_root_cause: Why did X happen? Start at aggregate and decompose by dimensions to find the driver. "
-        "Primary visual shape: ordered driver decomposition.\n"
-        "- correlation_relationship: Does X move with Y? Is there a relationship between two measures? "
-        "Primary visual shape: paired values suitable for relationship comparison.\n"
-        "- cohort_analysis: How does group A (shared starting event/attribute) behave over time compared to group B? "
-        "Primary visual shape: cohort by period matrix/series.\n"
-        "- distribution_histogram: How is X spread across a population? "
-        "Primary visual shape: buckets/percentiles/distribution summary.\n"
-        "- forecasting_projection: What will X be in the future based on current trajectory? "
-        "Primary visual shape: historical trend with projected periods.\n"
-        "- threshold_filter_segmentation: Which records meet criteria X? "
-        "Primary visual shape: filtered record list/table.\n"
-        "- cumulative_running_total: How does X accumulate over time? YTD and running totals. "
-        "Primary visual shape: time-ordered running total.\n"
-        "- rate_ratio_efficiency: What is the conversion rate, utilization rate, cost per unit, or ratio of X to Y? "
-        "Primary visual shape: ratio/rate comparisons by group or time."
-    )
     system = (
         "You are a relevance-and-delegation planner for Customer Insights analytics. "
         "Your sub-analysts are Snowflake Cortex Analysts (SCA) who are experts in the data domain. "
         "Your job is only to decide relevance and produce independent delegation tasks. "
         "Do not solve the analysis yourself and do not write SQL. "
+        "Also determine a presentation intent for the final user-facing response. "
         "Break in-domain requests into the minimum number of independent tasks for parallel SCA execution. "
         "Each task must include enough business context for SCA to act without follow-up. "
         "Return strict JSON only."
@@ -111,14 +69,15 @@ def plan_prompt(
         f"{planner_scope_context}\n\n"
         f"Max steps: {max_steps}\n"
         f"Question: {user_message}\n\n"
-        f"{analysis_taxonomy_guidance}\n\n"
         "Return JSON with keys:\n"
         '- "relevance": one of in_domain|out_of_domain|unclear\n'
         '- "relevanceReason": short string\n'
-        f'- "analysisType": one of {analysis_taxonomy}\n'
-        '- "secondaryAnalysisType": optional one of the same taxonomy values (omit when not needed)\n'
+        '- "presentationIntent": object with keys {displayType,chartType,tableStyle,rationale}\n'
         '- "tooComplex": boolean (true only if minimum independent decomposition requires more than max steps)\n'
         '- "tasks": array of objects (empty when relevance=out_of_domain or tooComplex=true)\n'
+        'For presentationIntent: displayType is one of inline|table|chart. '
+        'chartType is one of line|bar|stacked_bar|grouped_bar (only when displayType=chart). '
+        'tableStyle is one of simple|ranked|comparison (only when displayType=table).\n'
         'Each task object must include: {"task":"natural-language task with all context needed for an independent Snowflake Cortex Analyst"}\n'
         "Rules:\n"
         "- Use the minimum number of independent tasks.\n"
@@ -180,10 +139,7 @@ def sql_prompt(
 def response_prompt(
     user_message: str,
     route: str,
-    analysis_type: str,
-    visual_type: str,
-    required_bindings: list[str],
-    default_sort: list[str],
+    presentation_intent: str,
     result_summary: str,
     evidence_summary: str,
     history: list[str],
@@ -198,10 +154,7 @@ def response_prompt(
     user = (
         f"Conversation history:\n{_history_text(history)}\n\n"
         f"Question: {user_message}\n"
-        f"Analysis type: {analysis_type}\n"
-        f"Primary visual type: {visual_type}\n"
-        f"Required presentation bindings: {', '.join(required_bindings) if required_bindings else '(none)'}\n"
-        f"Default sort (binding:asc|desc): {', '.join(default_sort) if default_sort else '(none)'}\n"
+        f"Presentation intent: {presentation_intent}\n"
         "\n"
         f"Synthesis context package:\n{result_summary}\n\n"
         f"Evidence summary:\n{evidence_summary}\n\n"
@@ -211,18 +164,15 @@ def response_prompt(
         '- "confidence": one of high|medium|low\n'
         '- "confidenceReason": concise rationale for the selected confidence level grounded in provided summaries\n'
         '- "summaryCards": array of 1-3 objects with keys {label,value,detail(optional)}\n'
-        '- "primaryVisual": object with keys {title,description(optional),visualType(one of trend|ranking|comparison|distribution|snapshot|table),artifactKind(optional one of ranking_breakdown|comparison_breakdown|delta_breakdown|trend_breakdown|distribution_breakdown)}\n'
-        '- "presentationPlan": object with keys {analysisType,visualType,tableId,title,scopeLabel,bindings,sort,notes(optional)}\n'
+        '- "chartConfig": object or null with keys {type,x,y,series,xLabel,yLabel,yFormat}\n'
+        '- "tableConfig": object or null with keys {style,columns,sortBy,sortDir,showRank}\n'
         '- "insights": array of up to 4 objects with keys {title,detail,importance(high|medium)}\n'
         '- "suggestedQuestions": array of 3 strings\n'
-        '- "assumptions": array of up to 4 strings\n'
-        "presentationPlan rules:\n"
-        "- analysisType must equal the provided analysis type.\n"
-        "- visualType must equal the provided primary visual type.\n"
-        "- tableId must reference one of the returned data tables.\n"
-        "- bindings must include every required binding name using table column names.\n"
-        "- For missing string dimensions only, you may use const:<value> as binding value.\n"
-        "- Do not fabricate numeric/time values through constants.\n"
-        "- sort entries must use format binding:asc or binding:desc."
+        '- "assumptions": array of up to 5 high-value strings grounded in the provided analysis context; exclude internal pipeline/debug notes\n'
+        "Visual rules:\n"
+        "- Use chartConfig when a chart is meaningful for the intent and data shape.\n"
+        "- Use tableConfig when a table is more readable or chart is not reliable.\n"
+        "- Set chartConfig or tableConfig to null when not applicable.\n"
+        "- Never reference columns that are not present in returned table summaries."
     )
     return system, user

@@ -7,24 +7,6 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 JsonValue = Optional[Union[str, int, float, bool]]
-AnalysisType = Literal[
-    "trend_over_time",
-    "ranking_top_n_bottom_n",
-    "comparison",
-    "composition_breakdown",
-    "aggregation_summary_stats",
-    "point_in_time_snapshot",
-    "period_over_period_change",
-    "anomaly_outlier_detection",
-    "drill_down_root_cause",
-    "correlation_relationship",
-    "cohort_analysis",
-    "distribution_histogram",
-    "forecasting_projection",
-    "threshold_filter_segmentation",
-    "cumulative_running_total",
-    "rate_ratio_efficiency",
-]
 ArtifactKind = Literal[
     "ranking_breakdown",
     "comparison_breakdown",
@@ -33,6 +15,9 @@ ArtifactKind = Literal[
     "distribution_breakdown",
 ]
 VisualType = Literal["trend", "ranking", "comparison", "distribution", "snapshot", "table"]
+DisplayType = Literal["inline", "table", "chart"]
+ChartType = Literal["line", "bar", "stacked_bar", "grouped_bar"]
+TableStyle = Literal["simple", "ranked", "comparison"]
 
 
 class ChatTurnRequest(BaseModel):
@@ -112,15 +97,36 @@ class PrimaryVisual(BaseModel):
     artifactKind: Optional[ArtifactKind] = None
 
 
-class PresentationPlan(BaseModel):
-    analysisType: AnalysisType
-    visualType: VisualType
-    tableId: str
-    title: str
-    scopeLabel: str
-    bindings: dict[str, str] = Field(default_factory=dict)
-    sort: list[str] = Field(default_factory=list)
-    notes: str = ""
+class PresentationIntent(BaseModel):
+    displayType: DisplayType
+    chartType: Optional[ChartType] = None
+    tableStyle: Optional[TableStyle] = None
+    rationale: str = ""
+
+
+class ChartConfig(BaseModel):
+    type: ChartType
+    x: str
+    y: Union[str, list[str]]
+    series: Optional[str] = None
+    xLabel: str = ""
+    yLabel: str = ""
+    yFormat: Literal["currency", "number", "percent"] = "number"
+
+
+class TableColumnConfig(BaseModel):
+    key: str
+    label: str
+    format: Literal["currency", "number", "percent", "date", "string"]
+    align: Literal["left", "right"] = "left"
+
+
+class TableConfig(BaseModel):
+    style: TableStyle = "simple"
+    columns: list[TableColumnConfig] = Field(default_factory=list)
+    sortBy: Optional[str] = None
+    sortDir: Optional[Literal["asc", "desc"]] = None
+    showRank: bool = False
 
 
 class AgentResponse(BaseModel):
@@ -128,8 +134,9 @@ class AgentResponse(BaseModel):
     confidence: Literal["high", "medium", "low"]
     confidenceReason: str = ""
     whyItMatters: str
-    analysisType: AnalysisType = "aggregation_summary_stats"
-    secondaryAnalysisType: Optional[AnalysisType] = None
+    presentationIntent: Optional[PresentationIntent] = None
+    chartConfig: Optional[ChartConfig] = None
+    tableConfig: Optional[TableConfig] = None
     metrics: list[MetricPoint]
     evidence: list[EvidenceRow]
     insights: list[Insight]
@@ -138,7 +145,6 @@ class AgentResponse(BaseModel):
     trace: list[TraceStep]
     summaryCards: list[SummaryCard] = Field(default_factory=list)
     primaryVisual: Optional[PrimaryVisual] = None
-    presentationPlan: Optional[PresentationPlan] = None
     dataTables: list[DataTable] = Field(default_factory=list)
     artifacts: list[AnalysisArtifact] = Field(default_factory=list)
 
@@ -159,8 +165,6 @@ class QueryPlanStep(BaseModel):
 class SynthesisQueryContext(BaseModel):
     originalUserQuery: str
     route: str
-    analysisType: AnalysisType = "aggregation_summary_stats"
-    secondaryAnalysisType: Optional[AnalysisType] = None
 
 
 class SynthesisVisualArtifact(BaseModel):

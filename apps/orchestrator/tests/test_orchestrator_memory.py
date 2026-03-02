@@ -131,4 +131,4 @@ async def test_orchestrator_carries_prior_history_only() -> None:
     assert dependencies.plan_histories[1] == expected_history
     assert dependencies.sql_histories[1] == expected_history
     assert dependencies.response_histories[1] == expected_history
-    assert "Session memory depth: 2 turn(s)." in second_turn.response.assumptions
+    assert second_turn.response.assumptions == ["A1"]

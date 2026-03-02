@@ -64,24 +64,6 @@ export interface AnalysisArtifact {
   detectedGrain?: string;
 }
 
-export type AnalysisType =
-  | "trend_over_time"
-  | "ranking_top_n_bottom_n"
-  | "comparison"
-  | "composition_breakdown"
-  | "aggregation_summary_stats"
-  | "point_in_time_snapshot"
-  | "period_over_period_change"
-  | "anomaly_outlier_detection"
-  | "drill_down_root_cause"
-  | "correlation_relationship"
-  | "cohort_analysis"
-  | "distribution_histogram"
-  | "forecasting_projection"
-  | "threshold_filter_segmentation"
-  | "cumulative_running_total"
-  | "rate_ratio_efficiency";
-
 export interface SummaryCard {
   label: string;
   value: string;
@@ -95,15 +77,36 @@ export interface PrimaryVisual {
   artifactKind?: AnalysisArtifact["kind"];
 }
 
-export interface PresentationPlan {
-  analysisType: AnalysisType;
-  visualType: "trend" | "ranking" | "comparison" | "distribution" | "snapshot" | "table";
-  tableId: string;
-  title: string;
-  scopeLabel: string;
-  bindings: Record<string, string>;
-  sort: string[];
-  notes?: string;
+export interface PresentationIntent {
+  displayType: "inline" | "table" | "chart";
+  chartType?: "line" | "bar" | "stacked_bar" | "grouped_bar" | null;
+  tableStyle?: "simple" | "ranked" | "comparison" | null;
+  rationale?: string;
+}
+
+export interface ChartConfig {
+  type: "line" | "bar" | "stacked_bar" | "grouped_bar";
+  x: string;
+  y: string | string[];
+  series?: string | null;
+  xLabel?: string;
+  yLabel?: string;
+  yFormat?: "currency" | "number" | "percent";
+}
+
+export interface TableColumnConfig {
+  key: string;
+  label: string;
+  format: "currency" | "number" | "percent" | "date" | "string";
+  align: "left" | "right";
+}
+
+export interface TableConfig {
+  style: "simple" | "ranked" | "comparison";
+  columns: TableColumnConfig[];
+  sortBy?: string | null;
+  sortDir?: "asc" | "desc" | null;
+  showRank?: boolean;
 }
 
 export interface AgentResponse {
@@ -111,8 +114,9 @@ export interface AgentResponse {
   confidence: "high" | "medium" | "low";
   confidenceReason?: string;
   whyItMatters: string;
-  analysisType?: AnalysisType;
-  secondaryAnalysisType?: AnalysisType;
+  presentationIntent?: PresentationIntent;
+  chartConfig?: ChartConfig | null;
+  tableConfig?: TableConfig | null;
   metrics: MetricPoint[];
   evidence: EvidenceRow[];
   insights: Insight[];
@@ -121,7 +125,6 @@ export interface AgentResponse {
   trace: TraceStep[];
   summaryCards?: SummaryCard[];
   primaryVisual?: PrimaryVisual;
-  presentationPlan?: PresentationPlan;
   dataTables: DataTable[];
   artifacts?: AnalysisArtifact[];
 }

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
+
 import pytest
 
-from app.models import QueryPlanStep, SqlExecutionResult
+from app.models import PresentationIntent, QueryPlanStep, SqlExecutionResult
 from app.services.stages.synthesis_stage import SynthesisStage
 
 
@@ -22,24 +24,14 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
                 {"label": "Total Sales", "value": "$98.4M", "detail": "Full month aggregate"},
                 {"label": "MoM Change", "value": "+4.2%"},
             ],
-            "primaryVisual": {
-                "title": "Sales Trend by State",
-                "description": "Trend view for the selected period.",
-                "artifactKind": "trend_breakdown",
-            },
-            "presentationPlan": {
-                "analysisType": "comparison",
-                "visualType": "comparison",
-                "tableId": "sql_step_1",
-                "title": "Comparison by State",
-                "scopeLabel": "Returned SQL output",
-                "bindings": {
-                    "entity_label": "transaction_state",
-                    "left_value": "prior_value",
-                    "right_value": "current_value",
-                    "delta_value": "change_value",
-                },
-                "sort": ["delta_value:desc"],
+            "chartConfig": {
+                "type": "grouped_bar",
+                "x": "transaction_state",
+                "y": ["prior_value", "current_value"],
+                "series": None,
+                "xLabel": "State",
+                "yLabel": "Value",
+                "yFormat": "number",
             },
             "insights": [
                 {
@@ -89,8 +81,7 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
         message="Compare Q4 2025 performance by state.",
         route="deep_path",
         plan=plan,
-        analysis_type="comparison",
-        secondary_analysis_type="trend_over_time",
+        presentation_intent=PresentationIntent(displayType="chart", chartType="grouped_bar"),
         results=results,
         prior_assumptions=[],
         history=[],
@@ -99,14 +90,16 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
     assert response.answer == "Synthesis answer"
     assert response.confidenceReason
     assert response.summaryCards
-    assert response.primaryVisual is not None
-    assert response.presentationPlan is not None
+    assert response.chartConfig is not None
     prompt_text = captured_prompts["user"]
-    assert '"originalUserQuery":"Compare Q4 2025 performance by state."' in prompt_text
-    assert '"analysisType":"comparison"' in prompt_text
-    assert '"secondaryAnalysisType":"trend_over_time"' in prompt_text
-    assert '"plan":[{"id":"step_1","goal":"Compute spend and transaction trend by state for Q4 2025."' in prompt_text
-    assert '"executedSql":"SELECT transaction_state, current_value, prior_value, change_value FROM cia_sales_insights_cortex"' in prompt_text
+    assert re.search(r'"originalUserQuery"\s*:\s*"Compare Q4 2025 performance by state\."', prompt_text)
+    assert re.search(r'"displayType"\s*:\s*"chart"', prompt_text)
+    assert re.search(r'"chartType"\s*:\s*"grouped_bar"', prompt_text)
+    assert re.search(r'"plan"\s*:\s*\[\s*\{\s*"id"\s*:\s*"step_1"', prompt_text)
+    assert re.search(
+        r'"executedSql"\s*:\s*"SELECT transaction_state, current_value, prior_value, change_value FROM cia_sales_insights_cortex"',
+        prompt_text,
+    )
     assert '"availableVisualArtifacts"' in prompt_text
     assert '"tableSummary":' in prompt_text
     assert '"numericStats"' in prompt_text

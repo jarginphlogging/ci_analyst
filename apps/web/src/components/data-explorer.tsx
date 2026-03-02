@@ -147,9 +147,7 @@ export function DataExplorer({ tables }: { tables: DataTable[] }) {
             </details>
           ) : null}
         </>
-      ) : (
-        <p className="mt-3 text-xs text-slate-600">Collapsed by default. Expand to view and export retrieved data.</p>
-      )}
+      ) : null}
     </section>
   );
 }

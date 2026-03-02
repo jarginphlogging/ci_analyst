@@ -155,8 +155,7 @@ class RealDependencies:
         return TurnExecutionContext(
             route=EXECUTION_MODE,
             plan=decision.steps,
-            analysis_type=decision.analysis_type,
-            secondary_analysis_type=decision.secondary_analysis_type,
+            presentation_intent=decision.presentation_intent,
         )
 
     async def run_sql(
@@ -194,8 +193,7 @@ class RealDependencies:
             message=request.message,
             route=context.route,
             plan=context.plan,
-            analysis_type=context.analysis_type,
-            secondary_analysis_type=context.secondary_analysis_type,
+            presentation_intent=context.presentation_intent,
             results=results,
             prior_assumptions=context.sql_assumptions,
             history=history,
@@ -212,8 +210,7 @@ class RealDependencies:
             message=request.message,
             route=context.route,
             plan=context.plan,
-            analysis_type=context.analysis_type,
-            secondary_analysis_type=context.secondary_analysis_type,
+            presentation_intent=context.presentation_intent,
             results=results,
             prior_assumptions=context.sql_assumptions,
             history=history,

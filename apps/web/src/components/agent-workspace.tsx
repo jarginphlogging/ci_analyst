@@ -723,14 +723,11 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                         </section>
 
                         <EvidenceTable
-                          rows={message.response.evidence}
-                          artifacts={message.response.artifacts}
+                          chartConfig={message.response.chartConfig}
+                          tableConfig={message.response.tableConfig}
                           primaryVisual={message.response.primaryVisual}
-                          presentationPlan={message.response.presentationPlan}
-                          analysisType={message.response.analysisType}
                           dataTables={message.response.dataTables}
                         />
-                        <DataExplorer tables={buildRenderableTables(message.response)} />
 
                         <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">
                           <h3 className="text-sm font-semibold tracking-wide text-slate-900">Priority Insights</h3>
@@ -755,29 +752,50 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                               ))}
                           </div>
                         </section>
+                        <DataExplorer tables={buildRenderableTables(message.response)} />
 
                         <AnalysisTrace steps={message.response.trace} />
 
-                        <section className="grid gap-3 md:grid-cols-2">
-                          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                            <p className="text-xs uppercase tracking-wide text-slate-500">Assumptions</p>
-                            <ul className="mt-2 list-disc space-y-2 pl-5 text-sm leading-relaxed text-slate-700 marker:text-slate-400">
-                              {message.response.assumptions.map((item) => (
-                                <li key={item}>{item}</li>
-                              ))}
-                            </ul>
-                          </div>
+                        <section className={`grid gap-3 ${(message.response.assumptions ?? []).length > 0 ? "md:grid-cols-2" : ""}`}>
+                          {(message.response.assumptions ?? []).length > 0 ? (
+                            <div className="rounded-xl border border-slate-200 bg-[linear-gradient(180deg,rgba(248,251,255,0.95),rgba(241,246,252,0.92))] p-3">
+                              <p className="text-xs uppercase tracking-wide text-slate-500">Assumptions</p>
+                              <p className="mt-1 text-xs text-slate-600">Interpretation constraints used for this answer.</p>
+                              <ol className="mt-2 space-y-2">
+                                {message.response.assumptions.map((item, index) => (
+                                  <li
+                                    key={item}
+                                    className="flex items-start gap-2.5 rounded-lg border border-slate-200/80 bg-white/90 px-2.5 py-2 text-sm leading-relaxed text-slate-700 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.5)]"
+                                  >
+                                    <span className="mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1 text-[11px] font-semibold text-slate-700">
+                                      {index + 1}
+                                    </span>
+                                    <span className="flex-1">{item}</span>
+                                  </li>
+                                ))}
+                              </ol>
+                            </div>
+                          ) : null}
                           <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                             <p className="text-xs uppercase tracking-wide text-slate-500">Suggested Next Questions</p>
-                            <div className="mt-2 flex flex-wrap gap-2">
-                              {message.response.suggestedQuestions.map((question) => (
+                            <p className="mt-1 text-xs text-slate-600">Pick one to auto-fill the composer.</p>
+                            <div className="mt-2 space-y-2">
+                              {message.response.suggestedQuestions.map((question, index) => (
                                 <button
                                   key={question}
                                   onClick={() => setInput(question)}
-                                  className="rounded-full border border-slate-300 bg-white px-3 py-1.5 text-left text-xs font-medium text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800"
+                                  className="group flex w-full items-start gap-3 rounded-xl border border-slate-300/90 bg-white px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-500 hover:shadow-[0_10px_20px_rgba(14,44,68,0.10)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 active:translate-y-0"
                                   type="button"
                                 >
-                                  {question}
+                                  <span className="mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1 text-[11px] font-semibold text-slate-700 group-hover:bg-cyan-100 group-hover:text-cyan-800">
+                                    {index + 1}
+                                  </span>
+                                  <span className="flex-1 text-sm font-medium leading-relaxed text-slate-800 group-hover:text-slate-900">
+                                    {question}
+                                  </span>
+                                  <span className="pt-0.5 text-sm text-slate-400 group-hover:text-cyan-700" aria-hidden="true">
+                                    →
+                                  </span>
                                 </button>
                               ))}
                             </div>
@@ -835,11 +853,11 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
 
         <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur">
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
-            <p className="text-xl font-bold text-slate-100">Snapshot</p>
+            <p className="text-xl font-bold text-slate-100">Current Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">
               {latestResponseIsFailure
                 ? "Latest request failed. Open the trace for diagnostics."
-                : "Review top signals, confidence context, and suggested next actions."}
+                : "Review top signals, confidence context, and suggested next actions for your latest query."}
             </p>
           </div>
 
