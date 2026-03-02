@@ -27,6 +27,20 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
                 "description": "Trend view for the selected period.",
                 "artifactKind": "trend_breakdown",
             },
+            "presentationPlan": {
+                "analysisType": "comparison",
+                "visualType": "comparison",
+                "tableId": "sql_step_1",
+                "title": "Comparison by State",
+                "scopeLabel": "Returned SQL output",
+                "bindings": {
+                    "entity_label": "transaction_state",
+                    "left_value": "prior_value",
+                    "right_value": "current_value",
+                    "delta_value": "change_value",
+                },
+                "sort": ["delta_value:desc"],
+            },
             "insights": [
                 {
                     "title": "Top movement",
@@ -86,6 +100,7 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
     assert response.confidenceReason
     assert response.summaryCards
     assert response.primaryVisual is not None
+    assert response.presentationPlan is not None
     prompt_text = captured_prompts["user"]
     assert '"originalUserQuery":"Compare Q4 2025 performance by state."' in prompt_text
     assert '"analysisType":"comparison"' in prompt_text

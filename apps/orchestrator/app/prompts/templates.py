@@ -54,6 +54,8 @@ def plan_prompt(
     max_steps: int,
     history: list[str],
 ) -> tuple[str, str]:
+    # Planner prompt intentionally keeps the contract strict and lets the LLM
+    # choose decomposition semantics. Python only validates the returned schema.
     analysis_taxonomy = (
         "trend_over_time, ranking_top_n_bottom_n, comparison, composition_breakdown, aggregation_summary_stats, "
         "point_in_time_snapshot, period_over_period_change, anomaly_outlier_detection, drill_down_root_cause, "
@@ -132,7 +134,6 @@ def plan_prompt(
         "- Do not write SQL. Write only executable analysis instructions for SCA.\n"
         "- Do not mention table names, column names, or semantic-model field names in tasks.\n"
         "- Do not add extra metrics, breakdowns, or comparisons not requested by the user.\n"
-        "- Ensure at least one delegated task explicitly requests output shape suitable for the primary visual implied by analysisType.\n"
         "- Prefer task sets where each output table is meaningful on its own, not only after synthesis."
     )
     return system, user
@@ -152,9 +153,7 @@ def sql_prompt(
     retry_text = _retry_feedback_text(retry_feedback)
     system = (
         "You are a SQL generator sub-analyst for Snowflake Cortex Analyst in a bank. "
-        "You can respond with one of four outcomes: sql_ready, clarification, technical_failure, or not_relevant. "
-        "Use clarification only for genuine business ambiguity (missing metric, grain, or time window). "
-        "Use technical_failure for SQL/compiler/runtime issues so the orchestrator can retry automatically. "
+        "You can respond with one of three outcomes: sql_ready, clarification, or not_relevant. "
         "When sql_ready, return one read-only SELECT statement compatible with Snowflake SQL. "
         "Use only allowlisted tables and no restricted columns. Return strict JSON only."
     )
@@ -168,17 +167,12 @@ def sql_prompt(
         f"Prior SQL in this turn:\n{prior_text}\n\n"
         f"Retry feedback from prior attempts (use this to avoid repeating known failures):\n{retry_text}\n\n"
         "Output JSON keys:\n"
-        '- "generationType": one of sql_ready|clarification|technical_failure|not_relevant\n'
+        '- "generationType": one of sql_ready|clarification|not_relevant\n'
         '- "sql": string (required when generationType=sql_ready)\n'
         '- "rationale": string\n'
         '- "clarificationQuestion": string (required when generationType=clarification)\n'
-        '- "error": string (required when generationType=technical_failure; concise technical reason)\n'
         '- "notRelevantReason": string (required when generationType=not_relevant)\n'
-        '- "assumptions": array of strings\n'
-        "SQL quality rules:\n"
-        "- For set operations (UNION/UNION ALL), ensure final ORDER BY uses projected output columns only.\n"
-        "- Include deterministic tie-breakers in ORDER BY (for example, business key after metric sort).\n"
-        "- If custom sort precedence is needed, project an explicit sort key in SELECT and order by that key."
+        '- "assumptions": array of strings'
     )
     return system, user
 
@@ -186,6 +180,10 @@ def sql_prompt(
 def response_prompt(
     user_message: str,
     route: str,
+    analysis_type: str,
+    visual_type: str,
+    required_bindings: list[str],
+    default_sort: list[str],
     result_summary: str,
     evidence_summary: str,
     history: list[str],
@@ -200,6 +198,10 @@ def response_prompt(
     user = (
         f"Conversation history:\n{_history_text(history)}\n\n"
         f"Question: {user_message}\n"
+        f"Analysis type: {analysis_type}\n"
+        f"Primary visual type: {visual_type}\n"
+        f"Required presentation bindings: {', '.join(required_bindings) if required_bindings else '(none)'}\n"
+        f"Default sort (binding:asc|desc): {', '.join(default_sort) if default_sort else '(none)'}\n"
         "\n"
         f"Synthesis context package:\n{result_summary}\n\n"
         f"Evidence summary:\n{evidence_summary}\n\n"
@@ -210,8 +212,17 @@ def response_prompt(
         '- "confidenceReason": concise rationale for the selected confidence level grounded in provided summaries\n'
         '- "summaryCards": array of 1-3 objects with keys {label,value,detail(optional)}\n'
         '- "primaryVisual": object with keys {title,description(optional),visualType(one of trend|ranking|comparison|distribution|snapshot|table),artifactKind(optional one of ranking_breakdown|comparison_breakdown|delta_breakdown|trend_breakdown|distribution_breakdown)}\n'
+        '- "presentationPlan": object with keys {analysisType,visualType,tableId,title,scopeLabel,bindings,sort,notes(optional)}\n'
         '- "insights": array of up to 4 objects with keys {title,detail,importance(high|medium)}\n'
         '- "suggestedQuestions": array of 3 strings\n'
-        '- "assumptions": array of up to 4 strings'
+        '- "assumptions": array of up to 4 strings\n'
+        "presentationPlan rules:\n"
+        "- analysisType must equal the provided analysis type.\n"
+        "- visualType must equal the provided primary visual type.\n"
+        "- tableId must reference one of the returned data tables.\n"
+        "- bindings must include every required binding name using table column names.\n"
+        "- For missing string dimensions only, you may use const:<value> as binding value.\n"
+        "- Do not fabricate numeric/time values through constants.\n"
+        "- sort entries must use format binding:asc or binding:desc."
     )
     return system, user

@@ -14,30 +14,14 @@ from app.services.stages.sql_stage_models import GeneratedStep
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
-_TECHNICAL_ERROR_TOKENS = (
-    "syntax error",
-    "sql error",
-    "database error",
-    "execution failed",
-    "compilation",
-    "invalid identifier",
-    "no such",
-    "does not exist",
-    "not found",
-    "order by term does not match",
-    "warehouse error",
-    "permission denied",
-)
 
 
-def _normalize_generation_type(raw_type: Any) -> Literal["sql_ready", "clarification", "technical_failure", "not_relevant"]:
+def _normalize_generation_type(raw_type: Any) -> Literal["sql_ready", "clarification", "not_relevant"]:
     normalized = str(raw_type or "").strip().lower().replace("-", "_")
     if normalized in {"sql_ready", "answer", "sql"}:
         return "sql_ready"
     if normalized in {"clarification", "clarify"}:
         return "clarification"
-    if normalized in {"technical_failure", "execution_error", "runtime_error", "sql_error"}:
-        return "technical_failure"
     if normalized in {"not_relevant", "out_of_domain", "irrelevant"}:
         return "not_relevant"
     return "sql_ready"
@@ -51,23 +35,6 @@ def _normalize_rows(value: Any) -> list[dict[str, Any]] | None:
         if isinstance(item, dict):
             normalized.append(item)
     return normalized
-
-
-def _is_technical_error_text(text: str) -> bool:
-    normalized = str(text).strip().lower()
-    if not normalized:
-        return False
-    return any(token in normalized for token in _TECHNICAL_ERROR_TOKENS)
-
-
-def _assumptions_indicate_sql_failure(assumptions: list[str]) -> bool:
-    for item in assumptions:
-        lowered = item.strip().lower()
-        if "sql execution attempt" in lowered and "failed" in lowered:
-            return True
-        if "sql generation attempt" in lowered and "failed" in lowered:
-            return True
-    return False
 
 
 class SqlStepGenerator:
@@ -144,21 +111,14 @@ class SqlStepGenerator:
         rationale = str(analyst_payload.get("lightResponse", "") or analyst_payload.get("explanation", "")).strip()
         assumptions = as_string_list(analyst_payload.get("assumptions"), max_items=4)
         payload_rows = _normalize_rows(analyst_payload.get("rows"))
-        technical_error = str(analyst_payload.get("error", "")).strip()
 
         guarded_sql = guard_sql(candidate_sql, self._model) if candidate_sql else None
         if generation_type == "sql_ready" and not guarded_sql:
-            generation_type = "technical_failure"
-            technical_error = technical_error or "Generated SQL violated guardrails."
-
-        if generation_type == "clarification":
-            if _is_technical_error_text(clarification_question):
-                technical_error = technical_error or clarification_question
-                clarification_question = ""
-                generation_type = "technical_failure"
-            elif attempted_sql and _assumptions_indicate_sql_failure(assumptions):
-                generation_type = "technical_failure"
-                technical_error = technical_error or "Generated SQL failed execution."
+            generation_type = "clarification"
+            clarification_question = (
+                clarification_question
+                or "Could you clarify the metric, segment, and time window so I can generate the right SQL?"
+            )
 
         return GeneratedStep(
             index=-1,
@@ -169,7 +129,6 @@ class SqlStepGenerator:
             rationale=rationale,
             assumptions=assumptions,
             clarification_question=clarification_question,
-            technical_error=technical_error,
             not_relevant_reason=not_relevant_reason,
             attempted_sql=attempted_sql or None,
             rows=payload_rows,
@@ -189,10 +148,9 @@ class SqlStepGenerator:
         sql_text = ""
         rationale = ""
         clarification_question = ""
-        technical_error = ""
         not_relevant_reason = ""
         assumptions: list[str] = []
-        generation_type: Literal["sql_ready", "clarification", "technical_failure", "not_relevant"] = "sql_ready"
+        generation_type: Literal["sql_ready", "clarification", "not_relevant"] = "sql_ready"
         attempted_sql: str | None = None
 
         try:
@@ -231,45 +189,31 @@ class SqlStepGenerator:
             candidate_sql = str(payload.get("sql", "")).strip()
             attempted_sql = candidate_sql or attempted_sql
             assumptions.extend(as_string_list(payload.get("assumptions"), max_items=4))
-            technical_error = str(payload.get("error", "")).strip()
 
             if generation_type == "clarification":
-                if _is_technical_error_text(clarification_question):
-                    technical_error = technical_error or clarification_question
-                    clarification_question = ""
-                    generation_type = "technical_failure"
-                    candidate_sql = ""
-                else:
-                    clarification_question = (
-                        clarification_question
-                        or rationale
-                        or f"SQL generation requires clarification for step {step.id}."
-                    )
-                    candidate_sql = ""
-            elif generation_type == "technical_failure":
-                technical_error = (
-                    technical_error
-                    or clarification_question
+                clarification_question = (
+                    clarification_question
                     or rationale
-                    or f"SQL generation failed for step {step.id}."
+                    or f"SQL generation requires clarification for step {step.id}."
                 )
-                clarification_question = ""
                 candidate_sql = ""
             elif generation_type == "not_relevant":
                 candidate_sql = ""
             elif candidate_sql:
                 sql_text = candidate_sql
         except Exception as error:
-            generation_type = "technical_failure"
-            clarification_question = ""
-            technical_error = str(error).strip() or f"SQL generation failed for step {step.id}."
+            generation_type = "clarification"
+            clarification_question = str(error).strip() or f"SQL generation failed for step {step.id}."
             assumptions.append(f"SQL generation failed: {error}")
 
         guarded_sql = guard_sql(sql_text, self._model) if generation_type == "sql_ready" else None
         if generation_type == "sql_ready" and not guarded_sql:
-            generation_type = "technical_failure"
-            clarification_question = ""
-            technical_error = technical_error or rationale or f"Generated SQL violated guardrails for step {step.id}."
+            generation_type = "clarification"
+            clarification_question = (
+                clarification_question
+                or rationale
+                or f"Generated SQL violated guardrails for step {step.id}."
+            )
 
         return GeneratedStep(
             index=-1,
@@ -280,7 +224,6 @@ class SqlStepGenerator:
             rationale=rationale,
             assumptions=assumptions,
             clarification_question=clarification_question,
-            technical_error=technical_error,
             not_relevant_reason=not_relevant_reason,
             attempted_sql=attempted_sql,
             rows=None,
@@ -339,7 +282,6 @@ class SqlStepGenerator:
             rationale=generated.rationale,
             assumptions=generated.assumptions,
             clarification_question=generated.clarification_question,
-            technical_error=generated.technical_error,
             not_relevant_reason=generated.not_relevant_reason,
             attempted_sql=generated.attempted_sql,
             rows=generated.rows,

@@ -8,10 +8,6 @@ from app.models import AnalysisType, QueryPlanStep
 from app.prompts.templates import plan_prompt
 from app.services.llm_trace import llm_trace_stage
 from app.services.semantic_model import SemanticModel, semantic_model_planner_context
-from app.services.semantic_model_yaml import (
-    SemanticModelYaml,
-    load_semantic_model_yaml,
-)
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 
@@ -37,42 +33,6 @@ ANALYSIS_TYPES: tuple[AnalysisType, ...] = (
     "cumulative_running_total",
     "rate_ratio_efficiency",
 )
-ANALYSIS_VISUAL_SHAPE_HINTS: dict[AnalysisType, str] = {
-    "trend_over_time": "a time-ordered series for the requested metric and period",
-    "ranking_top_n_bottom_n": "a ranked entity list with the requested metric values",
-    "comparison": "side-by-side values for the compared groups or periods",
-    "composition_breakdown": "a parts-of-whole breakdown for the requested metric",
-    "aggregation_summary_stats": "a compact summary of the requested aggregate metric(s)",
-    "point_in_time_snapshot": "an as-of snapshot of the requested current-state metric(s)",
-    "period_over_period_change": "prior and current values with explicit change/delta",
-    "anomaly_outlier_detection": "a series or distribution that identifies unusual points",
-    "drill_down_root_cause": "a driver breakdown from aggregate to contributing segments",
-    "correlation_relationship": "paired measures suitable for relationship analysis",
-    "cohort_analysis": "cohort-by-period outputs for cohort comparison",
-    "distribution_histogram": "bucketed or percentile distribution outputs",
-    "forecasting_projection": "historical values plus projected future periods",
-    "threshold_filter_segmentation": "a filtered table of records matching criteria",
-    "cumulative_running_total": "a time-ordered running total series",
-    "rate_ratio_efficiency": "ratio/rate outputs by the requested group or period",
-}
-ANALYSIS_VISUAL_SHAPE_KEYWORDS: dict[AnalysisType, tuple[str, ...]] = {
-    "trend_over_time": ("trend", "time", "monthly", "weekly", "daily", "series"),
-    "ranking_top_n_bottom_n": ("top", "bottom", "rank", "descending", "ascending"),
-    "comparison": ("compare", "versus", "vs", "side-by-side", "difference", "delta"),
-    "composition_breakdown": ("breakdown", "mix", "share", "composition", "parts"),
-    "aggregation_summary_stats": ("total", "sum", "average", "median", "count", "min", "max", "aggregate"),
-    "point_in_time_snapshot": ("current", "as of", "snapshot", "today", "right now"),
-    "period_over_period_change": ("mom", "qoq", "yoy", "change", "delta", "variance", "prior"),
-    "anomaly_outlier_detection": ("anomaly", "outlier", "spike", "drop", "unusual"),
-    "drill_down_root_cause": ("driver", "root cause", "drill", "decompose", "why"),
-    "correlation_relationship": ("correlation", "relationship", "paired", "x and y"),
-    "cohort_analysis": ("cohort", "vintage", "retention"),
-    "distribution_histogram": ("distribution", "histogram", "bucket", "percentile", "spread"),
-    "forecasting_projection": ("forecast", "projection", "projected", "future"),
-    "threshold_filter_segmentation": ("filter", "segment", "criteria", "list", "records"),
-    "cumulative_running_total": ("cumulative", "running total", "ytd"),
-    "rate_ratio_efficiency": ("rate", "ratio", "conversion", "utilization", "efficiency"),
-}
 
 
 @dataclass(frozen=True)
@@ -121,45 +81,21 @@ def _normalize_analysis_type(value: Any) -> AnalysisType:
     return DEFAULT_ANALYSIS_TYPE
 
 
-def _fallback_analysis_type(message: str) -> AnalysisType:
-    text = _normalized(message)
-    if any(keyword in text for keyword in ("top", "bottom", "rank")):
-        return "ranking_top_n_bottom_n"
-    if any(keyword in text for keyword in ("trend", "over time")):
-        return "trend_over_time"
-    if any(keyword in text for keyword in ("compare", "versus", "vs")):
-        return "comparison"
-    if any(keyword in text for keyword in ("breakdown", "mix", "composition")):
-        return "composition_breakdown"
-    if any(keyword in text for keyword in ("yoy", "qoq", "mom", "delta", "change rate", "variance")):
-        return "period_over_period_change"
-    if any(keyword in text for keyword in ("distribution", "histogram", "spread")):
-        return "distribution_histogram"
-    if any(keyword in text for keyword in ("snapshot", "current", "right now", "today")):
-        return "point_in_time_snapshot"
-    if any(keyword in text for keyword in ("correlat", "relationship")):
-        return "correlation_relationship"
-    if any(keyword in text for keyword in ("cohort", "retention", "vintage")):
-        return "cohort_analysis"
-    if any(keyword in text for keyword in ("forecast", "project")):
-        return "forecasting_projection"
-    if any(keyword in text for keyword in ("running total", "cumulative", "ytd")):
-        return "cumulative_running_total"
-    if any(keyword in text for keyword in ("rate", "ratio", "efficiency", "conversion", "utilization")):
-        return "rate_ratio_efficiency"
-    if any(keyword in text for keyword in ("outlier", "anomaly", "spike", "unusual")):
-        return "anomaly_outlier_detection"
-    if any(keyword in text for keyword in ("why", "root cause", "driver", "drill")):
-        return "drill_down_root_cause"
-    if any(keyword in text for keyword in ("threshold", "filter", "segment", "criteria", "which")):
-        return "threshold_filter_segmentation"
-    return DEFAULT_ANALYSIS_TYPE
+def _enforce_planner_guardrails(
+    *,
+    message: str,
+    steps: list[QueryPlanStep],
+) -> list[QueryPlanStep]:
+    # Keep planner post-processing intentionally light: normalize text shape and
+    # guarantee at least one executable step when the LLM returns an empty list.
+    if not steps:
+        return [QueryPlanStep(id="step_1", goal=_direct_task_goal(message), dependsOn=[], independent=True)]
 
-
-def _strip_table_references(text: str) -> str:
-    replaced = re.sub(r"\bcia_[a-z0-9_]+\b", "governed customer insights data", text, flags=re.IGNORECASE)
-    replaced = re.sub(r"\bfrom\s+the\s+([^.,;]+?)\s+table\b", "from governed customer insights data", replaced, flags=re.IGNORECASE)
-    return " ".join(replaced.split())
+    sanitized: list[QueryPlanStep] = []
+    for step in steps:
+        goal = _strip_unrequested_schema_terms(message, step.goal)
+        sanitized.append(step.model_copy(update={"goal": goal}))
+    return sanitized
 
 
 def _message_schema_tokens(message: str) -> set[str]:
@@ -167,6 +103,8 @@ def _message_schema_tokens(message: str) -> set[str]:
 
 
 def _strip_unrequested_schema_terms(message: str, text: str) -> str:
+    # Keep this sanitizer intentionally narrow: planner tasks should stay
+    # business-facing and avoid leaking physical schema details.
     allowed_tokens = _message_schema_tokens(message)
 
     def _replacement(match: re.Match[str]) -> str:
@@ -184,45 +122,6 @@ def _strip_unrequested_schema_terms(message: str, text: str) -> str:
 
     replaced = re.sub(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", _replacement, text, flags=re.IGNORECASE)
     return " ".join(replaced.split())
-
-
-def _enforce_planner_guardrails(
-    *,
-    message: str,
-    steps: list[QueryPlanStep],
-) -> list[QueryPlanStep]:
-    if not steps:
-        return [QueryPlanStep(id="step_1", goal=_direct_task_goal(message), dependsOn=[], independent=True)]
-
-    sanitized: list[QueryPlanStep] = []
-    for step in steps:
-        goal = _strip_unrequested_schema_terms(message, _strip_table_references(step.goal))
-        sanitized.append(step.model_copy(update={"goal": goal}))
-    return sanitized
-
-
-def _task_matches_visual_shape(goal: str, analysis_type: AnalysisType) -> bool:
-    text = _normalized(goal)
-    return any(keyword in text for keyword in ANALYSIS_VISUAL_SHAPE_KEYWORDS.get(analysis_type, ()))
-
-
-def _ensure_visual_shape_task(
-    *,
-    analysis_type: AnalysisType,
-    steps: list[QueryPlanStep],
-) -> list[QueryPlanStep]:
-    if not steps:
-        return steps
-    if any(_task_matches_visual_shape(step.goal, analysis_type) for step in steps):
-        return steps
-
-    shape_hint = ANALYSIS_VISUAL_SHAPE_HINTS.get(analysis_type)
-    if not shape_hint:
-        return steps
-
-    first = steps[0]
-    patched_goal = f"{first.goal.rstrip('.')} Return output shaped as {shape_hint}."
-    return [first.model_copy(update={"goal": patched_goal}), *steps[1:]]
 
 
 def _heuristic_plan(message: str, max_steps: int) -> list[QueryPlanStep]:
@@ -268,39 +167,17 @@ def _extract_steps(raw_tasks: Any, max_steps: int) -> list[QueryPlanStep]:
     return steps
 
 
-def _message_tokens(message: str) -> set[str]:
-    return {
-        token.strip().lower()
-        for token in re.findall(r"[A-Za-z][A-Za-z0-9_]{2,}", message)
-        if token.strip()
-    }
-
-
-def _has_domain_signal(message: str, guide: SemanticModelYaml) -> bool:
-    normalized_message = _normalized(message)
-    if not normalized_message:
-        return False
-
-    phrases = {phrase for phrase in guide.domain_phrases if len(phrase) >= 4}
-    if any(phrase in normalized_message for phrase in phrases):
-        return True
-
-    message_tokens = _message_tokens(message)
-    guide_terms = set(guide.domain_terms)
-    matches = message_tokens.intersection(guide_terms)
-    return len(matches) >= 2
-
-
 class PlannerStage:
     def __init__(self, *, model: SemanticModel, ask_llm_json: AskLlmJsonFn) -> None:
         self._model = model
         self._ask_llm_json = ask_llm_json
-        self._semantic_yaml = load_semantic_model_yaml()
         self._planner_scope_context = semantic_model_planner_context(self._model)
 
     async def create_plan(self, message: str, history: list[str]) -> PlannerDecision:
         max_steps = PLANNER_MAX_STEPS
 
+        # Planner prompts carry policy and scope; response parsing below keeps
+        # Python logic contract-focused instead of intent-heuristic-heavy.
         system_prompt, user_prompt = plan_prompt(
             message,
             self._planner_scope_context,
@@ -361,7 +238,6 @@ class PlannerStage:
             if not steps:
                 steps = _heuristic_plan(message, max_steps=max_steps)
             steps = _enforce_planner_guardrails(message=message, steps=steps)
-            steps = _ensure_visual_shape_task(analysis_type=analysis_type, steps=steps)
 
             return PlannerDecision(
                 relevance=relevance,
@@ -372,17 +248,14 @@ class PlannerStage:
                 stop_reason="none",
             )
         except Exception:
-            relevance: Literal["in_domain", "out_of_domain", "unclear"] = (
-                "in_domain" if _has_domain_signal(message, self._semantic_yaml) else "unclear"
-            )
+            # Fallback remains minimal and deterministic: do not classify intent
+            # with local heuristics when planner inference is unavailable.
             steps = _heuristic_plan(message, max_steps=max_steps)
             steps = _enforce_planner_guardrails(message=message, steps=steps)
-            fallback_analysis_type = _fallback_analysis_type(message)
-            steps = _ensure_visual_shape_task(analysis_type=fallback_analysis_type, steps=steps)
             return PlannerDecision(
-                relevance=relevance,
+                relevance="unclear",
                 relevance_reason="LLM planner unavailable; used deterministic decomposition fallback.",
-                analysis_type=fallback_analysis_type,
+                analysis_type=DEFAULT_ANALYSIS_TYPE,
                 secondary_analysis_type=None,
                 steps=steps,
                 stop_reason="none",

@@ -164,9 +164,7 @@ async def _generate_sql_from_message(message: str, conversation_history: list[st
     model = _model()
     system_prompt = (
         "You are a sandbox Snowflake Cortex Analyst emulator for banking analytics. "
-        "For each request, return exactly one outcome: sql_ready, clarification, technical_failure, or not_relevant. "
-        "Use clarification only for genuine business ambiguity (missing metric, grain, or time window). "
-        "Use technical_failure for SQL/compiler/runtime issues so retries can proceed automatically. "
+        "For each request, return exactly one outcome: sql_ready, clarification, or not_relevant. "
         "Use semantic_model.yaml context to determine scope. "
         "When sql_ready, generate one Snowflake-style read-only SQL query from conversation context. "
         "Return strict JSON only."
@@ -177,11 +175,10 @@ async def _generate_sql_from_message(message: str, conversation_history: list[st
         f"Conversation history:\n{_history_text(conversation_history)}\n\n"
         f"User question:\n{message}\n\n"
         "Return JSON with keys:\n"
-        '- "type": one of sql_ready|clarification|technical_failure|not_relevant\n'
+        '- "type": one of sql_ready|clarification|not_relevant\n'
         '- "sql": string (required when type=sql_ready)\n'
         '- "lightResponse": short one-sentence summary\n'
         '- "clarificationQuestion": string (required when type=clarification)\n'
-        '- "error": string (required when type=technical_failure)\n'
         '- "notRelevantReason": string (required when type=not_relevant)\n'
         '- "assumptions": array of strings\n'
     )
@@ -195,27 +192,27 @@ async def _generate_sql_from_message(message: str, conversation_history: list[st
     )
     payload = parse_json_object(llm_text)
     response_type = str(payload.get("type", "sql_ready")).strip().lower().replace("-", "_")
-    if response_type not in {"sql_ready", "clarification", "technical_failure", "not_relevant"}:
+    if response_type not in {"sql_ready", "clarification", "not_relevant"}:
         response_type = "sql_ready"
 
     sql = str(payload.get("sql", "")).strip()
     light_response = str(payload.get("lightResponse", "")).strip()
     clarification_question = str(payload.get("clarificationQuestion", "")).strip()
-    technical_error = str(payload.get("error", "")).strip()
     not_relevant_reason = str(payload.get("notRelevantReason", "")).strip()
     assumptions = as_string_list(payload.get("assumptions"), max_items=4)
 
     if response_type == "sql_ready" and not sql:
-        response_type = "technical_failure"
-        technical_error = technical_error or "SQL generator returned no executable SQL."
-        clarification_question = ""
+        response_type = "clarification"
+        clarification_question = (
+            clarification_question
+            or "SQL generator returned no executable SQL."
+        )
 
     return {
         "type": response_type,
         "sql": sql,
         "lightResponse": light_response,
         "clarificationQuestion": clarification_question,
-        "error": technical_error,
         "notRelevantReason": not_relevant_reason,
         "assumptions": assumptions,
     }
@@ -279,7 +276,6 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
     light_response = "Returned a governed summary for the requested customer-insights metric."
     response_type = "sql_ready"
     not_relevant_reason = ""
-    technical_error = ""
 
     if _needs_clarification(user_message):
         response_type = "clarification"
@@ -296,9 +292,8 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
                 generated = await _generate_sql_from_message(user_message, generation_history)
             except Exception as error:  # noqa: BLE001
                 assumptions.append(f"SQL generation attempt {attempt} failed: {error}")
-                response_type = "technical_failure"
-                technical_error = str(error).strip()
-                clarification_question = ""
+                response_type = "clarification"
+                clarification_question = str(error).strip()
                 if attempt >= _MAX_SQL_ATTEMPTS:
                     assumptions.append("SQL retry limit reached.")
                     break
@@ -310,19 +305,9 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
             light_response = str(generated.get("lightResponse", "")).strip() or light_response
             clarification_question = str(generated.get("clarificationQuestion", "")).strip()
             not_relevant_reason = str(generated.get("notRelevantReason", "")).strip()
-            technical_error = str(generated.get("error", "")).strip()
             assumptions.extend(as_string_list(generated.get("assumptions"), max_items=4))
 
             if response_type != "sql_ready":
-                if response_type == "technical_failure":
-                    if attempt >= _MAX_SQL_ATTEMPTS:
-                        assumptions.append("SQL retry limit reached.")
-                        break
-                    generation_history = [
-                        *generation_history,
-                        f"Previous SQL technical failure: {technical_error or 'unknown SQL error'}",
-                    ]
-                    continue
                 if had_execution_failure and attempt < _MAX_SQL_ATTEMPTS:
                     assumptions.append(
                         "SQL agent requested clarification after execution failure; continuing retry with warehouse error feedback."
@@ -332,9 +317,8 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
                     continue
                 break
             if not sql_text:
-                response_type = "technical_failure"
-                technical_error = technical_error or "SQL generator returned empty SQL."
-                clarification_question = ""
+                response_type = "clarification"
+                clarification_question = clarification_question or not_relevant_reason or "SQL generator returned empty SQL."
                 if had_execution_failure and attempt < _MAX_SQL_ATTEMPTS:
                     assumptions.append("SQL generator returned empty SQL after execution failure; continuing retry.")
                     if last_retry_message:
@@ -358,9 +342,8 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
                     max_attempts=_MAX_SQL_ATTEMPTS,
                 )
                 if attempt >= _MAX_SQL_ATTEMPTS:
-                    response_type = "technical_failure"
-                    technical_error = technical_error or last_execution_error
-                    clarification_question = ""
+                    response_type = "clarification"
+                    clarification_question = clarification_question or not_relevant_reason or last_execution_error
                     assumptions.append("SQL retry limit reached.")
                     break
                 generation_history = [*generation_history, last_retry_message]
@@ -380,7 +363,6 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
         "sql": guarded_sql,
         "lightResponse": light_response,
         "clarificationQuestion": clarification_question,
-        "error": technical_error,
         "notRelevantReason": not_relevant_reason,
         "rows": rows,
         "rowCount": len(rows),

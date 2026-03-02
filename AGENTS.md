@@ -1,18 +1,20 @@
 # AGENTS.md
-## Product
 
+## Product
 I am building the best conversational analytics (aka chat with data aka natural language querying) agent the world has ever seen - this means taking queries from nontechnical users, exploring a handful of curated tables to retrieve the proper data, structuring the data in an intutive way, and highlighting the information most important to the user based on their query, while also anticipating new insights the user may not have known they needed. the agent should be able to handle complex multi step questions and multi turn conversation. The main objective functions are minimal latency, and maximum insight/data qaulity. 
 
 NEVER hardcode. 
+
+Our agent is a generalist, prompts and logic should not be overfit to specific problems.
 
 Think critically about all decisions, ask yourself how this will impact the final product and user experience. 
 
 Decision making should be handled by the llm as much as possible, not complex python logic.
 
-Our agent is a generalist, prompts and logic should not be overfit to specific problems.
-
 LLM decides semantics; Python enforces contracts/safety and compresses data context.
 
+## Design Best Practices
+Create distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
 
 ## Work Machine Priority
 

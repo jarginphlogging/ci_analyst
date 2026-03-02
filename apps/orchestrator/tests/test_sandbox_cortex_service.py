@@ -63,9 +63,8 @@ def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> Non
         )
         assert answer_response.status_code == 200
         answer_payload = answer_response.json()
-        assert answer_payload["type"] == "technical_failure"
-        assert answer_payload["error"]
-        assert answer_payload["clarificationQuestion"] == ""
+        assert answer_payload["type"] == "clarification"
+        assert answer_payload["clarificationQuestion"]
         assert answer_payload["sql"] == ""
         assert answer_payload["rowCount"] == 0
         assert "failedSql" in answer_payload
@@ -83,7 +82,7 @@ def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> Non
         object.__setattr__(settings, "anthropic_api_key", original_anthropic_key)
 
 
-def test_sandbox_cortex_message_total_sales_last_month_returns_technical_failure_when_generation_unavailable(tmp_path: Path) -> None:
+def test_sandbox_cortex_message_total_sales_last_month_returns_clarification_when_generation_unavailable(tmp_path: Path) -> None:
     db_path = str(tmp_path / "cortex_sandbox.db")
 
     original_path = settings.sandbox_sqlite_path
@@ -106,9 +105,8 @@ def test_sandbox_cortex_message_total_sales_last_month_returns_technical_failure
 
         assert response.status_code == 200
         payload = response.json()
-        assert payload["type"] == "technical_failure"
-        assert payload["error"]
-        assert payload["clarificationQuestion"] == ""
+        assert payload["type"] == "clarification"
+        assert payload["clarificationQuestion"]
         assert payload["sql"] == ""
         assert payload["rowCount"] == 0
         assert "failedSql" in payload

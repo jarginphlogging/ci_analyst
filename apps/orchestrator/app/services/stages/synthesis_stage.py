@@ -26,6 +26,11 @@ from app.models import (
 from app.prompts.templates import response_prompt
 from app.services.llm_trace import llm_trace_stage
 from app.services.llm_json import as_string_list
+from app.services.presentation_contracts import (
+    get_presentation_contract,
+    table_fallback_presentation_plan,
+    validate_presentation_plan,
+)
 from app.services.stages.data_summarizer_stage import DataSummarizerStage
 from app.services.table_analysis import (
     build_analysis_artifacts,
@@ -155,31 +160,19 @@ def _fallback_summary_cards(metrics: list[Any]) -> list[SummaryCard]:
 
 
 def _sanitize_primary_visual(raw: Any) -> PrimaryVisual | None:
+    # We only trust narrative fields from LLM here. Visual type selection is
+    # resolved deterministically from analysis type in _resolve_primary_visual.
     if not isinstance(raw, dict):
         return None
     title = str(raw.get("title", "")).strip()
     description = str(raw.get("description", "")).strip()
-    artifact_raw = str(raw.get("artifactKind", "")).strip()
-    visual_type_raw = str(raw.get("visualType", "")).strip().lower()
-    artifact_kind: ArtifactKind | None = None
-    visual_type: VisualType = "snapshot"
-    if artifact_raw in {
-        "ranking_breakdown",
-        "comparison_breakdown",
-        "delta_breakdown",
-        "trend_breakdown",
-        "distribution_breakdown",
-    }:
-        artifact_kind = artifact_raw  # type: ignore[assignment]
-    if visual_type_raw in {"trend", "ranking", "comparison", "distribution", "snapshot", "table"}:
-        visual_type = cast(VisualType, visual_type_raw)
-    if not title and not artifact_kind:
+    if not title and not description:
         return None
     return PrimaryVisual(
         title=title or "Primary visual",
         description=description,
-        visualType=visual_type,
-        artifactKind=artifact_kind,
+        visualType="snapshot",
+        artifactKind=None,
     )
 
 
@@ -230,15 +223,13 @@ def _resolve_primary_visual(
     llm_visual: PrimaryVisual | None,
     artifacts: list[AnalysisArtifact],
 ) -> PrimaryVisual:
+    # Product contract: analysis type determines the visual mode. The LLM can
+    # suggest wording, but cannot override the visual type/category mapping.
     preferred_visual_type, preferred_kinds = INTENT_VISUAL_POLICY.get(analysis_type, ("snapshot", ()))
 
-    chosen_artifact: AnalysisArtifact | None = None
-    if llm_visual and llm_visual.artifactKind and llm_visual.artifactKind in preferred_kinds:
-        candidate = next((artifact for artifact in artifacts if artifact.kind == llm_visual.artifactKind), None)
-        if candidate and _artifact_is_finished(candidate):
-            chosen_artifact = candidate
-    if not chosen_artifact:
-        chosen_artifact = _first_artifact_by_kinds(artifacts, preferred_kinds)
+    # Artifact binding also stays deterministic: we pick the first completed
+    # artifact allowed by the analysis-type policy.
+    chosen_artifact = _first_artifact_by_kinds(artifacts, preferred_kinds)
 
     visual_type = preferred_visual_type
     artifact_kind: ArtifactKind | None = chosen_artifact.kind if chosen_artifact else None
@@ -610,6 +601,7 @@ class SynthesisStage:
         artifacts = build_analysis_artifacts(results, message=message)
         metrics = build_metric_points(results, evidence, message=message)
         data_tables = results_to_data_tables(results)
+        presentation_contract = get_presentation_contract(analysis_type)
         synthesis_context = self._synthesis_context_package(
             message=message,
             route=route,
@@ -625,9 +617,15 @@ class SynthesisStage:
         llm_payload: dict[str, Any] = {}
         if with_llm:
             try:
+                # LLM receives compact execution context (not raw result tables)
+                # so it can reason while staying inside context limits.
                 system_prompt, user_prompt = response_prompt(
                     message,
                     route,
+                    analysis_type,
+                    presentation_contract.visual_type,
+                    list(presentation_contract.required_bindings.keys()),
+                    presentation_contract.default_sort,
                     result_summary,
                     evidence_summary,
                     history,
@@ -647,6 +645,8 @@ class SynthesisStage:
             except Exception:
                 llm_payload = {}
 
+        # If LLM output is missing/invalid, deterministic fallbacks keep response
+        # shape stable for clients and tests.
         answer = str(llm_payload.get("answer", "")).strip() or _deterministic_answer(message, artifacts, results)
         why_it_matters = str(llm_payload.get("whyItMatters", "")).strip() or _deterministic_why_it_matters()
         confidence_default = "medium" if with_llm else "high"
@@ -666,11 +666,45 @@ class SynthesisStage:
 
         insights = _sanitize_insights(llm_payload.get("insights")) or _default_insights(evidence, artifacts)
         summary_cards = _sanitize_summary_cards(llm_payload.get("summaryCards")) or _fallback_summary_cards(metrics)
-        primary_visual = _resolve_primary_visual(
+        resolved_primary_visual = _resolve_primary_visual(
             analysis_type=analysis_type,
             llm_visual=_sanitize_primary_visual(llm_payload.get("primaryVisual")),
             artifacts=artifacts,
         )
+        presentation_plan, presentation_issues = validate_presentation_plan(
+            raw_plan=llm_payload.get("presentationPlan"),
+            analysis_type=analysis_type,
+            data_tables=data_tables,
+        )
+        if presentation_plan is None:
+            technical_reason = (
+                "Invalid presentation plan: " + "; ".join(presentation_issues)
+                if presentation_issues
+                else "Synthesis did not provide a presentation plan."
+            )
+            user_facing_reason = (
+                "Using primary data table because the returned result shape did not match the requested visual."
+            )
+            presentation_plan = table_fallback_presentation_plan(
+                analysis_type=analysis_type,
+                data_tables=data_tables,
+                reason=user_facing_reason,
+            )
+            if presentation_plan:
+                presentation_issues.append(f"Primary visual fallback applied: {technical_reason}")
+
+        primary_visual = resolved_primary_visual
+        if presentation_plan:
+            primary_visual = PrimaryVisual(
+                title=presentation_plan.title,
+                description=presentation_plan.scopeLabel,
+                visualType=presentation_plan.visualType,
+                artifactKind=(
+                    resolved_primary_visual.artifactKind
+                    if resolved_primary_visual.visualType == presentation_plan.visualType
+                    else None
+                ),
+            )
         suggested_questions = (
             as_string_list(llm_payload.get("suggestedQuestions"), max_items=3) or _default_questions(artifacts)
         )
@@ -679,6 +713,7 @@ class SynthesisStage:
         assumptions.append("SQL is constrained to the semantic model allowlist.")
         assumptions.append("Final synthesis used planner tasks, executed SQL, and deterministic table summaries.")
         assumptions.append("Standard execution pipeline was used.")
+        assumptions.extend(presentation_issues[:3])
 
         if grain_mismatch:
             requested, detected = grain_mismatch
@@ -727,6 +762,7 @@ class SynthesisStage:
             trace=trace,
             summaryCards=summary_cards,
             primaryVisual=primary_visual,
+            presentationPlan=presentation_plan,
             dataTables=data_tables,
             artifacts=artifacts,
         )

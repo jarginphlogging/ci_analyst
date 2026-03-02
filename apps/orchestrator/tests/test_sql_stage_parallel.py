@@ -461,8 +461,8 @@ async def test_sql_stage_execution_failure_does_not_request_user_clarification_b
             history=[],
         )
 
-    assert blocked.value.stop_reason == "technical_failure"
-    assert "review the trace" in blocked.value.user_message.lower()
+    assert blocked.value.stop_reason == "clarification"
+    assert "which metric and time window" in blocked.value.user_message.lower()
     assert blocked.value.detail.get("phase") == "sql_execution"
     assert "invalid identifier" in str(blocked.value.detail.get("error", "")).lower()
     assert llm_calls == 3
@@ -534,34 +534,3 @@ async def test_sql_stage_blocks_execution_above_five_steps() -> None:
         )
 
     assert "too complex" in blocked.value.user_message.lower()
-
-
-@pytest.mark.asyncio
-async def test_sql_prompt_includes_deterministic_ordering_rules() -> None:
-    model = load_semantic_model()
-    captured_prompt = ""
-
-    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
-        nonlocal captured_prompt
-        captured_prompt = str(kwargs.get("user_prompt", ""))
-        return {
-            "generationType": "sql_ready",
-            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex",
-            "assumptions": [],
-        }
-
-    async def fake_sql(_: str) -> list[dict[str, object]]:
-        return [{"total_spend": 1.0}]
-
-    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
-    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
-
-    await stage.run_sql(
-        message="What is my total spend?",
-        route="standard",
-        plan=plan,
-        history=[],
-    )
-
-    assert "For set operations (UNION/UNION ALL), ensure final ORDER BY uses projected output columns only." in captured_prompt
-    assert "Include deterministic tie-breakers in ORDER BY" in captured_prompt

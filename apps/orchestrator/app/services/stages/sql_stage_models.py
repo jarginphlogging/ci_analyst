@@ -16,12 +16,11 @@ class GeneratedStep:
     index: int
     step: QueryPlanStep
     provider: Literal["analyst", "llm"]
-    status: Literal["sql_ready", "clarification", "technical_failure", "not_relevant"]
+    status: Literal["sql_ready", "clarification", "not_relevant"]
     sql: str | None
     rationale: str
     assumptions: list[str]
     clarification_question: str
-    technical_error: str
     not_relevant_reason: str
     attempted_sql: str | None = None
     rows: list[dict[str, Any]] | None = None
@@ -31,7 +30,7 @@ class SqlGenerationBlockedError(RuntimeError):
     def __init__(
         self,
         *,
-        stop_reason: Literal["clarification", "technical_failure", "not_relevant"],
+        stop_reason: Literal["clarification", "not_relevant"],
         user_message: str,
         detail: dict[str, Any] | None = None,
     ) -> None:

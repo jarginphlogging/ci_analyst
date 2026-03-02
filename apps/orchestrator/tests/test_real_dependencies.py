@@ -39,6 +39,7 @@ async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
             '"confidenceReason":"High confidence because comparison and composition outputs are complete and consistent.",'
             '"summaryCards":[{"label":"Current Spend","value":"$1.94","detail":"Sample value from test pipeline"},{"label":"Prior Spend","value":"$1.37"}],'
             '"primaryVisual":{"title":"Comparison by State","description":"Primary view for comparison intent.","artifactKind":"comparison_breakdown"},'
+            '"presentationPlan":{"analysisType":"comparison","visualType":"comparison","tableId":"sql_step_1","title":"Comparison by State","scopeLabel":"Returned SQL output","bindings":{"entity_label":"segment","left_value":"prior","right_value":"current","delta_value":"changeBps"},"sort":["delta_value:desc"]},'
             '"insights":[{"title":"Concentration signal","detail":"Top states account for most of the movement.","importance":"high"}],'
             '"suggestedQuestions":["Which states drove the increase?","What changed by channel?","How much came from repeat customers?"],'
             '"assumptions":["Data reflects settled transactions only."]}'
@@ -80,6 +81,7 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     assert response.answer
     assert response.summaryCards
     assert response.primaryVisual is not None
+    assert response.presentationPlan is not None
     assert response.dataTables
     assert response.trace
     assert response.metrics
@@ -101,7 +103,7 @@ async def test_real_dependencies_requires_sql_generation_provider_when_analyst_i
 
     assert context.route == "standard"
     assert len(context.plan) >= 1
-    assert blocked.value.stop_reason == "technical_failure"
+    assert blocked.value.stop_reason == "clarification"
 
 
 @pytest.mark.asyncio

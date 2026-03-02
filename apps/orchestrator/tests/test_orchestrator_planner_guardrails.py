@@ -236,7 +236,7 @@ async def test_run_turn_returns_trace_when_sql_runtime_fails_unexpectedly() -> N
         ChatTurnRequest(sessionId=uuid4(), message="what were my total sales for last month")
     )
 
-    assert "failed unexpectedly" in result.response.answer
+    assert "DATE_TRUNC" in result.response.answer
     assert len(result.response.trace) == 2
     assert result.response.trace[0].id == "t1"
     assert result.response.trace[0].status == "done"

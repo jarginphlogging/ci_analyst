@@ -112,6 +112,17 @@ class PrimaryVisual(BaseModel):
     artifactKind: Optional[ArtifactKind] = None
 
 
+class PresentationPlan(BaseModel):
+    analysisType: AnalysisType
+    visualType: VisualType
+    tableId: str
+    title: str
+    scopeLabel: str
+    bindings: dict[str, str] = Field(default_factory=dict)
+    sort: list[str] = Field(default_factory=list)
+    notes: str = ""
+
+
 class AgentResponse(BaseModel):
     answer: str
     confidence: Literal["high", "medium", "low"]
@@ -127,6 +138,7 @@ class AgentResponse(BaseModel):
     trace: list[TraceStep]
     summaryCards: list[SummaryCard] = Field(default_factory=list)
     primaryVisual: Optional[PrimaryVisual] = None
+    presentationPlan: Optional[PresentationPlan] = None
     dataTables: list[DataTable] = Field(default_factory=list)
     artifacts: list[AnalysisArtifact] = Field(default_factory=list)
 

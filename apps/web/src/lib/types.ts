@@ -95,6 +95,17 @@ export interface PrimaryVisual {
   artifactKind?: AnalysisArtifact["kind"];
 }
 
+export interface PresentationPlan {
+  analysisType: AnalysisType;
+  visualType: "trend" | "ranking" | "comparison" | "distribution" | "snapshot" | "table";
+  tableId: string;
+  title: string;
+  scopeLabel: string;
+  bindings: Record<string, string>;
+  sort: string[];
+  notes?: string;
+}
+
 export interface AgentResponse {
   answer: string;
   confidence: "high" | "medium" | "low";
@@ -110,6 +121,7 @@ export interface AgentResponse {
   trace: TraceStep[];
   summaryCards?: SummaryCard[];
   primaryVisual?: PrimaryVisual;
+  presentationPlan?: PresentationPlan;
   dataTables: DataTable[];
   artifacts?: AnalysisArtifact[];
 }

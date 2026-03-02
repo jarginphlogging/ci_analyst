@@ -392,15 +392,47 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     },
   ]);
 
-  const latestResponse = useMemo(
-    () => [...messages].reverse().find((message) => message.role === "assistant" && message.response)?.response,
+  const latestResponseMessage = useMemo(
+    () => [...messages].reverse().find((message) => message.role === "assistant" && message.response),
     [messages],
   );
+  const latestResponse = latestResponseMessage?.response;
   const latestResponseIsFailure = useMemo(
     () => (latestResponse ? isFailureResponse(latestResponse) : false),
     [latestResponse],
   );
   const latestNextAction = useMemo(() => nextActionBody(latestResponse?.suggestedQuestions), [latestResponse]);
+  const latestSnapshotMetadata = useMemo(() => {
+    if (!latestResponseMessage?.response) return null;
+    if (isFailureResponse(latestResponseMessage.response)) return null;
+
+    const assistantIndex = messages.findIndex((entry) => entry.id === latestResponseMessage.id);
+    const userQuery =
+      assistantIndex >= 0
+        ? [...messages.slice(0, assistantIndex)].reverse().find((entry) => entry.role === "user")?.text ?? ""
+        : "";
+    const periodLabel = deriveMetricPeriodLabel(latestResponseMessage.response, userQuery, latestResponseMessage.createdAt);
+    const rowsRetrieved = rowsRetrievedCount(latestResponseMessage.response);
+    const runtime = formatRuntime(latestResponseMessage.requestDurationMs, latestResponseMessage.isStreaming);
+
+    return {
+      periodLabel,
+      rowsLabel: `Rows: ${integerFormatter.format(rowsRetrieved)}`,
+      runtimeLabel: `Runtime: ${runtime}`,
+    };
+  }, [messages, latestResponseMessage]);
+  const latestSnapshotMetadataDisplay = useMemo(() => {
+    if (!latestResponse || latestResponseIsFailure) return null;
+    if (latestSnapshotMetadata) return latestSnapshotMetadata;
+
+    const fallbackDate = parseDateValue(latestResponseMessage?.createdAt ?? "");
+    const periodLabel = fallbackDate ? `As of ${dateFormatter.format(fallbackDate)}` : `As of ${dateFormatter.format(new Date())}`;
+    return {
+      periodLabel,
+      rowsLabel: `Rows: ${integerFormatter.format(rowsRetrievedCount(latestResponse))}`,
+      runtimeLabel: `Runtime: ${formatRuntime(latestResponseMessage?.requestDurationMs, latestResponseMessage?.isStreaming)}`,
+    };
+  }, [latestResponse, latestResponseIsFailure, latestSnapshotMetadata, latestResponseMessage]);
   const showStarterPrompts = useMemo(() => !messages.some((message) => message.role === "user"), [messages]);
 
   useEffect(() => {
@@ -678,41 +710,23 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                           <p className="mt-1.5 text-sm text-slate-700">{message.response.whyItMatters}</p>
                         </section>
 
-                        {(() => {
-                          const userQuery =
-                            [...messages.slice(0, messageIndex)].reverse().find((entry) => entry.role === "user")?.text ?? "";
-                          const metricPeriodLabel = deriveMetricPeriodLabel(message.response, userQuery, message.createdAt);
-                          const rowsRetrieved = rowsRetrievedCount(message.response);
-                          const runtime = formatRuntime(message.requestDurationMs, message.isStreaming);
-                          return (
-                            <>
-                              <section className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">{metricPeriodLabel}</span>
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
-                                    Rows: {integerFormatter.format(rowsRetrieved)}
-                                  </span>
-                                  <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">Runtime: {runtime}</span>
-                                </div>
-                              </section>
-
-                              <section className="grid gap-3 sm:grid-cols-3">
-                                {summaryCardsForResponse(message.response).map((card, index) => (
-                                  <div key={`${card.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                                    <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
-                                    <p className="mt-2 text-xl font-bold text-slate-900">{card.value}</p>
-                                    {card.detail ? <p className="mt-1 text-sm text-slate-700">{card.detail}</p> : null}
-                                  </div>
-                                ))}
-                              </section>
-                            </>
-                          );
-                        })()}
+                        <section className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                          <div className="grid gap-3 sm:grid-cols-3">
+                            {summaryCardsForResponse(message.response).map((card, index) => (
+                              <div key={`${card.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
+                                <p className="mt-2 text-xl font-bold text-slate-900">{card.value}</p>
+                                {card.detail ? <p className="mt-1 text-sm text-slate-700">{card.detail}</p> : null}
+                              </div>
+                            ))}
+                          </div>
+                        </section>
 
                         <EvidenceTable
                           rows={message.response.evidence}
                           artifacts={message.response.artifacts}
                           primaryVisual={message.response.primaryVisual}
+                          presentationPlan={message.response.presentationPlan}
                           analysisType={message.response.analysisType}
                           dataTables={message.response.dataTables}
                         />
@@ -854,6 +868,21 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   <p className="text-xs uppercase tracking-wide text-slate-500">Next Action</p>
                   <p className="mt-1 text-sm leading-relaxed text-slate-700">{latestNextAction}</p>
                 </div>
+                {latestSnapshotMetadataDisplay ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        {latestSnapshotMetadataDisplay.periodLabel}
+                      </span>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        {latestSnapshotMetadataDisplay.rowsLabel}
+                      </span>
+                      <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-slate-700">
+                        {latestSnapshotMetadataDisplay.runtimeLabel}
+                      </span>
+                    </div>
+                  </div>
+                ) : null}
               </div>
             )
           ) : (

@@ -88,11 +88,8 @@ class ConversationalOrchestrator:
             raise
         except Exception as error:  # noqa: BLE001
             blocked = SqlGenerationBlockedError(
-                stop_reason="technical_failure",
-                user_message=(
-                    "The SQL stage failed unexpectedly before a governed result was returned. "
-                    "Please review the trace and retry."
-                ),
+                stop_reason="clarification",
+                user_message=str(error),
                 detail={
                     "phase": "sql_execution",
                     "error": str(error),
@@ -182,6 +179,7 @@ class ConversationalOrchestrator:
             "metricLabels": [metric.label for metric in response.metrics[:5]],
             "summaryCardLabels": [card.label for card in response.summaryCards[:5]],
             "primaryVisual": response.primaryVisual.model_dump() if response.primaryVisual else None,
+            "presentationPlan": response.presentationPlan.model_dump() if response.presentationPlan else None,
             "insightTitles": [insight.title for insight in response.insights[:5]],
             "suggestedQuestions": response.suggestedQuestions[:3],
             "tableCount": len(response.dataTables),
@@ -577,16 +575,11 @@ class ConversationalOrchestrator:
         trace_steps: list[TraceStep] | None = None,
     ) -> AgentResponse:
         _ = session_depth
-        why = (
-            "SQL generation/execution is blocked until this clarification is resolved."
-            if blocked.stop_reason == "clarification"
-            else "SQL generation/execution failed due to a technical issue. Review trace details and retry."
-        )
 
         return AgentResponse(
             answer=blocked.user_message,
             confidence="low",
-            whyItMatters=why,
+            whyItMatters="SQL generation/execution is blocked until this clarification is resolved.",
             metrics=[],
             evidence=[],
             insights=[],
