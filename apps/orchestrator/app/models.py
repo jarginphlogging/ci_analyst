@@ -32,6 +32,7 @@ class TraceStep(BaseModel):
     title: str
     summary: str
     status: Literal["done", "running", "blocked"]
+    runtimeMs: Optional[float] = None
     sql: Optional[str] = None
     qualityChecks: Optional[list[str]] = None
     stageInput: Optional[dict[str, Any]] = None

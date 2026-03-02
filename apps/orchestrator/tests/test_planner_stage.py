@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.config import settings
 from app.services.semantic_model import load_semantic_model
 from app.services.stages.planner_stage import (
     OUT_OF_DOMAIN_MESSAGE,
@@ -84,8 +85,12 @@ async def test_planner_falls_back_when_llm_unavailable() -> None:
         raise RuntimeError("llm unavailable")
 
     stage = PlannerStage(model=load_semantic_model(), ask_llm_json=failing_ask_llm_json)
-    decision = await stage.create_plan("Show me spend by state.", [])
+    if settings.provider_mode in {"sandbox", "prod"}:
+        with pytest.raises(RuntimeError, match="llm unavailable"):
+            await stage.create_plan("Show me spend by state.", [])
+        return
 
+    decision = await stage.create_plan("Show me spend by state.", [])
     assert decision.stop_reason == "none"
     assert decision.presentation_intent.displayType in {"table", "chart"}
     assert len(decision.steps) >= 1

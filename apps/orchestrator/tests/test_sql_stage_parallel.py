@@ -202,6 +202,48 @@ async def test_sql_stage_retries_after_blocked_generation_with_failed_sql() -> N
 
 
 @pytest.mark.asyncio
+async def test_sql_stage_retries_after_generation_failed_clarification() -> None:
+    model = load_semantic_model()
+    analyst_calls = 0
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        assert "cia_sales_insights_cortex" in sql.lower()
+        return [{"total_spend": 222.0}]
+
+    async def fake_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal analyst_calls
+        _ = kwargs
+        analyst_calls += 1
+        if analyst_calls == 1:
+            return {
+                "type": "clarification",
+                "clarificationQuestion": "SQL generation failed: model returned sql_ready without executable SQL.",
+                "assumptions": ["SQL generation failed: model returned sql_ready without executable SQL."],
+            }
+        return {
+            "type": "sql_ready",
+            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex",
+            "assumptions": [],
+        }
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=_fake_ask_llm_json, sql_fn=fake_sql, analyst_fn=fake_analyst)
+    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
+
+    results, assumptions = await stage.run_sql(
+        message="What is my total spend?",
+        route="standard",
+        plan=plan,
+        history=[],
+        conversation_id="conv-generation-failed-retry",
+    )
+
+    assert analyst_calls == 2
+    assert results
+    assert results[0].rows[0]["total_spend"] == 222.0
+    assert any("SQL generation retry 1 triggered for step-1 after blocked attempt." in item for item in assumptions)
+
+
+@pytest.mark.asyncio
 async def test_sql_stage_passes_planner_task_verbatim_to_analyst() -> None:
     model = load_semantic_model()
     analyst_messages: list[str] = []

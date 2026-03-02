@@ -56,6 +56,9 @@ export function DataExplorer({ tables }: { tables: DataTable[] }) {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
+            {tables.length} {tables.length === 1 ? "table" : "tables"}
+          </span>
+          <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">
             {selected.rowCount} rows
           </span>
           <span className="rounded-full bg-slate-100 px-2 py-1 text-[11px] font-semibold text-slate-700">

@@ -107,9 +107,16 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                   <>
               <div className="flex items-center justify-between gap-2">
                 <p className="text-sm font-semibold text-slate-900">{step.title}</p>
-                <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass[step.status]}`}>
-                  {step.status}
-                </span>
+                <div className="flex items-center gap-2">
+                  {typeof step.runtimeMs === "number" ? (
+                    <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-700">
+                      {`${step.runtimeMs.toFixed(1)} ms`}
+                    </span>
+                  ) : null}
+                  <span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusClass[step.status]}`}>
+                    {step.status}
+                  </span>
+                </div>
               </div>
               <p className="mt-2 text-sm leading-relaxed text-slate-700">{step.summary}</p>
               {llmEntryCount ? (

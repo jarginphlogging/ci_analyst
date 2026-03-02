@@ -1,10 +1,6 @@
+import { chatTurnRequestSchema } from "@ci/contracts";
 import { buildMockEvents, streamMockEvents } from "@/lib/mock-stream";
 import { serverEnv } from "@/lib/server-env";
-
-interface ChatRequestBody {
-  sessionId?: string;
-  message?: string;
-}
 
 function ndjsonHeaders(): HeadersInit {
   return {
@@ -19,9 +15,18 @@ export async function POST(request: Request) {
   let sessionId: string | undefined;
 
   try {
-    const body = (await request.json()) as ChatRequestBody;
-    message = body?.message?.trim() ?? "";
-    sessionId = body?.sessionId;
+    const rawBody = (await request.json()) as unknown;
+    const parsed = chatTurnRequestSchema.safeParse(rawBody);
+
+    if (!parsed.success) {
+      return new Response(`${JSON.stringify({ type: "error", message: "invalid request payload" })}\n`, {
+        status: 400,
+        headers: ndjsonHeaders(),
+      });
+    }
+
+    message = parsed.data.message.trim();
+    sessionId = parsed.data.sessionId;
   } catch {
     return new Response(`${JSON.stringify({ type: "error", message: "invalid request payload" })}\n`, {
       status: 400,

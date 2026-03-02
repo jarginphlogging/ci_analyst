@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
 from app.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 essential_settings_help = (
@@ -23,25 +27,60 @@ async def execute_cortex_sql(sql: str) -> List[Dict[str, Optional[Union[str, int
     if not settings.has_snowflake_credentials():
         raise RuntimeError(essential_settings_help)
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        response = await client.post(
-            f"{settings.snowflake_cortex_base_url}/query",
-            headers={
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {settings.snowflake_cortex_api_key}",
-            },
-            json={
-                "sql": sql,
-                "warehouse": settings.snowflake_cortex_warehouse,
-                "database": settings.snowflake_cortex_database,
-                "schema": settings.snowflake_cortex_schema,
+    started_at = time.perf_counter()
+    logger.info(
+        "Snowflake Cortex SQL request started",
+        extra={
+            "event": "provider.snowflake_sql.request.started",
+            "sqlChars": len(sql),
+            "sqlPreview": " ".join(sql.split())[:260],
+        },
+    )
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                f"{settings.snowflake_cortex_base_url}/query",
+                headers={
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {settings.snowflake_cortex_api_key}",
+                },
+                json={
+                    "sql": sql,
+                    "warehouse": settings.snowflake_cortex_warehouse,
+                    "database": settings.snowflake_cortex_database,
+                    "schema": settings.snowflake_cortex_schema,
+                },
+            )
+    except Exception:
+        logger.exception(
+            "Snowflake Cortex SQL request transport failure",
+            extra={
+                "event": "provider.snowflake_sql.request.failed_transport",
+                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
             },
         )
+        raise
 
     if response.status_code >= 400:
+        logger.error(
+            "Snowflake Cortex SQL request returned error",
+            extra={
+                "event": "provider.snowflake_sql.request.failed_http",
+                "statusCode": response.status_code,
+                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                "responsePreview": response.text[:500],
+            },
+        )
         raise RuntimeError(f"Snowflake Cortex request failed ({response.status_code}): {response.text}")
 
     payload: Any = response.json()
+    logger.info(
+        "Snowflake Cortex SQL request completed",
+        extra={
+            "event": "provider.snowflake_sql.request.completed",
+            "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+        },
+    )
 
     if isinstance(payload, dict):
         if isinstance(payload.get("rows"), list):

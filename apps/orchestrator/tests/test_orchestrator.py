@@ -126,6 +126,30 @@ class RetryFeedbackDependencies(DeterministicDependencies):
         return await super().run_sql(request, context, history, progress_callback)
 
 
+class GenerationRetryFeedbackDependencies(DeterministicDependencies):
+    async def run_sql(  # noqa: ARG002
+        self,
+        request: ChatTurnRequest,
+        context: TurnExecutionContext,
+        history: list[str],
+        progress_callback=None,
+    ) -> list[SqlExecutionResult]:
+        _ = request
+        _ = history
+        _ = progress_callback
+        context.sql_assumptions = ["SQL generation failed: model returned sql_ready without executable SQL."]
+        context.sql_retry_feedback = [
+            {
+                "phase": "sql_generation",
+                "stepId": "step_1",
+                "attempt": 1,
+                "error": "SQL generation failed: model returned sql_ready without executable SQL.",
+                "failedSql": "",
+            }
+        ]
+        return await super().run_sql(request, context, history, progress_callback)
+
+
 @pytest.mark.asyncio
 async def test_run_turn_returns_payload() -> None:
     orchestrator = ConversationalOrchestrator(DeterministicDependencies())
@@ -172,3 +196,20 @@ async def test_trace_exposes_retry_feedback_and_warehouse_errors() -> None:
     assert retry_feedback
     assert warehouse_errors
     assert "invalid identifier BOGUS_COL" in str(warehouse_errors[0].get("error", ""))
+
+
+@pytest.mark.asyncio
+async def test_trace_exposes_generation_errors_in_warehouse_errors() -> None:
+    orchestrator = ConversationalOrchestrator(GenerationRetryFeedbackDependencies())
+    result = await orchestrator.run_turn(
+        ChatTurnRequest(sessionId=uuid4(), message="Why did sales change month over month?")
+    )
+
+    sql_trace = result.response.trace[1]
+    assert sql_trace.id == "t2"
+    assert sql_trace.stageOutput is not None
+    warehouse_errors = sql_trace.stageOutput.get("warehouseErrors")
+    assert isinstance(warehouse_errors, list)
+    assert warehouse_errors
+    assert warehouse_errors[0].get("phase") == "sql_generation"
+    assert "without executable SQL" in str(warehouse_errors[0].get("error", ""))

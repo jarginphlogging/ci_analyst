@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import logging
+import re
+from time import perf_counter
 from typing import Any, Awaitable, Callable, Optional
 
 from app.config import settings
@@ -22,6 +25,8 @@ AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
 AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
 ProgressFn = Callable[[str], Optional[Awaitable[None]]]
+logger = logging.getLogger(__name__)
+_ASSUMPTION_ATTEMPT_PATTERN = re.compile(r"attempt\s+(\d+)", re.IGNORECASE)
 
 
 async def _emit_progress(progress_callback: ProgressFn | None, message: str) -> None:
@@ -70,13 +75,110 @@ class SqlExecutionStage:
         return flattened[:12]
 
     async def _execute_sql(self, sql: str) -> SqlExecutionResult:
-        raw_rows = await self._sql_fn(sql)
-        normalized_rows = normalize_rows(raw_rows)
+        started_at = perf_counter()
+        sql_preview = " ".join(sql.split())[:260]
+        logger.info(
+            "SQL execution started",
+            extra={
+                "event": "sql.execution.started",
+                "sqlChars": len(sql),
+                "sqlPreview": sql_preview,
+            },
+        )
+        try:
+            raw_rows = await self._sql_fn(sql)
+            normalized_rows = normalize_rows(raw_rows)
+        except Exception:
+            logger.exception(
+                "SQL execution failed",
+                extra={
+                    "event": "sql.execution.failed",
+                    "sqlChars": len(sql),
+                    "sqlPreview": sql_preview,
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                },
+            )
+            raise
+        logger.info(
+            "SQL execution completed",
+            extra={
+                "event": "sql.execution.completed",
+                "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                "rowCount": len(normalized_rows),
+                "sqlPreview": sql_preview,
+            },
+        )
         return SqlExecutionResult(
             sql=sql,
             rows=normalized_rows,
             rowCount=len(normalized_rows),
         )
+
+    @staticmethod
+    def _derived_retry_feedback_from_assumptions(
+        generated: GeneratedStep,
+        *,
+        attempt: int,
+    ) -> list[dict[str, Any]]:
+        entries: list[dict[str, Any]] = []
+        default_failed_sql = generated.attempted_sql or generated.sql
+        for item in generated.assumptions:
+            text = str(item).strip()
+            if not text:
+                continue
+            lowered = text.lower()
+            if "attempt" not in lowered or "failed" not in lowered:
+                continue
+            phase = "sql_generation"
+            if "sql execution attempt" in lowered:
+                phase = "sql_execution"
+            elif "sql generation attempt" not in lowered:
+                continue
+
+            error_text = text
+            if "failed:" in text:
+                error_text = text.split("failed:", 1)[1].strip() or text
+            attempt_match = _ASSUMPTION_ATTEMPT_PATTERN.search(text)
+            entry_attempt = int(attempt_match.group(1)) if attempt_match else attempt
+            entries.append(
+                {
+                    "phase": phase,
+                    "stepId": generated.step.id,
+                    "attempt": entry_attempt,
+                    "provider": generated.provider,
+                    "error": error_text,
+                    "failedSql": default_failed_sql,
+                }
+            )
+
+        if entries:
+            return entries[:6]
+
+        question = (generated.clarification_question or "").strip()
+        lowered_question = question.lower()
+        technical_markers = (
+            "unbalanced json",
+            "timeout",
+            "timed out",
+            "readtimeout",
+            "connection",
+            "transport",
+            "parse",
+            "validation error",
+            "failed",
+        )
+        if question and any(marker in lowered_question for marker in technical_markers):
+            return [
+                {
+                    "phase": "sql_generation",
+                    "stepId": generated.step.id,
+                    "attempt": attempt,
+                    "provider": generated.provider,
+                    "error": question,
+                    "failedSql": default_failed_sql,
+                }
+            ]
+        return []
 
     @staticmethod
     def _blocked_from_generated(
@@ -87,6 +189,21 @@ class SqlExecutionStage:
     ) -> SqlGenerationBlockedError:
         failed_sql = generated.attempted_sql or generated.sql
         retry_tail = (retry_feedback or [])[-4:]
+        derived_retry_feedback = SqlExecutionStage._derived_retry_feedback_from_assumptions(
+            generated,
+            attempt=attempt,
+        )
+        combined_retry_feedback: list[dict[str, Any]] = []
+        seen_feedback: set[str] = set()
+        for item in [*retry_tail, *derived_retry_feedback]:
+            if not isinstance(item, dict):
+                continue
+            key = str(item)
+            if key in seen_feedback:
+                continue
+            seen_feedback.add(key)
+            combined_retry_feedback.append(item)
+        retry_payload = combined_retry_feedback[:6]
         if generated.status == "not_relevant":
             return SqlGenerationBlockedError(
                 stop_reason="not_relevant",
@@ -99,7 +216,7 @@ class SqlExecutionStage:
                     "reason": generated.not_relevant_reason,
                     "assumptions": generated.assumptions,
                     "failedSql": failed_sql,
-                    "retryFeedback": retry_tail,
+                    "retryFeedback": retry_payload,
                 },
             )
 
@@ -113,9 +230,10 @@ class SqlExecutionStage:
                 "attempt": attempt,
                 "provider": generated.provider,
                 "rationale": generated.rationale,
+                "error": generated.clarification_question or generated.rationale,
                 "assumptions": generated.assumptions,
                 "failedSql": failed_sql,
-                "retryFeedback": retry_tail,
+                "retryFeedback": retry_payload,
             },
         )
 
@@ -162,7 +280,28 @@ class SqlExecutionStage:
             return False
         if generated.attempted_sql and generated.attempted_sql.strip():
             return True
-        return any("sql execution attempt" in item.lower() and "failed" in item.lower() for item in generated.assumptions)
+        if any("sql execution attempt" in item.lower() and "failed" in item.lower() for item in generated.assumptions):
+            return True
+        if any("sql generation attempt" in item.lower() and "failed" in item.lower() for item in generated.assumptions):
+            return True
+        if any("sql generation failed" in item.lower() for item in generated.assumptions):
+            return True
+        lowered_question = generated.clarification_question.lower()
+        return any(
+            token in lowered_question
+            for token in (
+                "timeout",
+                "timed out",
+                "readtimeout",
+                "connection",
+                "transport",
+                "unbalanced json",
+                "parse",
+                "validation error",
+                "failed",
+                "no executable sql",
+            )
+        )
 
     @staticmethod
     def _generation_feedback_entry(generated: GeneratedStep, *, attempt: int) -> dict[str, Any]:
@@ -315,6 +454,17 @@ class SqlExecutionStage:
                     progress_callback=progress_callback,
                 )
             except Exception as error:
+                logger.exception(
+                    "SQL step execution attempt failed",
+                    extra={
+                        "event": "sql.execution.retry_failed",
+                        "stepId": current_generated.step.id,
+                        "attempt": attempt_cursor,
+                        "maxAttempts": MAX_SQL_ATTEMPTS,
+                        "provider": current_generated.provider,
+                        "sqlPreview": " ".join((current_generated.sql or "").split())[:260],
+                    },
+                )
                 step_retry_feedback.append(
                     {
                         "phase": "sql_execution",
@@ -412,116 +562,149 @@ class SqlExecutionStage:
         conversation_id: str = "anonymous",
         progress_callback: ProgressFn | None = None,
     ) -> tuple[list[SqlExecutionResult], list[str]]:
+        started_at = perf_counter()
         self._latest_retry_feedback = []
         total_steps = len(plan)
-        if total_steps == 0:
-            return [], []
-        if total_steps > 5:
-            raise SqlGenerationBlockedError(
-                stop_reason="clarification",
-                user_message=TOO_COMPLEX_MESSAGE,
-            )
-
-        dispatch = execution_dispatch(self._analyst_fn)
-        await _emit_progress(
-            progress_callback,
-            f"Dispatching {total_steps} SQL step(s) to {dispatch.target_label}",
+        logger.info(
+            "SQL stage started",
+            extra={
+                "event": "sql.stage.started",
+                "stepCount": total_steps,
+                "conversationId": conversation_id,
+                "parallelLimit": max(1, settings.real_max_parallel_queries),
+            },
         )
-        levels = dependency_levels(plan)
-        generation_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
-        execution_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
+        try:
+            if total_steps == 0:
+                return [], []
+            if total_steps > 5:
+                raise SqlGenerationBlockedError(
+                    stop_reason="clarification",
+                    user_message=TOO_COMPLEX_MESSAGE,
+                )
 
-        prior_sql: list[str] = []
-        assumptions: list[str] = []
-        generated_by_index: dict[int, GeneratedStep] = {}
-        generated_attempt_by_index: dict[int, int] = {}
-        retry_feedback_by_step: dict[str, list[dict[str, Any]]] = {}
-
-        def _sync_retry_feedback() -> None:
-            self._latest_retry_feedback = self._flatten_retry_feedback(retry_feedback_by_step)
-
-        # Phase 1: generate executable SQL for every plan step (respecting
-        # dependency levels so independent steps can run in parallel).
-        for level in levels:
-            snapshot_prior_sql = list(prior_sql)
-
-            async def _generate(index: int) -> tuple[GeneratedStep, int]:
-                async with generation_semaphore:
-                    step = plan[index]
-                    return await self._generate_ready_step(
-                        index=index,
-                        step=step,
-                        total_steps=total_steps,
-                        message=message,
-                        route=route,
-                        history=history,
-                        prior_sql=snapshot_prior_sql,
-                        conversation_id=conversation_id,
-                        retry_feedback_by_step=retry_feedback_by_step,
-                        assumptions=assumptions,
-                        progress_callback=progress_callback,
-                        sync_retry_feedback=_sync_retry_feedback,
-                    )
-
-            generated_level = (
-                await asyncio.gather(*(_generate(index) for index in level))
-                if len(level) > 1
-                else [await _generate(level[0])]
-            )
-
-            for generated, generated_attempt in sorted(generated_level, key=lambda item: item[0].index):
-                prior_sql.append(generated.sql)
-                generated_by_index[generated.index] = generated
-                generated_attempt_by_index[generated.index] = generated_attempt
-
-        generated_steps = [generated_by_index[index] for index in range(total_steps)]
-        results_by_index: dict[int, SqlExecutionResult] = {}
-
-        # Phase 2: execute generated SQL, and if warehouse execution fails,
-        # regenerate with failure feedback until retry budget is exhausted.
-        for level in levels:
-            generated_level = [generated_steps[index] for index in level]
-            should_parallel_execute = len(generated_level) > 1 and dispatch.parallel_capable
-            level_positions = ", ".join(str(index + 1) for index in level)
+            dispatch = execution_dispatch(self._analyst_fn)
             await _emit_progress(
                 progress_callback,
-                (
-                    f"Executing level [{level_positions}] in parallel on {dispatch.target_label}"
+                f"Dispatching {total_steps} SQL step(s) to {dispatch.target_label}",
+            )
+            levels = dependency_levels(plan)
+            generation_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
+            execution_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
+
+            prior_sql: list[str] = []
+            assumptions: list[str] = []
+            generated_by_index: dict[int, GeneratedStep] = {}
+            generated_attempt_by_index: dict[int, int] = {}
+            retry_feedback_by_step: dict[str, list[dict[str, Any]]] = {}
+
+            def _sync_retry_feedback() -> None:
+                self._latest_retry_feedback = self._flatten_retry_feedback(retry_feedback_by_step)
+
+            # Phase 1: generate executable SQL for every plan step (respecting
+            # dependency levels so independent steps can run in parallel).
+            for level in levels:
+                snapshot_prior_sql = list(prior_sql)
+
+                async def _generate(index: int) -> tuple[GeneratedStep, int]:
+                    async with generation_semaphore:
+                        step = plan[index]
+                        return await self._generate_ready_step(
+                            index=index,
+                            step=step,
+                            total_steps=total_steps,
+                            message=message,
+                            route=route,
+                            history=history,
+                            prior_sql=snapshot_prior_sql,
+                            conversation_id=conversation_id,
+                            retry_feedback_by_step=retry_feedback_by_step,
+                            assumptions=assumptions,
+                            progress_callback=progress_callback,
+                            sync_retry_feedback=_sync_retry_feedback,
+                        )
+
+                generated_level = (
+                    await asyncio.gather(*(_generate(index) for index in level))
+                    if len(level) > 1
+                    else [await _generate(level[0])]
+                )
+
+                for generated, generated_attempt in sorted(generated_level, key=lambda item: item[0].index):
+                    prior_sql.append(generated.sql)
+                    generated_by_index[generated.index] = generated
+                    generated_attempt_by_index[generated.index] = generated_attempt
+
+            generated_steps = [generated_by_index[index] for index in range(total_steps)]
+            results_by_index: dict[int, SqlExecutionResult] = {}
+
+            # Phase 2: execute generated SQL, and if warehouse execution fails,
+            # regenerate with failure feedback until retry budget is exhausted.
+            for level in levels:
+                generated_level = [generated_steps[index] for index in level]
+                should_parallel_execute = len(generated_level) > 1 and dispatch.parallel_capable
+                level_positions = ", ".join(str(index + 1) for index in level)
+                await _emit_progress(
+                    progress_callback,
+                    (
+                        f"Executing level [{level_positions}] in parallel on {dispatch.target_label}"
+                        if should_parallel_execute
+                        else f"Executing level [{level_positions}] serially on {dispatch.target_label}"
+                    ),
+                )
+
+                async def _execute(generated: GeneratedStep) -> tuple[int, SqlExecutionResult]:
+                    async with execution_semaphore:
+                        return await self._execute_with_retries(
+                            generated=generated,
+                            generated_attempt=generated_attempt_by_index.get(generated.index, 1),
+                            total_steps=total_steps,
+                            message=message,
+                            route=route,
+                            history=history,
+                            prior_sql=prior_sql,
+                            conversation_id=conversation_id,
+                            retry_feedback_by_step=retry_feedback_by_step,
+                            assumptions=assumptions,
+                            progress_callback=progress_callback,
+                            sync_retry_feedback=_sync_retry_feedback,
+                        )
+
+                level_results = (
+                    await asyncio.gather(*(_execute(generated) for generated in generated_level))
                     if should_parallel_execute
-                    else f"Executing level [{level_positions}] serially on {dispatch.target_label}"
-                ),
+                    else [await _execute(generated) for generated in generated_level]
+                )
+                for index, result in level_results:
+                    results_by_index[index] = result
+
+            results = [results_by_index[index] for index in range(total_steps)]
+
+            deduped_assumptions: list[str] = []
+            for item in assumptions:
+                if item not in deduped_assumptions:
+                    deduped_assumptions.append(item)
+            _sync_retry_feedback()
+            logger.info(
+                "SQL stage completed",
+                extra={
+                    "event": "sql.stage.completed",
+                    "stepCount": total_steps,
+                    "queryCount": len(results),
+                    "totalRows": sum(result.rowCount for result in results),
+                    "retryFeedbackCount": len(self._latest_retry_feedback),
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                },
             )
-
-            async def _execute(generated: GeneratedStep) -> tuple[int, SqlExecutionResult]:
-                async with execution_semaphore:
-                    return await self._execute_with_retries(
-                        generated=generated,
-                        generated_attempt=generated_attempt_by_index.get(generated.index, 1),
-                        total_steps=total_steps,
-                        message=message,
-                        route=route,
-                        history=history,
-                        prior_sql=prior_sql,
-                        conversation_id=conversation_id,
-                        retry_feedback_by_step=retry_feedback_by_step,
-                        assumptions=assumptions,
-                        progress_callback=progress_callback,
-                        sync_retry_feedback=_sync_retry_feedback,
-                    )
-
-            level_results = (
-                await asyncio.gather(*(_execute(generated) for generated in generated_level))
-                if should_parallel_execute
-                else [await _execute(generated) for generated in generated_level]
+            return results, deduped_assumptions[:8]
+        except Exception:
+            logger.exception(
+                "SQL stage failed",
+                extra={
+                    "event": "sql.stage.failed",
+                    "stepCount": total_steps,
+                    "conversationId": conversation_id,
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                },
             )
-            for index, result in level_results:
-                results_by_index[index] = result
-
-        results = [results_by_index[index] for index in range(total_steps)]
-
-        deduped_assumptions: list[str] = []
-        for item in assumptions:
-            if item not in deduped_assumptions:
-                deduped_assumptions.append(item)
-        _sync_retry_feedback()
-        return results, deduped_assumptions[:8]
+            raise

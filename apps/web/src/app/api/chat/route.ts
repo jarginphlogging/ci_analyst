@@ -1,17 +1,19 @@
+import { chatTurnRequestSchema } from "@ci/contracts";
 import { NextResponse } from "next/server";
 import { getMockAgentResponse } from "@/lib/mock-agent";
 import { serverEnv } from "@/lib/server-env";
 
-interface ChatRequestBody {
-  sessionId?: string;
-  message?: string;
-}
-
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as ChatRequestBody;
-    const message = body?.message?.trim();
-    const sessionId = body?.sessionId;
+    const rawBody = (await request.json()) as unknown;
+    const parsed = chatTurnRequestSchema.safeParse(rawBody);
+
+    if (!parsed.success) {
+      return NextResponse.json({ error: "Invalid request payload" }, { status: 400 });
+    }
+
+    const message = parsed.data.message.trim();
+    const sessionId = parsed.data.sessionId;
 
     if (!message) {
       return NextResponse.json({ error: "message is required" }, { status: 400 });

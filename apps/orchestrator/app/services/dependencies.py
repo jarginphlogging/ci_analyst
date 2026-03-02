@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import logging
+import json
+from time import perf_counter
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
+
+from pydantic import BaseModel
 
 from app.config import settings
 from app.models import (
@@ -19,7 +24,12 @@ from app.providers.mock_provider import (
 )
 from app.providers.protocols import AnalystFn, LlmFn, SqlFn
 from app.services.llm_json import parse_json_object
-from app.services.llm_trace import record_llm_trace
+from app.services.llm_schemas import (
+    PlannerResponsePayload,
+    SqlGenerationResponsePayload,
+    SynthesisResponsePayload,
+)
+from app.services.llm_trace import current_llm_trace_stage, record_llm_trace
 from app.services.semantic_model import SemanticModel, load_semantic_model
 from app.services.stages import (
     PlannerBlockedError,
@@ -32,6 +42,7 @@ from app.services.types import OrchestratorDependencies, TurnExecutionContext
 
 ProgressCallback = Optional[Callable[[str], Optional[Awaitable[None]]]]
 EXECUTION_MODE = "standard"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -98,27 +109,117 @@ class RealDependencies:
         if self._llm_fn is None or self._sql_fn is None:
             raise RuntimeError("Provider wiring failed to initialize.")
         self._model = model or load_semantic_model()
-        self._planner_stage = PlannerStage(model=self._model, ask_llm_json=self._ask_llm_json)
+        self._planner_stage = PlannerStage(model=self._model, ask_llm_json=self._ask_planner_payload)
         self._sql_stage = SqlExecutionStage(
             model=self._model,
-            ask_llm_json=self._ask_llm_json,
+            ask_llm_json=self._ask_sql_generation_payload,
             sql_fn=self._sql_fn,
             analyst_fn=self._analyst_fn,
         )
         self._validation_stage = ValidationStage(max_row_limit=self._model.policy.max_row_limit)
-        self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_llm_json)
+        self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_synthesis_payload)
 
-    async def _ask_llm_json(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:
+    async def _ask_planner_payload(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:
+        return await self._ask_llm_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            output_model=PlannerResponsePayload,
+            schema_name="planner_response",
+        )
+
+    async def _ask_sql_generation_payload(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:
+        return await self._ask_llm_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            output_model=SqlGenerationResponsePayload,
+            schema_name="sql_generation_response",
+        )
+
+    async def _ask_synthesis_payload(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:
+        return await self._ask_llm_structured(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=max_tokens,
+            output_model=SynthesisResponsePayload,
+            schema_name="synthesis_response",
+        )
+
+    async def _ask_llm_structured(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        max_tokens: int,
+        output_model: type[BaseModel],
+        schema_name: str,
+    ) -> dict[str, Any]:
         raw_response: str | None = None
+        structured_mode = settings.provider_mode in {"sandbox", "prod"}
+        started_at = perf_counter()
+        stage_name = "unknown_stage"
+        stage_metadata: dict[str, Any] = {}
+        stage = current_llm_trace_stage()
+        if stage is not None:
+            stage_name, stage_metadata = stage
+        logger.info(
+            "LLM call started",
+            extra={
+                "event": "llm.call.started",
+                "provider": settings.provider_mode,
+                "stage": stage_name,
+                "structuredMode": structured_mode,
+                "schemaName": schema_name,
+                "maxTokens": max_tokens,
+                "temperature": settings.real_llm_temperature,
+                "systemPromptChars": len(system_prompt),
+                "userPromptChars": len(user_prompt),
+                "stageMetadata": stage_metadata,
+            },
+        )
         try:
-            raw_response = await self._llm_fn(
-                system_prompt=system_prompt,
-                user_prompt=user_prompt,
-                temperature=settings.real_llm_temperature,
-                max_tokens=max_tokens,
-                response_json=True,
-            )
-            parsed_response = parse_json_object(raw_response)
+            llm_kwargs: dict[str, Any] = {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "temperature": settings.real_llm_temperature,
+                "max_tokens": max_tokens,
+            }
+            if structured_mode:
+                llm_kwargs["response_schema"] = output_model.model_json_schema()
+                llm_kwargs["response_schema_name"] = schema_name
+            else:
+                llm_kwargs["response_json"] = True
+
+            llm_response = await self._llm_fn(**llm_kwargs)
+
+            payload: dict[str, Any]
+            if isinstance(llm_response, dict):
+                payload = llm_response
+                raw_response = json.dumps(llm_response, ensure_ascii=True)
+            elif isinstance(llm_response, str):
+                raw_response = llm_response
+                payload = parse_json_object(llm_response)
+            else:
+                raise RuntimeError("LLM provider returned unsupported response type.")
+
+            try:
+                parsed_model = output_model.model_validate(payload)
+                parsed_response = parsed_model.model_dump(mode="json", exclude_none=True)
+            except Exception as validation_error:
+                if structured_mode:
+                    raise
+                logger.warning(
+                    "Mock-mode LLM payload failed schema validation; accepting best-effort payload",
+                    extra={
+                        "event": "llm.call.mock_schema_relaxed",
+                        "provider": settings.provider_mode,
+                        "stage": stage_name,
+                        "schemaName": schema_name,
+                        "error": str(validation_error),
+                    },
+                )
+                parsed_response = payload
             record_llm_trace(
                 provider="llm",
                 system_prompt=system_prompt,
@@ -128,7 +229,52 @@ class RealDependencies:
                 raw_response=raw_response,
                 parsed_response=parsed_response,
             )
+            logger.info(
+                "LLM call completed",
+                extra={
+                    "event": "llm.call.completed",
+                    "provider": settings.provider_mode,
+                    "stage": stage_name,
+                    "structuredMode": structured_mode,
+                    "schemaName": schema_name,
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                    "responseChars": len(raw_response or ""),
+                },
+            )
             return parsed_response
+        except TypeError as error:
+            if structured_mode and "unexpected keyword argument" in str(error):
+                logger.exception(
+                    "LLM provider does not support structured output arguments",
+                    extra={
+                        "event": "llm.call.failed_structured_unsupported",
+                        "provider": settings.provider_mode,
+                        "stage": stage_name,
+                        "schemaName": schema_name,
+                    },
+                )
+                raise RuntimeError("Configured provider does not support structured output parameters.") from error
+            record_llm_trace(
+                provider="llm",
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                max_tokens=max_tokens,
+                temperature=settings.real_llm_temperature,
+                raw_response=raw_response,
+                error=str(error),
+            )
+            logger.exception(
+                "LLM call failed",
+                extra={
+                    "event": "llm.call.failed",
+                    "provider": settings.provider_mode,
+                    "stage": stage_name,
+                    "structuredMode": structured_mode,
+                    "schemaName": schema_name,
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                },
+            )
+            raise
         except Exception as error:
             record_llm_trace(
                 provider="llm",
@@ -139,6 +285,17 @@ class RealDependencies:
                 raw_response=raw_response,
                 error=str(error),
             )
+            logger.exception(
+                "LLM call failed",
+                extra={
+                    "event": "llm.call.failed",
+                    "provider": settings.provider_mode,
+                    "stage": stage_name,
+                    "structuredMode": structured_mode,
+                    "schemaName": schema_name,
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                },
+            )
             raise
 
     async def create_plan(
@@ -146,12 +303,34 @@ class RealDependencies:
         request: ChatTurnRequest,
         history: list[str],
     ) -> TurnExecutionContext:
+        logger.info(
+            "Creating plan",
+            extra={
+                "event": "dependencies.create_plan.started",
+                "historyDepth": len(history),
+                "messageChars": len(request.message),
+            },
+        )
         decision = await self._planner_stage.create_plan(request.message, history)
         if decision.stop_reason != "none":
+            logger.info(
+                "Planner returned blocked decision",
+                extra={
+                    "event": "dependencies.create_plan.blocked",
+                    "stopReason": decision.stop_reason,
+                },
+            )
             raise PlannerBlockedError(
                 stop_reason=decision.stop_reason,
                 user_message=decision.stop_message or "Unable to process request.",
             )
+        logger.info(
+            "Plan created",
+            extra={
+                "event": "dependencies.create_plan.completed",
+                "stepCount": len(decision.steps),
+            },
+        )
         return TurnExecutionContext(
             route=EXECUTION_MODE,
             plan=decision.steps,
@@ -165,6 +344,13 @@ class RealDependencies:
         history: list[str],
         progress_callback: ProgressCallback = None,
     ) -> list[SqlExecutionResult]:
+        logger.info(
+            "Running SQL stage",
+            extra={
+                "event": "dependencies.run_sql.started",
+                "stepCount": len(context.plan),
+            },
+        )
         try:
             results, accumulated_assumptions = await self._sql_stage.run_sql(
                 message=request.message,
@@ -175,6 +361,14 @@ class RealDependencies:
                 progress_callback=progress_callback,
             )
             context.sql_assumptions = accumulated_assumptions
+            logger.info(
+                "SQL stage returned results",
+                extra={
+                    "event": "dependencies.run_sql.completed",
+                    "queryCount": len(results),
+                    "totalRows": sum(result.rowCount for result in results),
+                },
+            )
             return results
         finally:
             context.sql_retry_feedback = self._sql_stage.latest_retry_feedback
@@ -189,6 +383,13 @@ class RealDependencies:
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse:
+        logger.info(
+            "Building final response",
+            extra={
+                "event": "dependencies.build_response.started",
+                "resultCount": len(results),
+            },
+        )
         return await self._synthesis_stage.build_response(
             message=request.message,
             route=context.route,
@@ -206,6 +407,13 @@ class RealDependencies:
         results: list[SqlExecutionResult],
         history: list[str],
     ) -> AgentResponse:
+        logger.info(
+            "Building draft response",
+            extra={
+                "event": "dependencies.build_fast_response.started",
+                "resultCount": len(results),
+            },
+        )
         return await self._synthesis_stage.build_fast_response(
             message=request.message,
             route=context.route,

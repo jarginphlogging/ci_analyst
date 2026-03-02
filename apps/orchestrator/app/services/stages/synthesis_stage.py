@@ -516,6 +516,8 @@ class SynthesisStage:
                         max_tokens=settings.real_llm_max_tokens,
                     )
             except Exception:
+                if settings.provider_mode in {"sandbox", "prod"}:
+                    raise
                 llm_payload = {}
 
         answer = str(llm_payload.get("answer", "")).strip() or _deterministic_answer(results)

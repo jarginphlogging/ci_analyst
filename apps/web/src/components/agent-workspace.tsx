@@ -382,6 +382,8 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [environment, setEnvironment] = useState<EnvironmentLabel>(initialEnvironment);
+  const [isLeftPaneVisible, setIsLeftPaneVisible] = useState(true);
+  const [isRightPaneVisible, setIsRightPaneVisible] = useState(true);
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -434,6 +436,18 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     };
   }, [latestResponse, latestResponseIsFailure, latestSnapshotMetadata, latestResponseMessage]);
   const showStarterPrompts = useMemo(() => !messages.some((message) => message.role === "user"), [messages]);
+  const workspaceGridClassName = useMemo(() => {
+    if (isLeftPaneVisible && isRightPaneVisible) {
+      return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)_320px] lg:px-6 lg:py-6";
+    }
+    if (isLeftPaneVisible) {
+      return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)] lg:px-6 lg:py-6";
+    }
+    if (isRightPaneVisible) {
+      return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-6 lg:py-6";
+    }
+    return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-1 lg:px-6 lg:py-6";
+  }, [isLeftPaneVisible, isRightPaneVisible]);
 
   useEffect(() => {
     let isMounted = true;
@@ -587,8 +601,9 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
       <div className="pointer-events-none absolute -left-24 top-12 h-80 w-80 rounded-full bg-cyan-300/40 blur-3xl" />
       <div className="pointer-events-none absolute right-10 top-36 h-72 w-72 rounded-full bg-orange-200/50 blur-3xl" />
 
-      <div className="mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)_320px] lg:px-6 lg:py-6">
-        <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)]">
+      <div className={workspaceGridClassName}>
+        {isLeftPaneVisible ? (
+          <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)]">
           <p className="text-xs uppercase tracking-[0.22em] text-cyan-300">Customer Insights</p>
           <h1 className="mt-2 text-3xl font-bold leading-tight">Analyst</h1>
           <p className="mt-2 text-sm text-slate-300">Ask questions about your data in natural language.</p>
@@ -618,7 +633,8 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               ))}
             </ul>
           </div>
-        </aside>
+          </aside>
+        ) : null}
 
         <main className="flex min-h-[calc(100vh-2.5rem)] flex-col rounded-3xl border border-slate-200 bg-white/70 p-4 shadow-[0_18px_40px_rgba(14,44,68,0.13)] backdrop-blur lg:p-5">
           <header className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
@@ -626,9 +642,45 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               <div>
                 <h2 className="text-xl font-bold text-slate-100">Conversation Workspace</h2>
               </div>
-              <div className="flex items-center gap-2 rounded-full border border-slate-300 bg-slate-50 px-3 py-1.5 text-xs font-semibold text-slate-700">
-                <span className="h-2 w-2 rounded-full bg-emerald-400" />
-                Multi-Agent Reasoning Active
+              <div
+                className="inline-flex items-center gap-1 rounded-xl border border-slate-700/90 bg-slate-800/80 p-1"
+                role="group"
+                aria-label="Pane selector"
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsLeftPaneVisible((prev) => !prev)}
+                  aria-pressed={isLeftPaneVisible}
+                  aria-label={isLeftPaneVisible ? "Hide left pane" : "Show left pane"}
+                  title={isLeftPaneVisible ? "Hide left pane" : "Show left pane"}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-slate-100 transition ${
+                    isLeftPaneVisible
+                      ? "border-cyan-400/60 bg-cyan-500/20 hover:bg-cyan-500/30"
+                      : "border-slate-600 bg-slate-700/70 hover:bg-slate-700"
+                  }`}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
+                    <rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <line x1="7.5" y1="4.5" x2="7.5" y2="15.5" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsRightPaneVisible((prev) => !prev)}
+                  aria-pressed={isRightPaneVisible}
+                  aria-label={isRightPaneVisible ? "Hide right pane" : "Show right pane"}
+                  title={isRightPaneVisible ? "Hide right pane" : "Show right pane"}
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-slate-100 transition ${
+                    isRightPaneVisible
+                      ? "border-cyan-400/60 bg-cyan-500/20 hover:bg-cyan-500/30"
+                      : "border-slate-600 bg-slate-700/70 hover:bg-slate-700"
+                  }`}
+                >
+                  <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
+                    <rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <line x1="12.5" y1="4.5" x2="12.5" y2="15.5" stroke="currentColor" strokeWidth="1.5" />
+                  </svg>
+                </button>
               </div>
             </div>
           </header>
@@ -851,7 +903,8 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
           </footer>
         </main>
 
-        <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur">
+        {isRightPaneVisible ? (
+          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur">
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <p className="text-xl font-bold text-slate-100">Current Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">
@@ -908,7 +961,8 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               Ask a question to populate a real-time decision brief.
             </div>
           )}
-        </aside>
+          </aside>
+        ) : null}
       </div>
     </div>
   );

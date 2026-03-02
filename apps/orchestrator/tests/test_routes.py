@@ -119,23 +119,29 @@ def test_health() -> None:
 
 
 def test_turn_endpoint() -> None:
+    request_id = "test-request-id-123"
     response = client.post(
         "/v1/chat/turn",
+        headers={"x-request-id": request_id},
         json={"sessionId": str(uuid4()), "message": "What changed in charge-off risk this quarter?"},
     )
 
     assert response.status_code == 200
+    assert response.headers.get("x-request-id") == request_id
     payload = response.json()
     assert payload["response"]["answer"]
     assert len(payload["response"]["dataTables"]) >= 1
 
 
 def test_stream_endpoint() -> None:
+    request_id = "test-request-id-stream"
     response = client.post(
         "/v1/chat/stream",
+        headers={"x-request-id": request_id},
         json={"sessionId": str(uuid4()), "message": "Where are fraud losses accelerating?"},
     )
 
     assert response.status_code == 200
+    assert response.headers.get("x-request-id") == request_id
     assert '"type": "answer_delta"' in response.text or '"type":"answer_delta"' in response.text
     assert '"type": "done"' in response.text or '"type":"done"' in response.text

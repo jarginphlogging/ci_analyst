@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import logging
+from time import perf_counter
 from typing import Any, Optional
+from uuid import uuid4
 
 import uvicorn
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
+from app.observability import bind_log_context, configure_logging
 from app.providers.anthropic_llm import chat_completion as anthropic_chat_completion
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 from app.services.llm_json import as_string_list, parse_json_object
+from app.services.llm_schemas import AnalystResponsePayload
 from app.services.semantic_model import SemanticModel, load_semantic_model, semantic_model_summary
 from app.services.semantic_model_yaml import load_semantic_model_yaml, semantic_model_yaml_prompt_context
 from app.services.sql_guardrails import guard_sql
+
+configure_logging()
+logger = logging.getLogger(__name__)
 
 
 class QueryRequest(BaseModel):
@@ -48,6 +56,46 @@ async def _lifespan(_: FastAPI):
 
 
 app = FastAPI(title="CI Analyst Sandbox Cortex Service", version="0.2.0", lifespan=_lifespan)
+
+
+@app.middleware("http")
+async def request_logging_middleware(request: Request, call_next):
+    request_id = request.headers.get("x-request-id", "").strip() or str(uuid4())
+    started_at = perf_counter()
+    with bind_log_context(request_id=request_id):
+        logger.info(
+            "Sandbox HTTP request started",
+            extra={
+                "event": "sandbox.http.request.started",
+                "method": request.method,
+                "path": request.url.path,
+            },
+        )
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception(
+                "Sandbox HTTP request failed",
+                extra={
+                    "event": "sandbox.http.request.failed",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                },
+            )
+            raise
+        response.headers["x-request-id"] = request_id
+        logger.info(
+            "Sandbox HTTP request completed",
+            extra={
+                "event": "sandbox.http.request.completed",
+                "method": request.method,
+                "path": request.url.path,
+                "statusCode": response.status_code,
+                "durationMs": round((perf_counter() - started_at) * 1000, 2),
+            },
+        )
+        return response
 
 
 def _check_auth(authorization: Optional[str]) -> None:
@@ -149,7 +197,30 @@ def _needs_clarification(message: str) -> bool:
     return any(marker in lowered for marker in vague_markers)
 
 
-_MAX_SQL_ATTEMPTS = max(1, settings.sql_max_attempts)
+# Keep sandbox analyst single-attempt so orchestrator-level retry logic remains
+# authoritative and trace output is consistent across providers.
+_MAX_SQL_ATTEMPTS = 1
+
+_SQL_GENERATION_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "type": {"type": "string", "enum": ["sql_ready", "clarification", "not_relevant"]},
+        "sql": {"type": "string"},
+        "lightResponse": {"type": "string"},
+        "clarificationQuestion": {"type": "string"},
+        "notRelevantReason": {"type": "string"},
+        "assumptions": {"type": "array", "items": {"type": "string"}},
+    },
+    "required": [
+        "type",
+        "sql",
+        "lightResponse",
+        "clarificationQuestion",
+        "notRelevantReason",
+        "assumptions",
+    ],
+}
 
 
 def _retry_feedback_line(*, error: str, sql: str, attempt: int, max_attempts: int) -> str:
@@ -188,25 +259,32 @@ async def _generate_sql_from_message(message: str, conversation_history: list[st
         user_prompt=user_prompt,
         temperature=0.0,
         max_tokens=800,
-        response_json=True,
+        response_schema=_SQL_GENERATION_SCHEMA,
+        response_schema_name="sandbox_sql_generation",
     )
     payload = parse_json_object(llm_text)
-    response_type = str(payload.get("type", "sql_ready")).strip().lower().replace("-", "_")
-    if response_type not in {"sql_ready", "clarification", "not_relevant"}:
+    parsed = AnalystResponsePayload.model_validate(payload)
+    response_type = parsed.type.strip().lower().replace("-", "_")
+    if response_type in {"answer", "sql"}:
         response_type = "sql_ready"
+    elif response_type == "clarify":
+        response_type = "clarification"
+    elif response_type in {"out_of_domain", "irrelevant"}:
+        response_type = "not_relevant"
 
-    sql = str(payload.get("sql", "")).strip()
-    light_response = str(payload.get("lightResponse", "")).strip()
-    clarification_question = str(payload.get("clarificationQuestion", "")).strip()
-    not_relevant_reason = str(payload.get("notRelevantReason", "")).strip()
-    assumptions = as_string_list(payload.get("assumptions"), max_items=4)
+    sql = parsed.sql.strip()
+    light_response = parsed.lightResponse.strip()
+    clarification_question = parsed.clarificationQuestion.strip()
+    not_relevant_reason = parsed.notRelevantReason.strip() or parsed.relevanceReason.strip()
+    assumptions = as_string_list(parsed.assumptions, max_items=4)
 
     if response_type == "sql_ready" and not sql:
         response_type = "clarification"
         clarification_question = (
             clarification_question
-            or "SQL generator returned no executable SQL."
+            or "SQL generation failed: model returned sql_ready without executable SQL."
         )
+        assumptions.append("SQL generation failed: model returned sql_ready without executable SQL.")
 
     return {
         "type": response_type,
@@ -240,8 +318,20 @@ async def query(payload: QueryRequest, authorization: Optional[str] = Header(def
     try:
         rows = execute_readonly_query(settings.sandbox_sqlite_path, payload.sql)
     except ValueError as error:
+        logger.exception(
+            "Sandbox SQL query validation failed",
+            extra={
+                "event": "sandbox.query.failed_validation",
+            },
+        )
         raise HTTPException(status_code=400, detail=str(error)) from error
     except Exception as error:  # noqa: BLE001
+        logger.exception(
+            "Sandbox SQL query execution failed",
+            extra={
+                "event": "sandbox.query.failed_execution",
+            },
+        )
         raise HTTPException(status_code=400, detail=f"Sandbox SQL execution failed: {error}") from error
 
     return {
@@ -291,11 +381,18 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
             try:
                 generated = await _generate_sql_from_message(user_message, generation_history)
             except Exception as error:  # noqa: BLE001
+                logger.exception(
+                    "Sandbox SQL generation attempt failed",
+                    extra={
+                        "event": "sandbox.message.sql_generation.failed",
+                        "attempt": attempt,
+                        "conversationId": payload.conversationId,
+                    },
+                )
                 assumptions.append(f"SQL generation attempt {attempt} failed: {error}")
                 response_type = "clarification"
                 clarification_question = str(error).strip()
                 if attempt >= _MAX_SQL_ATTEMPTS:
-                    assumptions.append("SQL retry limit reached.")
                     break
                 generation_history = [*generation_history, f"SQL generation error: {error}"]
                 continue
@@ -331,6 +428,14 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
                 last_failed_sql = ""
                 break
             except Exception as error:  # noqa: BLE001
+                logger.exception(
+                    "Sandbox SQL execution attempt failed",
+                    extra={
+                        "event": "sandbox.message.sql_execution.failed",
+                        "attempt": attempt,
+                        "conversationId": payload.conversationId,
+                    },
+                )
                 assumptions.append(f"SQL execution attempt {attempt} failed: {error}")
                 had_execution_failure = True
                 last_execution_error = str(error).strip()
@@ -344,7 +449,6 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
                 if attempt >= _MAX_SQL_ATTEMPTS:
                     response_type = "clarification"
                     clarification_question = clarification_question or not_relevant_reason or last_execution_error
-                    assumptions.append("SQL retry limit reached.")
                     break
                 generation_history = [*generation_history, last_retry_message]
 
@@ -355,6 +459,13 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
             try:
                 guarded_sql, rows = _execute_guarded_sql(sql_text)
             except Exception as error:  # noqa: BLE001
+                logger.exception(
+                    "Sandbox final SQL execution failed",
+                    extra={
+                        "event": "sandbox.message.final_sql.failed",
+                        "conversationId": payload.conversationId,
+                    },
+                )
                 raise HTTPException(status_code=400, detail=f"{error}") from error
 
     return {

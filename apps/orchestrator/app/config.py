@@ -59,6 +59,7 @@ def _as_optional(value: Optional[str]) -> Optional[str]:
 class Settings:
     node_env: str = os.getenv("NODE_ENV", "development")
     port: int = int(os.getenv("PORT", "8787"))
+    log_level: str = _as_nonempty(os.getenv("LOG_LEVEL"), "INFO").upper()
     provider_mode_raw: Optional[str] = os.getenv("PROVIDER_MODE")
     use_mock_providers: bool = _as_bool(os.getenv("USE_MOCK_PROVIDERS"), True)
 

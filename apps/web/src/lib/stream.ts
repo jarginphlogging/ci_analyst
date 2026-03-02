@@ -1,4 +1,36 @@
+import { chatStreamEventSchema } from "@ci/contracts";
 import type { ChatStreamEvent } from "@/lib/types";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function hasString(value: Record<string, unknown>, key: string): boolean {
+  return typeof value[key] === "string";
+}
+
+function isFallbackEvent(payload: unknown): payload is ChatStreamEvent {
+  if (!isRecord(payload)) return false;
+  const type = payload.type;
+  if (type === "status") return hasString(payload, "message");
+  if (type === "answer_delta") return hasString(payload, "delta");
+  if (type === "error") return hasString(payload, "message");
+  if (type === "done") return true;
+  if (type !== "response") return false;
+  if (!isRecord(payload.response)) return false;
+  return typeof payload.response.answer === "string";
+}
+
+function validateStreamEvent(payload: unknown): ChatStreamEvent {
+  const parsed = chatStreamEventSchema.safeParse(payload);
+  if (!parsed.success) {
+    if (isFallbackEvent(payload)) {
+      return payload;
+    }
+    throw new Error("Invalid stream event payload");
+  }
+  return payload as ChatStreamEvent;
+}
 
 export function parseNdjsonChunk(chunk: string, carry = ""): { events: ChatStreamEvent[]; carry: string } {
   const input = `${carry}${chunk}`;
@@ -9,7 +41,7 @@ export function parseNdjsonChunk(chunk: string, carry = ""): { events: ChatStrea
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    events.push(JSON.parse(trimmed) as ChatStreamEvent);
+    events.push(validateStreamEvent(JSON.parse(trimmed) as unknown));
   }
 
   return { events, carry: nextCarry };
@@ -36,6 +68,6 @@ export async function readNdjsonStream(
   }
 
   if (carry.trim()) {
-    onEvent(JSON.parse(carry) as ChatStreamEvent);
+    onEvent(validateStreamEvent(JSON.parse(carry) as unknown));
   }
 }

@@ -11,9 +11,9 @@ from app.services.stages import PlannerBlockedError, SqlGenerationBlockedError
 
 
 async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
-    system_prompt = kwargs.get("system_prompt", "")
+    schema_name = kwargs.get("response_schema_name", "")
 
-    if "Customer Insights analytics" in system_prompt and "Return strict JSON only." in system_prompt:
+    if schema_name == "planner_response":
         return (
             '{"relevance":"in_domain","relevanceReason":"Customer insights metrics and segments were requested.",'
             '"presentationIntent":{"displayType":"chart","chartType":"grouped_bar","rationale":"Comparison over categories."},"tooComplex":false,'
@@ -23,7 +23,7 @@ async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
             "]}"
         )
 
-    if "SQL generator" in system_prompt:
+    if schema_name == "sql_generation_response":
         return (
             '{"generationType":"sql_ready",'
             '"sql":"SELECT transaction_state, SUM(spend) AS current_value, SUM(transactions) AS prior_value '
@@ -31,7 +31,7 @@ async def fake_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
             '"assumptions":["latest settled quarter used"]}'
         )
 
-    if "executive analytics narrator" in system_prompt:
+    if schema_name == "synthesis_response":
         return (
             '{"answer":"Spend increased with concentration in a few states and channel mix shifting toward CNP.",'
             '"whyItMatters":"State and channel concentration creates targeted optimization opportunities.",'
@@ -54,6 +54,15 @@ async def fake_sql(_: str) -> list[dict[str, float | str]]:
     ]
 
 
+async def healthy_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+    _ = kwargs
+    return {
+        "type": "sql_ready",
+        "sql": "SELECT transaction_state, SUM(spend) AS current_value, SUM(transactions) AS prior_value FROM cia_sales_insights_cortex GROUP BY transaction_state LIMIT 50",
+        "assumptions": ["latest settled quarter used"],
+    }
+
+
 async def failing_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
     raise RuntimeError("analyst unavailable")
 
@@ -65,7 +74,7 @@ async def failing_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
 @pytest.mark.asyncio
 async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     request = ChatTurnRequest(sessionId=uuid4(), message="What were my sales by state and how did channel mix change?")
-    deps = RealDependencies(llm_fn=fake_llm, sql_fn=fake_sql, analyst_fn=failing_analyst, model=load_semantic_model())
+    deps = RealDependencies(llm_fn=fake_llm, sql_fn=fake_sql, analyst_fn=healthy_analyst, model=load_semantic_model())
 
     context = await deps.create_plan(request, [])
     results = await deps.run_sql(request, context, [])
@@ -87,9 +96,18 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
 
 @pytest.mark.asyncio
 async def test_real_dependencies_requires_sql_generation_provider_when_analyst_is_unavailable() -> None:
+    async def planner_only_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
+        if kwargs.get("response_schema_name", "") == "planner_response":
+            return (
+                '{"relevance":"in_domain","relevanceReason":"Customer insights request is in scope.",'
+                '"presentationIntent":{"displayType":"table","tableStyle":"simple","rationale":"Default table output."},'
+                '"tooComplex":false,"tasks":[{"task":"Show transaction trends by state."}]}'
+            )
+        raise RuntimeError("llm unavailable")
+
     request = ChatTurnRequest(sessionId=uuid4(), message="Show transaction trends by state")
     deps = RealDependencies(
-        llm_fn=failing_llm,
+        llm_fn=planner_only_llm,
         sql_fn=fake_sql,
         analyst_fn=failing_analyst,
         model=load_semantic_model(),
@@ -107,8 +125,7 @@ async def test_real_dependencies_requires_sql_generation_provider_when_analyst_i
 @pytest.mark.asyncio
 async def test_real_dependencies_blocks_out_of_domain_request() -> None:
     async def out_of_domain_llm(**kwargs) -> str:  # type: ignore[no-untyped-def]
-        system_prompt = kwargs.get("system_prompt", "")
-        if "Customer Insights analytics" in system_prompt and "Return strict JSON only." in system_prompt:
+        if kwargs.get("response_schema_name", "") == "planner_response":
             return (
                 '{"relevance":"out_of_domain","relevanceReason":"No semantic model entities are relevant.",'
                 '"presentationIntent":{"displayType":"table","tableStyle":"simple"},"tooComplex":false,"tasks":[]}'

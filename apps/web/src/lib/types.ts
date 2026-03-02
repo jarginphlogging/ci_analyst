@@ -5,6 +5,7 @@ export interface TraceStep {
   title: string;
   summary: string;
   status: TraceStatus;
+  runtimeMs?: number | null;
   sql?: string;
   qualityChecks?: string[];
   stageInput?: Record<string, unknown>;

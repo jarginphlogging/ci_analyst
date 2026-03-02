@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from contextlib import suppress
+from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
 from uuid import uuid4
 
@@ -15,6 +17,7 @@ from app.models import (
     ValidationResult,
     now_iso,
 )
+from app.observability import bind_log_context
 from app.services.llm_trace import LlmTraceCollector, LlmTraceEntry, bind_llm_trace_collector
 from app.services.stages import PlannerBlockedError, SqlGenerationBlockedError
 from app.services.stages.synthesis_stage import build_incremental_answer_deltas
@@ -24,6 +27,7 @@ T = TypeVar("T")
 ProgressCallback = Callable[[str], Awaitable[None]]
 GENERIC_FAILURE_MESSAGE = "I couldn't complete that request. Please review the trace for details."
 GENERIC_FAILURE_WHY = "The request did not produce a governed result."
+logger = logging.getLogger(__name__)
 
 
 class ConversationalOrchestrator:
@@ -59,8 +63,19 @@ class ConversationalOrchestrator:
         request: ChatTurnRequest,
         prior_history: list[str],
         progress_callback: ProgressCallback,
-    ) -> tuple[TurnExecutionContext, list[SqlExecutionResult], ValidationResult]:
+    ) -> tuple[TurnExecutionContext, list[SqlExecutionResult], ValidationResult, dict[str, float]]:
+        pipeline_started_at = perf_counter()
+        stage_timings_ms: dict[str, float] = {}
+        logger.info(
+            "Pipeline execution started",
+            extra={
+                "event": "orchestrator.pipeline.started",
+                "historyDepth": len(prior_history),
+                "messageChars": len(request.message),
+            },
+        )
         await progress_callback("Building governed plan")
+        plan_started_at = perf_counter()
         try:
             context = await self._run_with_heartbeat(
                 operation=lambda: self._dependencies.create_plan(request, prior_history),
@@ -68,10 +83,31 @@ class ConversationalOrchestrator:
                 heartbeat_message="Building plan...",
             )
         except PlannerBlockedError as blocked:
+            stage_timings_ms["t1"] = round((perf_counter() - plan_started_at) * 1000, 2)
+            setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+            logger.info(
+                "Planner blocked request",
+                extra={
+                    "event": "orchestrator.pipeline.plan.blocked",
+                    "stopReason": blocked.stop_reason,
+                    "userMessage": blocked.user_message,
+                    "runtimeMs": stage_timings_ms["t1"],
+                },
+            )
             raise
+        stage_timings_ms["t1"] = round((perf_counter() - plan_started_at) * 1000, 2)
+        logger.info(
+            "Plan created",
+            extra={
+                "event": "orchestrator.pipeline.plan.completed",
+                "stepCount": len(context.plan),
+                "runtimeMs": stage_timings_ms["t1"],
+            },
+        )
         await progress_callback(f"Plan ready with {len(context.plan)} step(s)")
 
         await progress_callback("Executing SQL and retrieving result tables")
+        sql_started_at = perf_counter()
         try:
             results = await self._run_with_heartbeat(
                 operation=lambda: self._dependencies.run_sql(
@@ -84,9 +120,29 @@ class ConversationalOrchestrator:
                 heartbeat_message="Executing governed SQL...",
             )
         except SqlGenerationBlockedError as blocked:
+            stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+            setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+            logger.info(
+                "SQL stage blocked request",
+                extra={
+                    "event": "orchestrator.pipeline.sql.blocked",
+                    "stopReason": blocked.stop_reason,
+                    "userMessage": blocked.user_message,
+                    "detail": blocked.detail,
+                    "runtimeMs": stage_timings_ms["t2"],
+                },
+            )
             blocked.context = context
             raise
         except Exception as error:  # noqa: BLE001
+            stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+            logger.exception(
+                "SQL stage failed unexpectedly",
+                extra={
+                    "event": "orchestrator.pipeline.sql.failed",
+                    "runtimeMs": stage_timings_ms["t2"],
+                },
+            )
             blocked = SqlGenerationBlockedError(
                 stop_reason="clarification",
                 user_message=str(error),
@@ -97,14 +153,51 @@ class ConversationalOrchestrator:
                 },
             )
             blocked.context = context
+            setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
             raise blocked from error
+        stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+        logger.info(
+            "SQL stage completed",
+            extra={
+                "event": "orchestrator.pipeline.sql.completed",
+                "queryCount": len(results),
+                "totalRows": sum(result.rowCount for result in results),
+                "runtimeMs": stage_timings_ms["t2"],
+            },
+        )
 
         await progress_callback("Running numeric QA and consistency checks")
+        validation_started_at = perf_counter()
         validation = await self._dependencies.validate_results(results)
+        stage_timings_ms["t3"] = round((perf_counter() - validation_started_at) * 1000, 2)
+        logger.info(
+            "Validation completed",
+            extra={
+                "event": "orchestrator.pipeline.validation.completed",
+                "passed": validation.passed,
+                "checkCount": len(validation.checks),
+                "runtimeMs": stage_timings_ms["t3"],
+            },
+        )
 
         if not validation.passed:
+            logger.error(
+                "Validation failed",
+                extra={
+                    "event": "orchestrator.pipeline.validation.failed",
+                    "checks": validation.checks,
+                },
+            )
             raise RuntimeError("Result validation failed.")
-        return context, results, validation
+        logger.info(
+            "Pipeline execution completed",
+            extra={
+                "event": "orchestrator.pipeline.completed",
+                "durationMs": round((perf_counter() - pipeline_started_at) * 1000, 2),
+                "stageTimingsMs": stage_timings_ms,
+            },
+        )
+        return context, results, validation, stage_timings_ms
 
     @staticmethod
     def _preview_text(text: str, max_chars: int = 220) -> str:
@@ -237,12 +330,23 @@ class ConversationalOrchestrator:
         for item in retry_feedback:
             phase = str(item.get("phase", "")).strip().lower()
             error = item.get("error")
-            if "sql_execution" not in phase and "sql_regeneration_blocked" not in phase:
+            if (
+                "sql_execution" not in phase
+                and "sql_regeneration_blocked" not in phase
+                and "sql_generation" not in phase
+            ):
                 continue
             if not isinstance(error, str) or not error.strip():
                 continue
             errors.append(item)
         return errors[:6]
+
+    @staticmethod
+    def _step_runtime(stage_timings_ms: dict[str, float], step_id: str) -> float | None:
+        value = stage_timings_ms.get(step_id)
+        if value is None:
+            return None
+        return round(value, 2)
 
     def _build_trace(
         self,
@@ -255,6 +359,7 @@ class ConversationalOrchestrator:
         response: AgentResponse,
         phase: str,
         llm_entries: list[LlmTraceEntry],
+        stage_timings_ms: dict[str, float],
     ) -> list[TraceStep]:
         result_summary = self._results_summary(results)
         synthesis_summary = "Prepared deterministic draft summary from retrieved SQL tables."
@@ -272,6 +377,7 @@ class ConversationalOrchestrator:
                 title="Build plan",
                 summary="Generated ordered analysis plan under semantic-model policy guardrails.",
                 status="done",
+                runtimeMs=self._step_runtime(stage_timings_ms, "t1"),
                 stageInput={
                     "message": request.message,
                     **self._history_summary(prior_history),
@@ -287,6 +393,7 @@ class ConversationalOrchestrator:
                 title="Generate and execute SQL",
                 summary="Generated governed SQL for each plan step and executed against the analytics provider.",
                 status="done",
+                runtimeMs=self._step_runtime(stage_timings_ms, "t2"),
                 sql=results[0].sql if results else None,
                 stageInput={
                     "planStepIds": [step.id for step in context.plan],
@@ -307,6 +414,7 @@ class ConversationalOrchestrator:
                 title="Validate results",
                 summary="Applied numeric and policy quality checks to ensure returned tables are usable.",
                 status="done" if validation.passed else "blocked",
+                runtimeMs=self._step_runtime(stage_timings_ms, "t3"),
                 qualityChecks=validation.checks,
                 stageInput={
                     "queryCount": len(results),
@@ -323,6 +431,7 @@ class ConversationalOrchestrator:
                 title="Synthesize response",
                 summary=synthesis_summary,
                 status="done",
+                runtimeMs=self._step_runtime(stage_timings_ms, "t4"),
                 stageInput={
                     "phase": phase,
                     "sqlAssumptionCount": len(context.sql_assumptions),
@@ -343,13 +452,16 @@ class ConversationalOrchestrator:
         prior_history: list[str],
         blocked: PlannerBlockedError,
         llm_entries: list[LlmTraceEntry],
+        stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
         planner_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
+        resolved_timings = stage_timings_ms or {}
         return TraceStep(
             id="t1",
             title="Build plan",
             summary="Planner blocked execution and returned a guidance response.",
             status="blocked",
+            runtimeMs=self._step_runtime(resolved_timings, "t1"),
             stageInput={
                 "message": request.message,
                 **self._history_summary(prior_history),
@@ -369,13 +481,16 @@ class ConversationalOrchestrator:
         prior_history: list[str],
         context: TurnExecutionContext,
         llm_entries: list[LlmTraceEntry],
+        stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
         planner_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
+        resolved_timings = stage_timings_ms or {}
         return TraceStep(
             id="t1",
             title="Build plan",
             summary="Generated ordered analysis plan under semantic-model policy guardrails.",
             status="done",
+            runtimeMs=self._step_runtime(resolved_timings, "t1"),
             stageInput={
                 "message": request.message,
                 **self._history_summary(prior_history),
@@ -395,8 +510,10 @@ class ConversationalOrchestrator:
         context: TurnExecutionContext,
         blocked: SqlGenerationBlockedError,
         llm_entries: list[LlmTraceEntry],
+        stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
         sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
+        resolved_timings = stage_timings_ms or {}
         detail_retry_feedback = blocked.detail.get("retryFeedback") if blocked.detail else None
         if isinstance(detail_retry_feedback, list):
             retry_feedback = [item for item in detail_retry_feedback if isinstance(item, dict)]
@@ -434,6 +551,7 @@ class ConversationalOrchestrator:
             title="Generate and execute SQL",
             summary="SQL generation blocked and returned guidance.",
             status="blocked",
+            runtimeMs=self._step_runtime(resolved_timings, "t2"),
             stageInput={
                 "message": request.message,
                 "planStepIds": [step.id for step in context.plan],
@@ -451,6 +569,7 @@ class ConversationalOrchestrator:
         context: TurnExecutionContext,
         blocked: SqlGenerationBlockedError,
         llm_entries: list[LlmTraceEntry],
+        stage_timings_ms: dict[str, float] | None = None,
     ) -> list[TraceStep]:
         return [
             self._planner_completed_trace_step(
@@ -458,6 +577,7 @@ class ConversationalOrchestrator:
                 prior_history=prior_history,
                 context=context,
                 llm_entries=llm_entries,
+                stage_timings_ms=stage_timings_ms,
             ),
             self._sql_generation_blocked_trace_step(
                 request=request,
@@ -465,6 +585,7 @@ class ConversationalOrchestrator:
                 context=context,
                 blocked=blocked,
                 llm_entries=llm_entries,
+                stage_timings_ms=stage_timings_ms,
             ),
         ]
 
@@ -497,6 +618,7 @@ class ConversationalOrchestrator:
         prior_history: list[str],
         llm_entries: list[LlmTraceEntry],
         error: Exception,
+        runtime_ms: float | None = None,
     ) -> AgentResponse:
         return AgentResponse(
             answer=GENERIC_FAILURE_MESSAGE,
@@ -513,6 +635,7 @@ class ConversationalOrchestrator:
                     title="Pipeline failure",
                     summary="Execution failed before a governed response could be produced.",
                     status="blocked",
+                    runtimeMs=runtime_ms,
                     stageInput={
                         "message": request.message,
                         **self._history_summary(prior_history),
@@ -601,71 +724,126 @@ class ConversationalOrchestrator:
     async def run_turn(self, request: ChatTurnRequest) -> TurnResult:
         session_id, prior_history = self._session_context(request)
         llm_collector = LlmTraceCollector()
+        started_at = perf_counter()
 
         async def _noop_progress(_: str) -> None:
             return None
 
-        try:
-            with bind_llm_trace_collector(llm_collector):
-                context, results, validation = await self._execute_pipeline(request, prior_history, _noop_progress)
-                response = await self._dependencies.build_response(request, context, results, prior_history)
-                response.trace = self._build_trace(
-                    request=request,
-                    prior_history=prior_history,
-                    context=context,
-                    results=results,
-                    validation=validation,
-                    response=response,
-                    phase="final",
-                    llm_entries=llm_collector.entries,
+        with bind_log_context(session_id=session_id):
+            logger.info(
+                "Orchestrator turn started",
+                extra={
+                    "event": "orchestrator.turn.started",
+                    "sessionIdValue": session_id,
+                    "historyDepth": len(prior_history),
+                },
+            )
+            try:
+                with bind_llm_trace_collector(llm_collector):
+                    context, results, validation, stage_timings_ms = await self._execute_pipeline(
+                        request,
+                        prior_history,
+                        _noop_progress,
+                    )
+                    synthesis_started_at = perf_counter()
+                    response = await self._dependencies.build_response(request, context, results, prior_history)
+                    stage_timings_ms["t4"] = round((perf_counter() - synthesis_started_at) * 1000, 2)
+                    response.trace = self._build_trace(
+                        request=request,
+                        prior_history=prior_history,
+                        context=context,
+                        results=results,
+                        validation=validation,
+                        response=response,
+                        phase="final",
+                        llm_entries=llm_collector.entries,
+                        stage_timings_ms=stage_timings_ms,
+                    )
+                    response = self._finalize_response(
+                        response=response,
+                        validation=validation,
+                        session_depth=len(self._session_history.get(session_id, [])),
+                    )
+            except PlannerBlockedError as blocked:
+                logger.info(
+                    "Orchestrator turn blocked by planner",
+                    extra={
+                        "event": "orchestrator.turn.blocked.planner",
+                        "stopReason": blocked.stop_reason,
+                        "userMessage": blocked.user_message,
+                    },
                 )
-                response = self._finalize_response(
-                    response=response,
-                    validation=validation,
+                response = self._planner_blocked_response(
+                    blocked=blocked,
                     session_depth=len(self._session_history.get(session_id, [])),
+                    trace_step=self._planner_blocked_trace_step(
+                        request=request,
+                        prior_history=prior_history,
+                        blocked=blocked,
+                        llm_entries=llm_collector.entries,
+                        stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
+                    ),
                 )
-        except PlannerBlockedError as blocked:
-            response = self._planner_blocked_response(
-                blocked=blocked,
-                session_depth=len(self._session_history.get(session_id, [])),
-                trace_step=self._planner_blocked_trace_step(
+                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+            except SqlGenerationBlockedError as blocked:
+                logger.info(
+                    "Orchestrator turn blocked by SQL stage",
+                    extra={
+                        "event": "orchestrator.turn.blocked.sql",
+                        "stopReason": blocked.stop_reason,
+                        "userMessage": blocked.user_message,
+                        "detail": blocked.detail,
+                    },
+                )
+                blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
+                response = self._sql_generation_blocked_response(
+                    blocked=blocked,
+                    session_depth=len(self._session_history.get(session_id, [])),
+                    trace_steps=self._trace_until_sql_failure(
+                        request=request,
+                        prior_history=prior_history,
+                        context=blocked_context,
+                        blocked=blocked,
+                        llm_entries=llm_collector.entries,
+                        stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
+                    ),
+                )
+                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+            except Exception as error:  # noqa: BLE001
+                logger.exception(
+                    "Orchestrator turn failed",
+                    extra={
+                        "event": "orchestrator.turn.failed",
+                    },
+                )
+                response = self._unexpected_failure_response(
                     request=request,
                     prior_history=prior_history,
-                    blocked=blocked,
                     llm_entries=llm_collector.entries,
-                ),
-            )
-            return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
-        except SqlGenerationBlockedError as blocked:
-            blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
-            response = self._sql_generation_blocked_response(
-                blocked=blocked,
-                session_depth=len(self._session_history.get(session_id, [])),
-                trace_steps=self._trace_until_sql_failure(
-                    request=request,
-                    prior_history=prior_history,
-                    context=blocked_context,
-                    blocked=blocked,
-                    llm_entries=llm_collector.entries,
-                ),
-            )
-            return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
-        except Exception as error:  # noqa: BLE001
-            response = self._unexpected_failure_response(
-                request=request,
-                prior_history=prior_history,
-                llm_entries=llm_collector.entries,
-                error=error,
-            )
-            return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+                    error=error,
+                    runtime_ms=round((perf_counter() - started_at) * 1000, 2),
+                )
+                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
 
-        return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+            logger.info(
+                "Orchestrator turn completed",
+                extra={
+                    "event": "orchestrator.turn.completed",
+                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                    "traceSteps": len(response.trace),
+                },
+            )
+            return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
 
     async def stream_events(self, request: ChatTurnRequest) -> AsyncIterator[dict[str, Any]]:
         session_id, prior_history = self._session_context(request)
         event_queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+        started_at = perf_counter()
+        emitted_events = 0
 
         async def emit(event: dict[str, Any]) -> None:
+            nonlocal emitted_events
+            emitted_events += 1
             await event_queue.put(event)
 
         async def progress(message: str) -> None:
@@ -674,15 +852,30 @@ class ConversationalOrchestrator:
         async def worker() -> None:
             llm_collector = LlmTraceCollector()
             try:
-                with bind_llm_trace_collector(llm_collector):
+                with bind_log_context(session_id=session_id), bind_llm_trace_collector(llm_collector):
+                    logger.info(
+                        "Orchestrator stream started",
+                        extra={
+                            "event": "orchestrator.stream.started",
+                            "sessionIdValue": session_id,
+                            "historyDepth": len(prior_history),
+                        },
+                    )
                     await progress("Understanding query intent and scope")
                     try:
-                        context, results, validation = await self._execute_pipeline(
+                        context, results, validation, stage_timings_ms = await self._execute_pipeline(
                             request,
                             prior_history,
                             progress,
                         )
                     except PlannerBlockedError as blocked:
+                        logger.info(
+                            "Orchestrator stream blocked by planner",
+                            extra={
+                                "event": "orchestrator.stream.blocked.planner",
+                                "stopReason": blocked.stop_reason,
+                            },
+                        )
                         await progress("Planner guardrail triggered; returning guidance response")
                         blocked_response = self._planner_blocked_response(
                             blocked=blocked,
@@ -692,12 +885,21 @@ class ConversationalOrchestrator:
                                 prior_history=prior_history,
                                 blocked=blocked,
                                 llm_entries=llm_collector.entries,
+                                stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
                             ),
                         )
                         await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
                         await emit({"type": "done"})
                         return
                     except SqlGenerationBlockedError as blocked:
+                        logger.info(
+                            "Orchestrator stream blocked by SQL stage",
+                            extra={
+                                "event": "orchestrator.stream.blocked.sql",
+                                "stopReason": blocked.stop_reason,
+                                "userMessage": blocked.user_message,
+                            },
+                        )
                         await progress(f"SQL stage blocked: {blocked.user_message}")
                         blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
                         blocked_response = self._sql_generation_blocked_response(
@@ -709,6 +911,7 @@ class ConversationalOrchestrator:
                                 context=blocked_context,
                                 blocked=blocked,
                                 llm_entries=llm_collector.entries,
+                                stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
                             ),
                         )
                         await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
@@ -716,11 +919,14 @@ class ConversationalOrchestrator:
                         return
 
                     await progress("Preparing initial answer from retrieved data")
+                    fast_synthesis_started_at = perf_counter()
                     fast_response = await self._run_with_heartbeat(
                         operation=lambda: self._dependencies.build_fast_response(request, context, results, prior_history),
                         progress_callback=progress,
                         heartbeat_message="Building initial answer...",
                     )
+                    draft_stage_timings_ms = dict(stage_timings_ms)
+                    draft_stage_timings_ms["t4"] = round((perf_counter() - fast_synthesis_started_at) * 1000, 2)
                     fast_response.trace = self._build_trace(
                         request=request,
                         prior_history=prior_history,
@@ -730,6 +936,7 @@ class ConversationalOrchestrator:
                         response=fast_response,
                         phase="draft",
                         llm_entries=llm_collector.entries,
+                        stage_timings_ms=draft_stage_timings_ms,
                     )
                     fast_response = self._finalize_response(
                         response=fast_response,
@@ -739,11 +946,14 @@ class ConversationalOrchestrator:
                     await emit({"type": "response", "phase": "draft", "response": fast_response.model_dump()})
 
                     await progress("Generating final narrative and recommendations")
+                    final_synthesis_started_at = perf_counter()
                     final_response = await self._run_with_heartbeat(
                         operation=lambda: self._dependencies.build_response(request, context, results, prior_history),
                         progress_callback=progress,
                         heartbeat_message="Synthesizing narrative...",
                     )
+                    final_stage_timings_ms = dict(stage_timings_ms)
+                    final_stage_timings_ms["t4"] = round((perf_counter() - final_synthesis_started_at) * 1000, 2)
                     final_response.trace = self._build_trace(
                         request=request,
                         prior_history=prior_history,
@@ -753,6 +963,7 @@ class ConversationalOrchestrator:
                         response=final_response,
                         phase="final",
                         llm_entries=llm_collector.entries,
+                        stage_timings_ms=final_stage_timings_ms,
                     )
                     final_response = self._finalize_response(
                         response=final_response,
@@ -767,15 +978,30 @@ class ConversationalOrchestrator:
                     await emit({"type": "response", "phase": "final", "response": final_response.model_dump()})
                     await emit({"type": "done"})
             except Exception as error:  # noqa: BLE001
+                logger.exception(
+                    "Orchestrator stream failed",
+                    extra={
+                        "event": "orchestrator.stream.failed",
+                    },
+                )
                 failure_response = self._unexpected_failure_response(
                     request=request,
                     prior_history=prior_history,
                     llm_entries=llm_collector.entries,
                     error=error,
+                    runtime_ms=round((perf_counter() - started_at) * 1000, 2),
                 )
                 await emit({"type": "response", "phase": "final", "response": failure_response.model_dump()})
                 await emit({"type": "done"})
             finally:
+                logger.info(
+                    "Orchestrator stream finished",
+                    extra={
+                        "event": "orchestrator.stream.finished",
+                        "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                        "eventsEmitted": emitted_events,
+                    },
+                )
                 await event_queue.put(None)
 
         worker_task = asyncio.create_task(worker())
@@ -794,6 +1020,7 @@ class ConversationalOrchestrator:
     async def run_stream(self, request: ChatTurnRequest) -> StreamResult:
         events: list[dict[str, Any]] = []
         final_response: AgentResponse | None = None
+        started_at = perf_counter()
 
         async for event in self.stream_events(request):
             events.append(event)
@@ -803,8 +1030,22 @@ class ConversationalOrchestrator:
                     final_response = AgentResponse.model_validate(response_payload)
 
         if final_response is None:
+            logger.error(
+                "Streaming run ended without a response",
+                extra={
+                    "event": "orchestrator.run_stream.missing_response",
+                },
+            )
             raise RuntimeError("Streaming ended before a response payload was produced.")
 
+        logger.info(
+            "Streaming run completed",
+            extra={
+                "event": "orchestrator.run_stream.completed",
+                "eventCount": len(events),
+                "durationMs": round((perf_counter() - started_at) * 1000, 2),
+            },
+        )
         return StreamResult(
             events=events,
             turn=TurnResult(

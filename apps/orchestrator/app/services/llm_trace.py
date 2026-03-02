@@ -50,6 +50,10 @@ def llm_trace_stage(stage: str, metadata: dict[str, Any] | None = None) -> Itera
         _current_stage.reset(token)
 
 
+def current_llm_trace_stage() -> tuple[str, dict[str, Any]] | None:
+    return _current_stage.get()
+
+
 def record_llm_trace(
     *,
     provider: str,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Awaitable, Callable, Literal
 
 from app.config import settings
@@ -8,12 +9,14 @@ from app.models import QueryPlanStep
 from app.prompts.templates import sql_prompt
 from app.services.llm_json import as_string_list
 from app.services.llm_trace import llm_trace_stage, record_llm_trace
+from app.services.llm_schemas import AnalystResponsePayload
 from app.services.semantic_model import SemanticModel
 from app.services.sql_guardrails import guard_sql
 from app.services.stages.sql_stage_models import GeneratedStep
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
+logger = logging.getLogger(__name__)
 
 
 def _normalize_generation_type(raw_type: Any) -> Literal["sql_ready", "clarification", "not_relevant"]:
@@ -80,13 +83,15 @@ class SqlStepGenerator:
                 "retryFeedback": (retry_feedback or [])[-2:],
             },
         ):
-            analyst_payload = await self._analyst_fn(
+            analyst_payload_raw = await self._analyst_fn(
                 conversation_id=str(analyst_request["conversation_id"]),
                 message=str(analyst_request["message"]),
                 history=history,
                 step_id=step.id,
                 retry_feedback=retry_feedback or [],
             )
+            analyst_payload_model = AnalystResponsePayload.model_validate(analyst_payload_raw)
+            analyst_payload = analyst_payload_model.model_dump(mode="json", exclude_none=True)
             record_llm_trace(
                 provider="analyst",
                 system_prompt="",
@@ -202,6 +207,14 @@ class SqlStepGenerator:
             elif candidate_sql:
                 sql_text = candidate_sql
         except Exception as error:
+            logger.exception(
+                "LLM SQL generation failed",
+                extra={
+                    "event": "sql.generation.llm_failed",
+                    "stepId": step.id,
+                    "attempt": attempt_number,
+                },
+            )
             generation_type = "clarification"
             clarification_question = str(error).strip() or f"SQL generation failed for step {step.id}."
             assumptions.append(f"SQL generation failed: {error}")
@@ -252,16 +265,39 @@ class SqlStepGenerator:
                     attempt_number=attempt_number,
                     retry_feedback=retry_feedback,
                 )
-            except Exception:
-                generated = await self._generate_with_llm(
-                    message=message,
-                    route=route,
-                    step=step,
-                    history=history,
-                    prior_sql=prior_sql,
-                    attempt_number=attempt_number,
-                    retry_feedback=retry_feedback,
+            except Exception as error:
+                logger.exception(
+                    "Analyst SQL generation failed; falling back to LLM",
+                    extra={
+                        "event": "sql.generation.analyst_fallback",
+                        "stepId": step.id,
+                        "attempt": attempt_number,
+                    },
                 )
+                if settings.provider_mode in {"sandbox", "prod"}:
+                    generated = GeneratedStep(
+                        index=index,
+                        step=step,
+                        provider="analyst",
+                        status="clarification",
+                        sql=None,
+                        rationale="",
+                        assumptions=[f"Analyst generation failed: {error}"],
+                        clarification_question=str(error).strip() or f"Cortex analyst failed for {step.id}.",
+                        not_relevant_reason="",
+                        attempted_sql=None,
+                        rows=None,
+                    )
+                else:
+                    generated = await self._generate_with_llm(
+                        message=message,
+                        route=route,
+                        step=step,
+                        history=history,
+                        prior_sql=prior_sql,
+                        attempt_number=attempt_number,
+                        retry_feedback=retry_feedback,
+                    )
         else:
             generated = await self._generate_with_llm(
                 message=message,

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import re
+import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
+from app.config import settings
 from app.models import PresentationIntent, QueryPlanStep
 from app.prompts.templates import plan_prompt
 from app.services.llm_trace import llm_trace_stage
@@ -14,6 +16,7 @@ AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 PLANNER_MAX_STEPS = 5
 OUT_OF_DOMAIN_MESSAGE = "I can only answer questions about Customer Insights."
 TOO_COMPLEX_MESSAGE = "Your request is too complex, please simplify it and try again."
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -271,6 +274,15 @@ class PlannerStage:
                 stop_reason="none",
             )
         except Exception:
+            if settings.provider_mode in {"sandbox", "prod"}:
+                raise
+            logger.exception(
+                "Planner LLM call failed; using deterministic fallback",
+                extra={
+                    "event": "planner.fallback_on_error",
+                    "historyDepth": len(history),
+                },
+            )
             steps = _heuristic_plan(message, max_steps=max_steps)
             steps = _enforce_planner_guardrails(message=message, steps=steps)
             return PlannerDecision(

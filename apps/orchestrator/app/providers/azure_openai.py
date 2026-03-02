@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -9,6 +10,7 @@ import httpx
 from app.config import settings
 
 _TOKEN_CACHE: dict[str, int | str | None] = {"token": None, "expires_on": 0}
+logger = logging.getLogger(__name__)
 
 
 def _chat_endpoint() -> str:
@@ -88,8 +90,14 @@ async def chat_completion(
     temperature: float = 0.1,
     max_tokens: int = 1000,
     response_json: bool = False,
+    response_schema: dict[str, Any] | None = None,
+    response_schema_name: str | None = None,
 ) -> str:
+    if response_json and response_schema is not None:
+        raise RuntimeError("response_json and response_schema cannot be combined.")
+
     endpoint = _chat_endpoint()
+    started_at = time.perf_counter()
     payload: dict[str, Any] = {
         "messages": [
             {"role": "system", "content": system_prompt},
@@ -99,25 +107,94 @@ async def chat_completion(
         "max_tokens": max_tokens,
     }
 
-    if response_json:
+    if response_schema is not None:
+        payload["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": (response_schema_name or "structured_response").strip() or "structured_response",
+                "strict": True,
+                "schema": response_schema,
+            },
+        }
+    elif response_json:
         payload["response_format"] = {"type": "json_object"}
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            endpoint,
-            headers=_auth_headers(),
-            json=payload,
+    logger.info(
+        "Azure OpenAI request started",
+        extra={
+            "event": "provider.azure_openai.request.started",
+            "responseJson": response_json,
+            "responseSchema": response_schema is not None,
+            "maxTokens": max_tokens,
+            "temperature": temperature,
+            "systemPromptChars": len(system_prompt),
+            "userPromptChars": len(user_prompt),
+        },
+    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                endpoint,
+                headers=_auth_headers(),
+                json=payload,
+            )
+    except Exception:
+        logger.exception(
+            "Azure OpenAI request failed before response",
+            extra={
+                "event": "provider.azure_openai.request.failed_transport",
+                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+            },
         )
+        raise
 
     if response.status_code >= 400:
+        logger.error(
+            "Azure OpenAI request returned error",
+            extra={
+                "event": "provider.azure_openai.request.failed_http",
+                "statusCode": response.status_code,
+                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                "responsePreview": response.text[:500],
+            },
+        )
         raise RuntimeError(f"Azure OpenAI request failed ({response.status_code}): {response.text}")
 
     body = response.json()
     choices = body.get("choices", [])
     if not choices:
+        logger.info(
+            "Azure OpenAI request completed with empty choices",
+            extra={
+                "event": "provider.azure_openai.request.completed",
+                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                "choices": 0,
+            },
+        )
         return ""
 
-    return str(choices[0].get("message", {}).get("content", ""))
+    logger.info(
+        "Azure OpenAI request completed",
+        extra={
+            "event": "provider.azure_openai.request.completed",
+            "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+            "choices": len(choices),
+        },
+    )
+    message = choices[0].get("message", {})
+    content = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            text_value = part.get("text")
+            if isinstance(text_value, str):
+                text_parts.append(text_value)
+        return "".join(text_parts)
+    return str(content)
 
 
 async def complete_with_azure(task: str, user_message: str, *, context: Optional[str] = None) -> str:
