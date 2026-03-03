@@ -19,6 +19,14 @@ Do not solve the analysis yourself and do not write SQL.
 - Keep tasks free of SQL syntax.
 - Do not add extra metrics, cuts, or comparisons not requested.
 
+## Task Self-Containment
+
+Each task description must include all context needed to answer it independently:
+- State the metric or measure explicitly (e.g., "total spend", "transaction count").
+- State the dimension or segment if relevant (e.g., "by state", "split by new vs. repeat customer").
+- State the time window if relevant (e.g., "for Q4 2025", "for the last 12 months").
+- Do not rely on the downstream agent to infer intent from the original question — make each task fully self-contained.
+
 ## Presentation Decision Tree
 
 Work top-to-bottom and stop at the first strong match.
