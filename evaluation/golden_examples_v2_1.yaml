@@ -1,0 +1,114 @@
+- input: "Show total spend by state in descending order for the latest available period."
+  expected_plan:
+    - "Resolve latest available response date window."
+    - "Aggregate spend by transaction state and rank descending."
+  expected_sql_steps:
+    - "SELECT MAX(resp_date) AS max_dt FROM cia_sales_insights_cortex"
+    - "SELECT transaction_state, SUM(spend) AS total_spend, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex GROUP BY transaction_state ORDER BY total_spend DESC"
+  expected_answer: "State-level spend ranking with data range context."
+  must_contain: ["state", "spend", "data_from", "data_through"]
+  difficulty: "simple"
+  category: "revenue"
+
+- input: "What is the current CP versus CNP spend mix?"
+  expected_plan:
+    - "Calculate CP and CNP spend totals and relative shares."
+  expected_sql_steps:
+    - "SELECT channel, SUM(spend) AS spend_total, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex GROUP BY channel"
+  expected_answer: "CP versus CNP spend share comparison."
+  must_contain: ["CP", "CNP", "share"]
+  difficulty: "simple"
+  category: "channel"
+
+- input: "How many total transactions did we process in the latest data window?"
+  expected_plan:
+    - "Compute total transactions with latest-window date context."
+  expected_sql_steps:
+    - "SELECT SUM(transactions) AS total_transactions, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex"
+  expected_answer: "Total transactions with date range."
+  must_contain: ["transactions", "data_from", "data_through"]
+  difficulty: "simple"
+  category: "transactions"
+
+- input: "Show repeat vs new spend split."
+  expected_plan:
+    - "Aggregate repeat and new spend totals and compare proportions."
+  expected_sql_steps:
+    - "SELECT SUM(repeat_spend) AS repeat_spend, SUM(new_spend) AS new_spend, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex"
+  expected_answer: "Repeat versus new spend breakdown."
+  must_contain: ["repeat", "new", "spend"]
+  difficulty: "simple"
+  category: "retention"
+
+- input: "Compare Q4 2025 spend, transactions, and average sale amount to Q4 2024."
+  expected_plan:
+    - "Resolve latest dataset boundary and define Q4 2025 and Q4 2024 windows."
+    - "Compute spend, transactions, and average sale amount for both periods."
+  expected_sql_steps:
+    - "WITH max_date AS (SELECT MAX(resp_date) AS max_dt FROM cia_sales_insights_cortex) SELECT max_dt FROM max_date"
+    - "SELECT SUM(spend) AS spend_total, SUM(transactions) AS txn_total, AVG(spend / NULLIF(transactions, 0)) AS avg_sale_amount FROM cia_sales_insights_cortex WHERE resp_date BETWEEN DATE '2025-10-01' AND DATE '2025-12-31'"
+    - "SELECT SUM(spend) AS spend_total, SUM(transactions) AS txn_total, AVG(spend / NULLIF(transactions, 0)) AS avg_sale_amount FROM cia_sales_insights_cortex WHERE resp_date BETWEEN DATE '2024-10-01' AND DATE '2024-12-31'"
+  expected_answer: "Q4 year-over-year comparison of spend, transactions, and ticket size."
+  must_contain: ["Q4 2025", "Q4 2024", "average sale amount"]
+  difficulty: "moderate"
+  category: "time_comparison"
+
+- input: "Which states contributed most to CNP spend growth year over year?"
+  expected_plan:
+    - "Compute state-level CNP spend for current and prior year periods."
+    - "Rank states by CNP spend delta contribution."
+  expected_sql_steps:
+    - "SELECT transaction_state, SUM(cnp_spend) AS cnp_spend_current FROM cia_sales_insights_cortex WHERE resp_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31' GROUP BY transaction_state"
+    - "SELECT transaction_state, SUM(cnp_spend) AS cnp_spend_prior FROM cia_sales_insights_cortex WHERE resp_date BETWEEN DATE '2024-01-01' AND DATE '2024-12-31' GROUP BY transaction_state"
+  expected_answer: "Top state contributors to CNP spend growth with ranked deltas."
+  must_contain: ["state", "CNP", "growth"]
+  difficulty: "moderate"
+  category: "channel"
+
+- input: "For top stores by spend, show repeat vs new customer mix."
+  expected_plan:
+    - "Rank top stores by spend."
+    - "For ranked stores, compute repeat/new spend or transaction mix."
+  expected_sql_steps:
+    - "SELECT td_id, transaction_city, transaction_state, SUM(spend) AS total_spend FROM cia_sales_insights_cortex GROUP BY td_id, transaction_city, transaction_state ORDER BY total_spend DESC LIMIT 10"
+    - "SELECT td_id, SUM(repeat_spend) AS repeat_spend, SUM(new_spend) AS new_spend FROM cia_sales_insights_cortex GROUP BY td_id"
+  expected_answer: "Top store performance with repeat/new mix context."
+  must_contain: ["top", "store", "repeat", "new"]
+  difficulty: "moderate"
+  category: "store_performance"
+
+- input: "Break down spend by consumer versus commercial and by channel."
+  expected_plan:
+    - "Aggregate spend by consumer_commercial and channel."
+  expected_sql_steps:
+    - "SELECT consumer_commercial, channel, SUM(spend) AS total_spend, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex GROUP BY consumer_commercial, channel"
+  expected_answer: "Segmented spend view by customer type and channel."
+  must_contain: ["consumer", "commercial", "channel"]
+  difficulty: "moderate"
+  category: "segmentation"
+
+- input: "Identify top and bottom stores in 2025 and compare repeat-share gap between them."
+  expected_plan:
+    - "Rank stores by 2025 spend and isolate top and bottom cohorts."
+    - "Compute repeat-share for each cohort and gap."
+  expected_sql_steps:
+    - "SELECT td_id, transaction_city, transaction_state, SUM(spend) AS spend_2025 FROM cia_sales_insights_cortex WHERE resp_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31' GROUP BY td_id, transaction_city, transaction_state"
+    - "SELECT td_id, SUM(repeat_spend) AS repeat_spend, SUM(new_spend) AS new_spend FROM cia_sales_insights_cortex WHERE resp_date BETWEEN DATE '2025-01-01' AND DATE '2025-12-31' GROUP BY td_id"
+  expected_answer: "Top-vs-bottom store repeat-share gap with actionable comparison."
+  must_contain: ["top", "bottom", "repeat-share", "gap"]
+  difficulty: "complex"
+  category: "store_performance"
+
+- input: "Show household intensity by store and explain relationship to spend concentration."
+  expected_plan:
+    - "Retrieve household counts by store."
+    - "Join with store spend concentration metrics."
+    - "Summarize whether household intensity aligns with spend concentration."
+  expected_sql_steps:
+    - "SELECT td_id, households_count FROM cia_household_insights_cortex"
+    - "SELECT td_id, SUM(spend) AS total_spend FROM cia_sales_insights_cortex GROUP BY td_id"
+  expected_answer: "Household intensity and spend concentration relationship by store."
+  must_contain: ["household", "store", "spend concentration"]
+  difficulty: "complex"
+  category: "households"
+

@@ -21,10 +21,12 @@ from app.models import (
     StatusEvent,
 )
 from app.observability import bind_log_context, configure_logging, get_request_id
+from app.tracing import initialize_tracing
 from app.services.dependencies import create_dependencies
 from app.services.orchestrator import ConversationalOrchestrator
 
 configure_logging()
+initialize_tracing(project_name="cortex-analyst-pipeline")
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CI Analyst Orchestrator", version="0.1.0")

@@ -268,6 +268,21 @@ npm run eval
 `npm run eval` expects orchestrator running on `http://localhost:8787` by default.
 It evaluates token hits, numeric assertions, expected route, and route-specific latency thresholds (p50/p95).
 
+Phoenix evaluation stack (v2.1):
+
+```bash
+python -m pip install -r requirements-eval.txt
+python -m evaluation.upload_golden_dataset_v2_1 --name cortex-analyst-golden-v2-1
+python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local run"
+python -m evaluation.async_production_eval_v2_1 --hours 1
+python -m evaluation.quality_gate_v2_1 --experiment-name "local-v2.1"
+```
+
+Authority model:
+
+- Phoenix quality gate is authoritative for release governance.
+- `npm run eval` remains a fast advisory feedback loop.
+
 ## Enterprise Registry Notes
 
 - For long-term deterministic installs on enterprise mirrors, use `npm ci` (not `npm install`) on your work machine.

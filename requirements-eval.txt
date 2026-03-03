@@ -1,0 +1,10 @@
+arize-phoenix
+arize-phoenix-otel
+arize-phoenix-evals
+openinference-instrumentation-openai
+opentelemetry-api
+opentelemetry-sdk
+sqlparse
+pyyaml
+datacompy
+scikit-learn

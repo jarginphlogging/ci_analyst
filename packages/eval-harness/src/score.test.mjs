@@ -23,6 +23,36 @@ test("detectRoute returns deep_path from assumptions", () => {
   assert.equal(detectRoute(payload), "deep_path");
 });
 
+test("detectRoute infers fast_path from trace plan step count", () => {
+  const payload = {
+    response: {
+      trace: [
+        {
+          id: "t1",
+          title: "Build plan",
+          stageOutput: { stepCount: 2 },
+        },
+      ],
+    },
+  };
+  assert.equal(detectRoute(payload), "fast_path");
+});
+
+test("detectRoute infers deep_path from trace plan step count", () => {
+  const payload = {
+    response: {
+      trace: [
+        {
+          id: "t1",
+          title: "Build plan",
+          stageOutput: { stepCount: 4 },
+        },
+      ],
+    },
+  };
+  assert.equal(detectRoute(payload), "deep_path");
+});
+
 test("evaluateNumericAssertions validates metric value and unit", () => {
   const payload = {
     response: {

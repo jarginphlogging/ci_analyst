@@ -15,10 +15,29 @@ npm run test
 npm run eval
 ```
 
+Phoenix eval stack (v2.1):
+
+```bash
+python -m pip install -r requirements-eval.txt
+python -m evaluation.upload_golden_dataset_v2_1 --name cortex-analyst-golden-v2-1
+python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local eval run"
+python -m evaluation.async_production_eval_v2_1 --hours 1
+python -m evaluation.quality_gate_v2_1 --experiment-name "local-v2.1"
+python -m evaluation.eval_the_evals_v2_1 --min-agreement 0.80
+```
+
 ## Eval Harness
 
 - Dataset: `/Users/joe/Code/ci_analyst/packages/eval-harness/datasets/golden-v1.json`
 - Runner: `/Users/joe/Code/ci_analyst/packages/eval-harness/src/run-eval.mjs`
+- Role: fast advisory feedback loop (non-authoritative)
+
+Phoenix v2.1 role:
+
+- Runtime inline checks on `t1..t4` stages
+- Async production LLM-as-judge scoring
+- Tier 3 golden dataset experiments
+- Authoritative quality gate for release decisions
 
 Override base URL:
 ```bash

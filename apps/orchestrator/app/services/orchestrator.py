@@ -18,6 +18,16 @@ from app.models import (
     now_iso,
 )
 from app.observability import bind_log_context
+from app.tracing import add_check_event, set_stage_output, stage_span
+from app.evaluation.inline_checks_v2_1 import (
+    check_answer_sanity,
+    check_pii,
+    check_plan_sanity,
+    check_result_sanity,
+    check_sql_syntax,
+    check_validation_contract,
+    redact_pii,
+)
 from app.services.llm_trace import LlmTraceCollector, LlmTraceEntry, bind_llm_trace_collector
 from app.services.stages import PlannerBlockedError, SqlGenerationBlockedError
 from app.services.stages.synthesis_stage import build_incremental_answer_deltas
@@ -34,6 +44,14 @@ class ConversationalOrchestrator:
     def __init__(self, dependencies: OrchestratorDependencies):
         self._dependencies = dependencies
         self._session_history: dict[str, list[str]] = {}
+        self._latest_inline_checks: dict[str, list[str]] = {}
+
+    def _record_inline_check(self, *, stage_id: str, check_name: str, passed: bool, reason: str) -> None:
+        outcome = f"{check_name}: {'pass' if passed else 'fail'} ({reason})"
+        bucket = self._latest_inline_checks.setdefault(stage_id, [])
+        if outcome not in bucket:
+            bucket.append(outcome)
+        add_check_event(name=check_name, passed=passed, reason=reason)
 
     def _session_context(self, request: ChatTurnRequest) -> tuple[str, list[str]]:
         session_id = str(request.sessionId or "anonymous")
@@ -66,6 +84,7 @@ class ConversationalOrchestrator:
     ) -> tuple[TurnExecutionContext, list[SqlExecutionResult], ValidationResult, dict[str, float]]:
         pipeline_started_at = perf_counter()
         stage_timings_ms: dict[str, float] = {}
+        self._latest_inline_checks = {}
         logger.info(
             "Pipeline execution started",
             extra={
@@ -76,109 +95,216 @@ class ConversationalOrchestrator:
         )
         await progress_callback("Building governed plan")
         plan_started_at = perf_counter()
-        try:
-            context = await self._run_with_heartbeat(
-                operation=lambda: self._dependencies.create_plan(request, prior_history),
-                progress_callback=progress_callback,
-                heartbeat_message="Building plan...",
-            )
-        except PlannerBlockedError as blocked:
+        with stage_span(
+            span_name="pipeline.t1_plan",
+            stage_id="t1",
+            input_value={
+                "message": request.message,
+                "historyDepth": len(prior_history),
+            },
+        ):
+            try:
+                context = await self._run_with_heartbeat(
+                    operation=lambda: self._dependencies.create_plan(request, prior_history),
+                    progress_callback=progress_callback,
+                    heartbeat_message="Building plan...",
+                )
+            except PlannerBlockedError as blocked:
+                stage_timings_ms["t1"] = round((perf_counter() - plan_started_at) * 1000, 2)
+                set_stage_output(
+                    {"blocked": True, "stopReason": blocked.stop_reason, "userMessage": blocked.user_message},
+                    attributes={"decomposition.count": 0, "runtime.ms": stage_timings_ms["t1"]},
+                )
+                setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+                logger.info(
+                    "Planner blocked request",
+                    extra={
+                        "event": "orchestrator.pipeline.plan.blocked",
+                        "stopReason": blocked.stop_reason,
+                        "userMessage": blocked.user_message,
+                        "runtimeMs": stage_timings_ms["t1"],
+                    },
+                )
+                raise
             stage_timings_ms["t1"] = round((perf_counter() - plan_started_at) * 1000, 2)
-            setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+            plan_payload = self._plan_summary(context)
+            set_stage_output(
+                plan_payload,
+                attributes={
+                    "decomposition.count": len(context.plan),
+                    "runtime.ms": stage_timings_ms["t1"],
+                },
+            )
+            plan_checks_payload = [
+                {
+                    "id": step.id,
+                    "goal": step.goal,
+                    "dependsOn": list(step.dependsOn),
+                    "independent": step.independent,
+                }
+                for step in context.plan
+            ]
+            plan_check_pass, plan_check_reason = check_plan_sanity(plan_checks_payload, max_steps=5)
+            self._record_inline_check(
+                stage_id="t1",
+                check_name="plan_sanity",
+                passed=plan_check_pass,
+                reason=plan_check_reason,
+            )
             logger.info(
-                "Planner blocked request",
+                "Plan created",
                 extra={
-                    "event": "orchestrator.pipeline.plan.blocked",
-                    "stopReason": blocked.stop_reason,
-                    "userMessage": blocked.user_message,
+                    "event": "orchestrator.pipeline.plan.completed",
+                    "stepCount": len(context.plan),
                     "runtimeMs": stage_timings_ms["t1"],
                 },
             )
-            raise
-        stage_timings_ms["t1"] = round((perf_counter() - plan_started_at) * 1000, 2)
-        logger.info(
-            "Plan created",
-            extra={
-                "event": "orchestrator.pipeline.plan.completed",
-                "stepCount": len(context.plan),
-                "runtimeMs": stage_timings_ms["t1"],
-            },
-        )
         await progress_callback(f"Plan ready with {len(context.plan)} step(s)")
 
         await progress_callback("Executing SQL and retrieving result tables")
         sql_started_at = perf_counter()
-        try:
-            results = await self._run_with_heartbeat(
-                operation=lambda: self._dependencies.run_sql(
-                    request,
-                    context,
-                    prior_history,
-                    progress_callback=progress_callback,
-                ),
-                progress_callback=progress_callback,
-                heartbeat_message="Executing governed SQL...",
-            )
-        except SqlGenerationBlockedError as blocked:
-            stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
-            setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
-            logger.info(
-                "SQL stage blocked request",
-                extra={
-                    "event": "orchestrator.pipeline.sql.blocked",
-                    "stopReason": blocked.stop_reason,
-                    "userMessage": blocked.user_message,
-                    "detail": blocked.detail,
-                    "runtimeMs": stage_timings_ms["t2"],
-                },
-            )
-            blocked.context = context
-            raise
-        except Exception as error:  # noqa: BLE001
-            stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
-            logger.exception(
-                "SQL stage failed unexpectedly",
-                extra={
-                    "event": "orchestrator.pipeline.sql.failed",
-                    "runtimeMs": stage_timings_ms["t2"],
-                },
-            )
-            blocked = SqlGenerationBlockedError(
-                stop_reason="clarification",
-                user_message=str(error),
-                detail={
-                    "phase": "sql_execution",
-                    "error": str(error),
-                    "message": request.message,
-                },
-            )
-            blocked.context = context
-            setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
-            raise blocked from error
-        stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
-        logger.info(
-            "SQL stage completed",
-            extra={
-                "event": "orchestrator.pipeline.sql.completed",
-                "queryCount": len(results),
-                "totalRows": sum(result.rowCount for result in results),
-                "runtimeMs": stage_timings_ms["t2"],
+        with stage_span(
+            span_name="pipeline.t2_sql",
+            stage_id="t2",
+            input_value={
+                "message": request.message,
+                "planStepCount": len(context.plan),
+                "planStepIds": [step.id for step in context.plan],
             },
-        )
+        ):
+            try:
+                results = await self._run_with_heartbeat(
+                    operation=lambda: self._dependencies.run_sql(
+                        request,
+                        context,
+                        prior_history,
+                        progress_callback=progress_callback,
+                    ),
+                    progress_callback=progress_callback,
+                    heartbeat_message="Executing governed SQL...",
+                )
+            except SqlGenerationBlockedError as blocked:
+                stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+                set_stage_output(
+                    {"blocked": True, "stopReason": blocked.stop_reason, "userMessage": blocked.user_message},
+                    attributes={
+                        "retry.count": len(context.sql_retry_feedback),
+                        "runtime.ms": stage_timings_ms["t2"],
+                    },
+                )
+                setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+                logger.info(
+                    "SQL stage blocked request",
+                    extra={
+                        "event": "orchestrator.pipeline.sql.blocked",
+                        "stopReason": blocked.stop_reason,
+                        "userMessage": blocked.user_message,
+                        "detail": blocked.detail,
+                        "runtimeMs": stage_timings_ms["t2"],
+                    },
+                )
+                blocked.context = context
+                raise
+            except Exception as error:  # noqa: BLE001
+                stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+                logger.exception(
+                    "SQL stage failed unexpectedly",
+                    extra={
+                        "event": "orchestrator.pipeline.sql.failed",
+                        "runtimeMs": stage_timings_ms["t2"],
+                    },
+                )
+                blocked = SqlGenerationBlockedError(
+                    stop_reason="clarification",
+                    user_message=str(error),
+                    detail={
+                        "phase": "sql_execution",
+                        "error": str(error),
+                        "message": request.message,
+                    },
+                )
+                blocked.context = context
+                setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+                raise blocked from error
+            stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+            for index, result in enumerate(results, start=1):
+                sql_pass, sql_reason = check_sql_syntax(result.sql)
+                self._record_inline_check(
+                    stage_id="t2",
+                    check_name=f"sql_syntax_step_{index}",
+                    passed=sql_pass,
+                    reason=sql_reason,
+                )
+                rows_pass, rows_reason = check_result_sanity(
+                    result.rows,
+                    result.rowCount,
+                    max_rows=10_000,
+                )
+                self._record_inline_check(
+                    stage_id="t2",
+                    check_name=f"result_sanity_step_{index}",
+                    passed=rows_pass,
+                    reason=rows_reason,
+                )
+            first_result = results[0] if results else None
+            first_sql = first_result.sql if first_result else ""
+            first_columns = list(first_result.rows[0].keys()) if first_result and first_result.rows else []
+            set_stage_output(
+                self._results_summary(results),
+                attributes={
+                    "sql.query": first_sql,
+                    "result.row_count": sum(result.rowCount for result in results),
+                    "result.columns": ",".join(first_columns),
+                    "retry.count": len(context.sql_retry_feedback),
+                    "runtime.ms": stage_timings_ms["t2"],
+                },
+            )
+            logger.info(
+                "SQL stage completed",
+                extra={
+                    "event": "orchestrator.pipeline.sql.completed",
+                    "queryCount": len(results),
+                    "totalRows": sum(result.rowCount for result in results),
+                    "runtimeMs": stage_timings_ms["t2"],
+                },
+            )
 
         await progress_callback("Running numeric QA and consistency checks")
         validation_started_at = perf_counter()
-        validation = await self._dependencies.validate_results(results)
-        stage_timings_ms["t3"] = round((perf_counter() - validation_started_at) * 1000, 2)
-        logger.info(
-            "Validation completed",
-            extra={
-                "event": "orchestrator.pipeline.validation.completed",
-                "passed": validation.passed,
-                "checkCount": len(validation.checks),
-                "runtimeMs": stage_timings_ms["t3"],
+        with stage_span(
+            span_name="pipeline.t3_validation",
+            stage_id="t3",
+            input_value={
+                "queryCount": len(results),
+                "rowCounts": [result.rowCount for result in results],
             },
-        )
+        ):
+            validation = await self._dependencies.validate_results(results)
+            stage_timings_ms["t3"] = round((perf_counter() - validation_started_at) * 1000, 2)
+            contract_pass, contract_reason = check_validation_contract(validation.passed, validation.checks)
+            self._record_inline_check(
+                stage_id="t3",
+                check_name="validation_contract",
+                passed=contract_pass,
+                reason=contract_reason,
+            )
+            set_stage_output(
+                {"passed": validation.passed, "checks": validation.checks},
+                attributes={
+                    "validation.passed": validation.passed,
+                    "validation.check_count": len(validation.checks),
+                    "runtime.ms": stage_timings_ms["t3"],
+                },
+            )
+            logger.info(
+                "Validation completed",
+                extra={
+                    "event": "orchestrator.pipeline.validation.completed",
+                    "passed": validation.passed,
+                    "checkCount": len(validation.checks),
+                    "runtimeMs": stage_timings_ms["t3"],
+                },
+            )
 
         if not validation.passed:
             logger.error(
@@ -277,6 +403,32 @@ class ConversationalOrchestrator:
             "tableCount": len(response.dataTables),
             "artifactCount": len(response.artifacts),
         }
+
+    def _inline_checks_for_stage(self, stage_id: str) -> list[str]:
+        return list(self._latest_inline_checks.get(stage_id, []))
+
+    def _apply_synthesis_inline_checks(self, response: AgentResponse, *, phase: str) -> AgentResponse:
+        answer_pass, answer_reason = check_answer_sanity(response.answer)
+        self._record_inline_check(
+            stage_id="t4",
+            check_name=f"answer_sanity_{phase}",
+            passed=answer_pass,
+            reason=answer_reason,
+        )
+        pii_pass, pii_reason = check_pii(response.answer)
+        self._record_inline_check(
+            stage_id="t4",
+            check_name=f"pii_scan_{phase}",
+            passed=pii_pass,
+            reason=pii_reason,
+        )
+        if not answer_pass:
+            # Keep answer unchanged; warning is captured in inline-check trace metadata.
+            pass
+        if not pii_pass:
+            response.answer = redact_pii(response.answer)
+            response.assumptions = [*response.assumptions, f"Inline check redaction applied: {pii_reason}"][:5]
+        return response
 
     def _llm_entries_for_stages(self, llm_entries: list[LlmTraceEntry], stage_names: set[str]) -> list[LlmTraceEntry]:
         return [entry for entry in llm_entries if entry.stage in stage_names]
@@ -378,6 +530,7 @@ class ConversationalOrchestrator:
                 summary="Generated ordered analysis plan under semantic-model policy guardrails.",
                 status="done",
                 runtimeMs=self._step_runtime(stage_timings_ms, "t1"),
+                qualityChecks=self._inline_checks_for_stage("t1") or None,
                 stageInput={
                     "message": request.message,
                     **self._history_summary(prior_history),
@@ -395,6 +548,7 @@ class ConversationalOrchestrator:
                 status="done",
                 runtimeMs=self._step_runtime(stage_timings_ms, "t2"),
                 sql=results[0].sql if results else None,
+                qualityChecks=self._inline_checks_for_stage("t2") or None,
                 stageInput={
                     "planStepIds": [step.id for step in context.plan],
                     "planGoals": [self._preview_text(step.goal, max_chars=120) for step in context.plan],
@@ -415,7 +569,7 @@ class ConversationalOrchestrator:
                 summary="Applied numeric and policy quality checks to ensure returned tables are usable.",
                 status="done" if validation.passed else "blocked",
                 runtimeMs=self._step_runtime(stage_timings_ms, "t3"),
-                qualityChecks=validation.checks,
+                qualityChecks=[*validation.checks, *self._inline_checks_for_stage("t3")],
                 stageInput={
                     "queryCount": len(results),
                     "rowCounts": [result.rowCount for result in results],
@@ -432,6 +586,7 @@ class ConversationalOrchestrator:
                 summary=synthesis_summary,
                 status="done",
                 runtimeMs=self._step_runtime(stage_timings_ms, "t4"),
+                qualityChecks=self._inline_checks_for_stage("t4") or None,
                 stageInput={
                     "phase": phase,
                     "sqlAssumptionCount": len(context.sql_assumptions),
@@ -598,10 +753,18 @@ class ConversationalOrchestrator:
     ) -> AgentResponse:
         _ = session_depth
         validation_step_id = "t3" if any(step.id == "t3" for step in response.trace) else "t4"
-        response.trace = [
-            (step.model_copy(update={"qualityChecks": validation.checks}) if step.id == validation_step_id else step)
-            for step in response.trace
-        ]
+        merged_trace: list[TraceStep] = []
+        for step in response.trace:
+            if step.id != validation_step_id:
+                merged_trace.append(step)
+                continue
+            existing_checks = list(step.qualityChecks or [])
+            merged_checks: list[str] = []
+            for check in [*existing_checks, *validation.checks, *self._inline_checks_for_stage(validation_step_id)]:
+                if check not in merged_checks:
+                    merged_checks.append(check)
+            merged_trace.append(step.model_copy(update={"qualityChecks": merged_checks}))
+        response.trace = merged_trace
 
         assumptions = list(response.assumptions)
         deduped: list[str] = []
@@ -746,8 +909,28 @@ class ConversationalOrchestrator:
                         _noop_progress,
                     )
                     synthesis_started_at = perf_counter()
-                    response = await self._dependencies.build_response(request, context, results, prior_history)
-                    stage_timings_ms["t4"] = round((perf_counter() - synthesis_started_at) * 1000, 2)
+                    with stage_span(
+                        span_name="pipeline.t4_synthesis",
+                        stage_id="t4",
+                        input_value={
+                            "phase": "final",
+                            "message": request.message,
+                            "resultCount": len(results),
+                            "planStepCount": len(context.plan),
+                        },
+                    ):
+                        response = await self._dependencies.build_response(request, context, results, prior_history)
+                        stage_timings_ms["t4"] = round((perf_counter() - synthesis_started_at) * 1000, 2)
+                        response = self._apply_synthesis_inline_checks(response, phase="final")
+                        set_stage_output(
+                            self._response_summary(response),
+                            attributes={
+                                "response.confidence": response.confidence,
+                                "response.table_count": len(response.dataTables),
+                                "response.artifact_count": len(response.artifacts),
+                                "runtime.ms": stage_timings_ms["t4"],
+                            },
+                        )
                     response.trace = self._build_trace(
                         request=request,
                         prior_history=prior_history,
@@ -920,13 +1103,33 @@ class ConversationalOrchestrator:
 
                     await progress("Preparing initial answer from retrieved data")
                     fast_synthesis_started_at = perf_counter()
-                    fast_response = await self._run_with_heartbeat(
-                        operation=lambda: self._dependencies.build_fast_response(request, context, results, prior_history),
-                        progress_callback=progress,
-                        heartbeat_message="Building initial answer...",
-                    )
-                    draft_stage_timings_ms = dict(stage_timings_ms)
-                    draft_stage_timings_ms["t4"] = round((perf_counter() - fast_synthesis_started_at) * 1000, 2)
+                    with stage_span(
+                        span_name="pipeline.t4_synthesis",
+                        stage_id="t4",
+                        input_value={
+                            "phase": "draft",
+                            "message": request.message,
+                            "resultCount": len(results),
+                            "planStepCount": len(context.plan),
+                        },
+                    ):
+                        fast_response = await self._run_with_heartbeat(
+                            operation=lambda: self._dependencies.build_fast_response(request, context, results, prior_history),
+                            progress_callback=progress,
+                            heartbeat_message="Building initial answer...",
+                        )
+                        draft_stage_timings_ms = dict(stage_timings_ms)
+                        draft_stage_timings_ms["t4"] = round((perf_counter() - fast_synthesis_started_at) * 1000, 2)
+                        fast_response = self._apply_synthesis_inline_checks(fast_response, phase="draft")
+                        set_stage_output(
+                            self._response_summary(fast_response),
+                            attributes={
+                                "response.confidence": fast_response.confidence,
+                                "response.table_count": len(fast_response.dataTables),
+                                "response.artifact_count": len(fast_response.artifacts),
+                                "runtime.ms": draft_stage_timings_ms["t4"],
+                            },
+                        )
                     fast_response.trace = self._build_trace(
                         request=request,
                         prior_history=prior_history,
@@ -947,13 +1150,33 @@ class ConversationalOrchestrator:
 
                     await progress("Generating final narrative and recommendations")
                     final_synthesis_started_at = perf_counter()
-                    final_response = await self._run_with_heartbeat(
-                        operation=lambda: self._dependencies.build_response(request, context, results, prior_history),
-                        progress_callback=progress,
-                        heartbeat_message="Synthesizing narrative...",
-                    )
-                    final_stage_timings_ms = dict(stage_timings_ms)
-                    final_stage_timings_ms["t4"] = round((perf_counter() - final_synthesis_started_at) * 1000, 2)
+                    with stage_span(
+                        span_name="pipeline.t4_synthesis",
+                        stage_id="t4",
+                        input_value={
+                            "phase": "final",
+                            "message": request.message,
+                            "resultCount": len(results),
+                            "planStepCount": len(context.plan),
+                        },
+                    ):
+                        final_response = await self._run_with_heartbeat(
+                            operation=lambda: self._dependencies.build_response(request, context, results, prior_history),
+                            progress_callback=progress,
+                            heartbeat_message="Synthesizing narrative...",
+                        )
+                        final_stage_timings_ms = dict(stage_timings_ms)
+                        final_stage_timings_ms["t4"] = round((perf_counter() - final_synthesis_started_at) * 1000, 2)
+                        final_response = self._apply_synthesis_inline_checks(final_response, phase="final")
+                        set_stage_output(
+                            self._response_summary(final_response),
+                            attributes={
+                                "response.confidence": final_response.confidence,
+                                "response.table_count": len(final_response.dataTables),
+                                "response.artifact_count": len(final_response.artifacts),
+                                "runtime.ms": final_stage_timings_ms["t4"],
+                            },
+                        )
                     final_response.trace = self._build_trace(
                         request=request,
                         prior_history=prior_history,

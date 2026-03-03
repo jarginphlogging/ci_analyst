@@ -1,0 +1,62 @@
+name: Eval v2.1
+
+on:
+  pull_request:
+    paths:
+      - "apps/orchestrator/**"
+      - "evaluation/**"
+      - "apps/orchestrator/app/prompts/**"
+      - "packages/semantic-model/**"
+      - "requirements-eval.txt"
+      - ".github/workflows/eval_v2_1.yml"
+  schedule:
+    - cron: "0 2 * * *"
+  workflow_dispatch:
+
+jobs:
+  phoenix-quality-gate:
+    runs-on: ubuntu-latest
+    env:
+      PHOENIX_API_KEY: ${{ secrets.PHOENIX_API_KEY }}
+      PHOENIX_COLLECTOR_ENDPOINT: ${{ secrets.PHOENIX_COLLECTOR_ENDPOINT }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+      AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+      AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT }}
+      AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION }}
+      PROVIDER_MODE: sandbox
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      SANDBOX_SEED_RESET: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install Node Dependencies
+        run: npm ci
+
+      - name: Install Orchestrator Dependencies
+        run: npm run setup:orchestrator
+
+      - name: Install Eval Dependencies
+        run: python -m pip install -r requirements-eval.txt
+
+      - name: Run Tier 3 Experiment
+        run: python -m evaluation.run_experiment_v2_1 --name "ci-${{ github.run_id }}" --description "CI quality gate run"
+
+      - name: Phoenix Quality Gate (Authoritative)
+        run: python -m evaluation.quality_gate_v2_1 --experiment-name "ci-${{ github.run_id }}"
+
+      - name: Legacy Eval Harness (Advisory)
+        run: npm run eval
+        continue-on-error: true
