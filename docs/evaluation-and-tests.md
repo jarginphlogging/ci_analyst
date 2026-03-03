@@ -26,6 +26,42 @@ python -m evaluation.quality_gate_v2_1 --experiment-name "local-v2.1"
 python -m evaluation.eval_the_evals_v2_1 --min-agreement 0.80
 ```
 
+Environment loading:
+
+- All `python -m evaluation.*` entrypoints auto-load `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`.
+- Keep Phoenix + judge provider credentials in that single backend env file.
+
+Phoenix judge provider configuration (for LLM-as-judge evaluators):
+
+```bash
+# OpenAI (default)
+EVAL_JUDGE_PROVIDER=openai
+EVAL_JUDGE_MODEL=gpt-4o-mini
+OPENAI_API_KEY=...
+
+# Azure OpenAI
+EVAL_JUDGE_PROVIDER=azure   # aliases: azureopenai, azure_openai, azure-openai
+EVAL_JUDGE_MODEL=<azure_deployment_name>
+AZURE_OPENAI_API_KEY=...
+AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
+AZURE_OPENAI_API_VERSION=2024-10-21
+
+# Anthropic
+EVAL_JUDGE_PROVIDER=anthropic
+EVAL_JUDGE_MODEL=claude-3-5-sonnet-latest
+ANTHROPIC_API_KEY=...
+```
+
+Advanced passthrough for provider-specific client kwargs:
+
+```bash
+EVAL_JUDGE_CLIENT_KWARGS_JSON='{"base_url":"https://...","timeout":60}'
+EVAL_JUDGE_SYNC_CLIENT_KWARGS_JSON='{"timeout":60}'
+EVAL_JUDGE_ASYNC_CLIENT_KWARGS_JSON='{"timeout":120}'
+```
+
+If the selected provider SDK is missing, evaluator startup will fail fast with the Phoenix provider availability table.
+
 ## Eval Harness
 
 - Dataset: `/Users/joe/Code/ci_analyst/packages/eval-harness/datasets/golden-v1.json`

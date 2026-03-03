@@ -15,8 +15,8 @@ from evaluation.code_evaluators_v2_1 import (
 from evaluation.common_v2_1 import ensure_orchestrator_path
 from evaluation.golden_dataset_v2_1 import load_golden_examples, to_dataset_records
 from evaluation.llm_evaluators_v2_1 import (
-    build_decomposition_classifier,
     build_judge,
+    classify_decomposition,
     classify_hallucination,
     classify_qa,
     classify_sql_generation,
@@ -237,8 +237,7 @@ def main() -> None:
                 "sub_questions": run_df["plan_steps"].astype(str),
             }
         )
-        decomp_classifier = build_decomposition_classifier(judge)
-        decomp_results = decomp_classifier.evaluate(dataframe=decomp_df)
+        decomp_results = classify_decomposition(decomp_df, judge)
 
         sql_df = pd.DataFrame(
             {

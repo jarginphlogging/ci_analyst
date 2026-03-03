@@ -10,3 +10,4 @@ pyyaml==6.0.3
 datacompy==0.15.0
 scikit-learn==1.6.1
 openai==1.109.1
+anthropic==0.84.0

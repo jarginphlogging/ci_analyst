@@ -278,6 +278,42 @@ python -m evaluation.async_production_eval_v2_1 --hours 1
 python -m evaluation.quality_gate_v2_1 --experiment-name "local-v2.1"
 ```
 
+All `python -m evaluation.*` commands auto-load backend env from:
+
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
+
+This is the central backend configuration file for orchestrator runtime and Phoenix eval jobs.
+
+Phoenix eval judge provider selection (LLM-as-judge):
+
+```bash
+# OpenAI (default)
+export EVAL_JUDGE_PROVIDER=openai
+export EVAL_JUDGE_MODEL=gpt-4o-mini
+export OPENAI_API_KEY=...
+
+# Azure OpenAI (aliases accepted: azureopenai, azure_openai, azure-openai)
+export EVAL_JUDGE_PROVIDER=azure
+export EVAL_JUDGE_MODEL=<azure_deployment_name>
+export AZURE_OPENAI_API_KEY=...
+export AZURE_OPENAI_ENDPOINT=https://<resource>.openai.azure.com
+export AZURE_OPENAI_API_VERSION=2024-10-21
+
+# Anthropic
+export EVAL_JUDGE_PROVIDER=anthropic
+export EVAL_JUDGE_MODEL=claude-3-5-sonnet-latest
+export ANTHROPIC_API_KEY=...
+```
+
+Advanced provider passthrough:
+
+```bash
+# Forward arbitrary kwargs directly to phoenix.evals.LLM(...)
+export EVAL_JUDGE_CLIENT_KWARGS_JSON='{"base_url":"https://...","timeout":60}'
+export EVAL_JUDGE_SYNC_CLIENT_KWARGS_JSON='{"timeout":60}'
+export EVAL_JUDGE_ASYNC_CLIENT_KWARGS_JSON='{"timeout":120}'
+```
+
 Authority model:
 
 - Phoenix quality gate is authoritative for release governance.
