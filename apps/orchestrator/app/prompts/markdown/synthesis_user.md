@@ -18,7 +18,7 @@ Populate these structured fields:
 - `confidence`: `high|medium|low`
 - `confidenceReason`: rationale for confidence grounded in provided summaries
 - `summaryCards`: array of 1-3 objects `{label, value, detail(optional)}`
-- `chartConfig`: object or null with keys `{type, x, y, series, xLabel, yLabel, yFormat}` — `y` may be a single column name string or an array of column name strings for multi-measure charts; all referenced column names must exist in the synthesis context
+- `chartConfig`: object or null with keys `{type, x, y, series, xLabel, yLabel, yFormat}`
 - `tableConfig`: object or null with keys `{style, columns, sortBy, sortDir, showRank}`
 - `insights`: array of up to 4 objects `{title, detail, importance(high|medium)}`
 - `suggestedQuestions`: array of exactly 3 strings
@@ -44,7 +44,6 @@ Enum constraints:
 
 Final self-check before responding:
 
-1. Every column name in `chartConfig.x`, `chartConfig.y`, `chartConfig.series`, and `tableConfig.columns[].key` exists in the provided synthesis context columns.
+1. Any referenced column exists in provided table summaries.
 2. `chartConfig` and `tableConfig` are coherent with presentation intent and data shape.
-3. All numerical claims in `answer`, `whyItMatters`, `insights`, and `summaryCards` are traceable to supplied summaries.
-4. `confidence` and `confidenceReason` reflect actual data quality, not optimism.
+3. All numerical claims are traceable to supplied summaries.

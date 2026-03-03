@@ -9,7 +9,7 @@ Step id: {{step_id}}
 Step goal: {{step_goal}}
 Route: {{route}}
 
-Prior SQL queries generated in this conversation turn (for context only — do not repeat patterns that failed):
+Prior SQL in this turn:
 {{prior_sql}}
 
 Retry feedback from prior attempts:
