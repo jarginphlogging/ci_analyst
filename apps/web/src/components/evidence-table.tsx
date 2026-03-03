@@ -378,17 +378,17 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
         })}
 
       </svg>
-      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-700">
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 text-xs text-slate-700">
         {series.map((entry, idx) => (
           <span
             key={entry.key}
             className={`inline-flex items-center gap-1.5 font-medium ${
               series.length === 1
-                ? "rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-[15px] text-slate-700"
+                ? "rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-sm text-slate-700"
                 : ""
             }`}
           >
-            <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }} />
+            <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CHART_COLORS[idx % CHART_COLORS.length] }} />
             {prettify(entry.key)}
           </span>
         ))}

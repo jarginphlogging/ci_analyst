@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 import re
 from typing import Any
 
@@ -12,6 +13,7 @@ ensure_orchestrator_path()
 
 from app.config import settings  # noqa: E402
 from app.providers.factory import build_provider_bundle  # noqa: E402
+from app.evaluation.inline_checks_v2_1 import check_sql_syntax  # noqa: E402
 
 try:
     from phoenix.evals import create_evaluator
@@ -33,6 +35,7 @@ def _run_async(coro):
             loop.close()
 
 
+@lru_cache(maxsize=1)
 def _sql_executor():
     mode = settings.provider_mode
     if mode == "mock":
@@ -61,11 +64,11 @@ def execution_accuracy(output: dict[str, Any], expected: dict[str, Any]) -> floa
     if not isinstance(sql_steps, list) or not isinstance(expected_sql_steps, list) or not expected_sql_steps:
         return 0.0
 
-    limit = min(len(sql_steps), len(expected_sql_steps))
+    limit = max(len(sql_steps), len(expected_sql_steps))
     scores: list[float] = []
     for index in range(limit):
-        generated_sql = str(sql_steps[index] or "").strip()
-        golden_sql = str(expected_sql_steps[index] or "").strip()
+        generated_sql = str(sql_steps[index] or "").strip() if index < len(sql_steps) else ""
+        golden_sql = str(expected_sql_steps[index] or "").strip() if index < len(expected_sql_steps) else ""
         if not generated_sql or not golden_sql:
             scores.append(0.0)
             continue
@@ -89,10 +92,19 @@ def execution_accuracy(output: dict[str, Any], expected: dict[str, Any]) -> floa
             if not rhs_rows:
                 scores.append(1.0 if not lhs_rows else 0.0)
                 continue
-            scores.append(len(lhs_rows & rhs_rows) / max(1, len(rhs_rows)))
+            if not lhs_rows:
+                scores.append(0.0)
+                continue
+            overlap = len(lhs_rows & rhs_rows)
+            precision = overlap / max(1, len(lhs_rows))
+            recall = overlap / max(1, len(rhs_rows))
+            if precision + recall == 0:
+                scores.append(0.0)
+                continue
+            scores.append((2 * precision * recall) / (precision + recall))
         except Exception:  # noqa: BLE001
             scores.append(0.0)
-    return sum(scores) / max(1, len(scores))
+    return sum(scores) / max(1, limit)
 
 
 @create_evaluator(name="decomposition_coverage", kind="CODE")
@@ -125,8 +137,7 @@ def sql_syntax_valid(output: dict[str, Any], _expected: dict[str, Any] | None = 
         return 0.0
     valid_count = 0
     for sql in sql_steps:
-        text = str(sql or "").strip().lower()
-        if text.startswith("select") or text.startswith("with"):
+        sql_pass, _ = check_sql_syntax(str(sql or ""))
+        if sql_pass:
             valid_count += 1
     return valid_count / max(1, len(sql_steps))
-

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from contextlib import suppress
 from time import perf_counter
@@ -10,6 +11,7 @@ from uuid import uuid4
 from app.models import (
     AgentResponse,
     ChatTurnRequest,
+    QueryPlanStep,
     SqlExecutionResult,
     StreamResult,
     TraceStep,
@@ -18,7 +20,7 @@ from app.models import (
     now_iso,
 )
 from app.observability import bind_log_context
-from app.tracing import add_check_event, set_stage_output, stage_span
+from app.tracing import add_check_event, set_stage_output, stage_span, turn_span
 from app.evaluation.inline_checks_v2_1 import (
     check_answer_sanity,
     check_pii,
@@ -151,6 +153,34 @@ class ConversationalOrchestrator:
                 passed=plan_check_pass,
                 reason=plan_check_reason,
             )
+            if not plan_check_pass:
+                if not context.plan:
+                    context.plan = [
+                        QueryPlanStep(
+                            id="step_1",
+                            goal=(request.message.strip() or "Address user question."),
+                            dependsOn=[],
+                            independent=True,
+                        )
+                    ]
+                    self._record_inline_check(
+                        stage_id="t1",
+                        check_name="plan_sanity_repair",
+                        passed=True,
+                        reason="Inserted fallback single-step plan.",
+                    )
+                else:
+                    logger.warning(
+                        "Plan failed inline sanity checks",
+                        extra={
+                            "event": "orchestrator.pipeline.plan.inline_check_failed",
+                            "reason": plan_check_reason,
+                        },
+                    )
+                    raise PlannerBlockedError(
+                        stop_reason="too_complex",
+                        user_message="I need clarification before executing because the generated analysis plan failed policy checks.",
+                    )
             logger.info(
                 "Plan created",
                 extra={
@@ -227,6 +257,8 @@ class ConversationalOrchestrator:
                 setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
                 raise blocked from error
             stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
+            sql_failures: list[str] = []
+            result_failures: list[str] = []
             for index, result in enumerate(results, start=1):
                 sql_pass, sql_reason = check_sql_syntax(result.sql)
                 self._record_inline_check(
@@ -235,6 +267,8 @@ class ConversationalOrchestrator:
                     passed=sql_pass,
                     reason=sql_reason,
                 )
+                if not sql_pass:
+                    sql_failures.append(f"step_{index}: {sql_reason}")
                 rows_pass, rows_reason = check_result_sanity(
                     result.rows,
                     result.rowCount,
@@ -246,15 +280,35 @@ class ConversationalOrchestrator:
                     passed=rows_pass,
                     reason=rows_reason,
                 )
+                if not rows_pass:
+                    result_failures.append(f"step_{index}: {rows_reason}")
+            if sql_failures or result_failures:
+                blocked = SqlGenerationBlockedError(
+                    stop_reason="clarification",
+                    user_message="I need to refine the query plan because generated SQL failed inline safety checks.",
+                    detail={
+                        "phase": "inline_checks",
+                        "sqlFailures": sql_failures,
+                        "resultFailures": result_failures,
+                    },
+                )
+                blocked.context = context
+                setattr(blocked, "stage_timings_ms", dict(stage_timings_ms))
+                raise blocked
             first_result = results[0] if results else None
             first_sql = first_result.sql if first_result else ""
-            first_columns = list(first_result.rows[0].keys()) if first_result and first_result.rows else []
+            all_sql = [result.sql for result in results if result.sql]
+            all_columns: set[str] = set()
+            for result in results:
+                if result.rows and isinstance(result.rows[0], dict):
+                    all_columns.update(str(column) for column in result.rows[0].keys())
             set_stage_output(
                 self._results_summary(results),
                 attributes={
                     "sql.query": first_sql,
+                    "sql.queries": json.dumps(all_sql, ensure_ascii=True),
                     "result.row_count": sum(result.rowCount for result in results),
-                    "result.columns": ",".join(first_columns),
+                    "result.columns": ",".join(sorted(all_columns)),
                     "retry.count": len(context.sql_retry_feedback),
                     "runtime.ms": stage_timings_ms["t2"],
                 },
@@ -407,6 +461,20 @@ class ConversationalOrchestrator:
     def _inline_checks_for_stage(self, stage_id: str) -> list[str]:
         return list(self._latest_inline_checks.get(stage_id, []))
 
+    def _deterministic_answer_fallback(self, response: AgentResponse) -> str:
+        summary_bits: list[str] = []
+        if response.summaryCards:
+            for card in response.summaryCards[:3]:
+                summary_bits.append(f"{card.label}: {card.value}")
+        elif response.metrics:
+            for metric in response.metrics[:3]:
+                summary_bits.append(f"{metric.label}: {metric.value} {metric.unit}")
+        elif response.dataTables:
+            summary_bits.append(f"Retrieved {len(response.dataTables)} table(s) for review.")
+        if not summary_bits:
+            summary_bits.append("Analysis completed. Review tables and trace for details.")
+        return " | ".join(summary_bits)
+
     def _apply_synthesis_inline_checks(self, response: AgentResponse, *, phase: str) -> AgentResponse:
         answer_pass, answer_reason = check_answer_sanity(response.answer)
         self._record_inline_check(
@@ -423,8 +491,15 @@ class ConversationalOrchestrator:
             reason=pii_reason,
         )
         if not answer_pass:
-            # Keep answer unchanged; warning is captured in inline-check trace metadata.
-            pass
+            reason_text = answer_reason.lower()
+            if "error pattern" in reason_text or "empty" in reason_text:
+                response.answer = self._deterministic_answer_fallback(response)
+                response.assumptions = [*response.assumptions, f"Inline check fallback applied: {answer_reason}"][:5]
+            elif "shorter than" in reason_text:
+                # Concise answers are allowed for some deterministic/test providers.
+                pass
+            else:
+                response.assumptions = [*response.assumptions, f"Inline check warning: {answer_reason}"][:5]
         if not pii_pass:
             response.answer = redact_pii(response.answer)
             response.assumptions = [*response.assumptions, f"Inline check redaction applied: {pii_reason}"][:5]
@@ -901,122 +976,128 @@ class ConversationalOrchestrator:
                     "historyDepth": len(prior_history),
                 },
             )
-            try:
-                with bind_llm_trace_collector(llm_collector):
-                    context, results, validation, stage_timings_ms = await self._execute_pipeline(
-                        request,
-                        prior_history,
-                        _noop_progress,
-                    )
-                    synthesis_started_at = perf_counter()
-                    with stage_span(
-                        span_name="pipeline.t4_synthesis",
-                        stage_id="t4",
-                        input_value={
-                            "phase": "final",
-                            "message": request.message,
-                            "resultCount": len(results),
-                            "planStepCount": len(context.plan),
-                        },
-                    ):
-                        response = await self._dependencies.build_response(request, context, results, prior_history)
-                        stage_timings_ms["t4"] = round((perf_counter() - synthesis_started_at) * 1000, 2)
-                        response = self._apply_synthesis_inline_checks(response, phase="final")
-                        set_stage_output(
-                            self._response_summary(response),
-                            attributes={
-                                "response.confidence": response.confidence,
-                                "response.table_count": len(response.dataTables),
-                                "response.artifact_count": len(response.artifacts),
-                                "runtime.ms": stage_timings_ms["t4"],
-                            },
+            with turn_span(
+                session_id=session_id,
+                mode="sync",
+                message=request.message,
+                history_depth=len(prior_history),
+            ):
+                try:
+                    with bind_llm_trace_collector(llm_collector):
+                        context, results, validation, stage_timings_ms = await self._execute_pipeline(
+                            request,
+                            prior_history,
+                            _noop_progress,
                         )
-                    response.trace = self._build_trace(
-                        request=request,
-                        prior_history=prior_history,
-                        context=context,
-                        results=results,
-                        validation=validation,
-                        response=response,
-                        phase="final",
-                        llm_entries=llm_collector.entries,
-                        stage_timings_ms=stage_timings_ms,
+                        synthesis_started_at = perf_counter()
+                        with stage_span(
+                            span_name="pipeline.t4_synthesis",
+                            stage_id="t4",
+                            input_value={
+                                "phase": "final",
+                                "message": request.message,
+                                "resultCount": len(results),
+                                "planStepCount": len(context.plan),
+                            },
+                        ):
+                            response = await self._dependencies.build_response(request, context, results, prior_history)
+                            stage_timings_ms["t4"] = round((perf_counter() - synthesis_started_at) * 1000, 2)
+                            response = self._apply_synthesis_inline_checks(response, phase="final")
+                            set_stage_output(
+                                self._response_summary(response),
+                                attributes={
+                                    "response.confidence": response.confidence,
+                                    "response.table_count": len(response.dataTables),
+                                    "response.artifact_count": len(response.artifacts),
+                                    "runtime.ms": stage_timings_ms["t4"],
+                                },
+                            )
+                        response.trace = self._build_trace(
+                            request=request,
+                            prior_history=prior_history,
+                            context=context,
+                            results=results,
+                            validation=validation,
+                            response=response,
+                            phase="final",
+                            llm_entries=llm_collector.entries,
+                            stage_timings_ms=stage_timings_ms,
+                        )
+                        response = self._finalize_response(
+                            response=response,
+                            validation=validation,
+                            session_depth=len(self._session_history.get(session_id, [])),
+                        )
+                except PlannerBlockedError as blocked:
+                    logger.info(
+                        "Orchestrator turn blocked by planner",
+                        extra={
+                            "event": "orchestrator.turn.blocked.planner",
+                            "stopReason": blocked.stop_reason,
+                            "userMessage": blocked.user_message,
+                        },
                     )
-                    response = self._finalize_response(
-                        response=response,
-                        validation=validation,
+                    response = self._planner_blocked_response(
+                        blocked=blocked,
                         session_depth=len(self._session_history.get(session_id, [])),
+                        trace_step=self._planner_blocked_trace_step(
+                            request=request,
+                            prior_history=prior_history,
+                            blocked=blocked,
+                            llm_entries=llm_collector.entries,
+                            stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
+                        ),
                     )
-            except PlannerBlockedError as blocked:
-                logger.info(
-                    "Orchestrator turn blocked by planner",
-                    extra={
-                        "event": "orchestrator.turn.blocked.planner",
-                        "stopReason": blocked.stop_reason,
-                        "userMessage": blocked.user_message,
-                    },
-                )
-                response = self._planner_blocked_response(
-                    blocked=blocked,
-                    session_depth=len(self._session_history.get(session_id, [])),
-                    trace_step=self._planner_blocked_trace_step(
+                    return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+                except SqlGenerationBlockedError as blocked:
+                    logger.info(
+                        "Orchestrator turn blocked by SQL stage",
+                        extra={
+                            "event": "orchestrator.turn.blocked.sql",
+                            "stopReason": blocked.stop_reason,
+                            "userMessage": blocked.user_message,
+                            "detail": blocked.detail,
+                        },
+                    )
+                    blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
+                    response = self._sql_generation_blocked_response(
+                        blocked=blocked,
+                        session_depth=len(self._session_history.get(session_id, [])),
+                        trace_steps=self._trace_until_sql_failure(
+                            request=request,
+                            prior_history=prior_history,
+                            context=blocked_context,
+                            blocked=blocked,
+                            llm_entries=llm_collector.entries,
+                            stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
+                        ),
+                    )
+                    return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+                except Exception as error:  # noqa: BLE001
+                    logger.exception(
+                        "Orchestrator turn failed",
+                        extra={
+                            "event": "orchestrator.turn.failed",
+                        },
+                    )
+                    response = self._unexpected_failure_response(
                         request=request,
                         prior_history=prior_history,
-                        blocked=blocked,
                         llm_entries=llm_collector.entries,
-                        stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
-                    ),
-                )
-                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
-            except SqlGenerationBlockedError as blocked:
-                logger.info(
-                    "Orchestrator turn blocked by SQL stage",
-                    extra={
-                        "event": "orchestrator.turn.blocked.sql",
-                        "stopReason": blocked.stop_reason,
-                        "userMessage": blocked.user_message,
-                        "detail": blocked.detail,
-                    },
-                )
-                blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
-                response = self._sql_generation_blocked_response(
-                    blocked=blocked,
-                    session_depth=len(self._session_history.get(session_id, [])),
-                    trace_steps=self._trace_until_sql_failure(
-                        request=request,
-                        prior_history=prior_history,
-                        context=blocked_context,
-                        blocked=blocked,
-                        llm_entries=llm_collector.entries,
-                        stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
-                    ),
-                )
-                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
-            except Exception as error:  # noqa: BLE001
-                logger.exception(
-                    "Orchestrator turn failed",
-                    extra={
-                        "event": "orchestrator.turn.failed",
-                    },
-                )
-                response = self._unexpected_failure_response(
-                    request=request,
-                    prior_history=prior_history,
-                    llm_entries=llm_collector.entries,
-                    error=error,
-                    runtime_ms=round((perf_counter() - started_at) * 1000, 2),
-                )
-                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+                        error=error,
+                        runtime_ms=round((perf_counter() - started_at) * 1000, 2),
+                    )
+                    return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
 
-            logger.info(
-                "Orchestrator turn completed",
-                extra={
-                    "event": "orchestrator.turn.completed",
-                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
-                    "traceSteps": len(response.trace),
-                },
-            )
-            return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
+                logger.info(
+                    "Orchestrator turn completed",
+                    extra={
+                        "event": "orchestrator.turn.completed",
+                        "durationMs": round((perf_counter() - started_at) * 1000, 2),
+                        "traceSteps": len(response.trace),
+                    },
+                )
+                return TurnResult(turnId=str(uuid4()), createdAt=now_iso(), response=response)
 
     async def stream_events(self, request: ChatTurnRequest) -> AsyncIterator[dict[str, Any]]:
         session_id, prior_history = self._session_context(request)
@@ -1044,162 +1125,172 @@ class ConversationalOrchestrator:
                             "historyDepth": len(prior_history),
                         },
                     )
-                    await progress("Understanding query intent and scope")
+                    turn_context = turn_span(
+                        session_id=session_id,
+                        mode="stream",
+                        message=request.message,
+                        history_depth=len(prior_history),
+                    )
+                    turn_context.__enter__()
                     try:
-                        context, results, validation, stage_timings_ms = await self._execute_pipeline(
-                            request,
-                            prior_history,
-                            progress,
-                        )
-                    except PlannerBlockedError as blocked:
-                        logger.info(
-                            "Orchestrator stream blocked by planner",
-                            extra={
-                                "event": "orchestrator.stream.blocked.planner",
-                                "stopReason": blocked.stop_reason,
-                            },
-                        )
-                        await progress("Planner guardrail triggered; returning guidance response")
-                        blocked_response = self._planner_blocked_response(
-                            blocked=blocked,
-                            session_depth=len(self._session_history.get(session_id, [])),
-                            trace_step=self._planner_blocked_trace_step(
-                                request=request,
-                                prior_history=prior_history,
+                        await progress("Understanding query intent and scope")
+                        try:
+                            context, results, validation, stage_timings_ms = await self._execute_pipeline(
+                                request,
+                                prior_history,
+                                progress,
+                            )
+                        except PlannerBlockedError as blocked:
+                            logger.info(
+                                "Orchestrator stream blocked by planner",
+                                extra={
+                                    "event": "orchestrator.stream.blocked.planner",
+                                    "stopReason": blocked.stop_reason,
+                                },
+                            )
+                            await progress("Planner guardrail triggered; returning guidance response")
+                            blocked_response = self._planner_blocked_response(
                                 blocked=blocked,
-                                llm_entries=llm_collector.entries,
-                                stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
-                            ),
-                        )
-                        await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
-                        await emit({"type": "done"})
-                        return
-                    except SqlGenerationBlockedError as blocked:
-                        logger.info(
-                            "Orchestrator stream blocked by SQL stage",
-                            extra={
-                                "event": "orchestrator.stream.blocked.sql",
-                                "stopReason": blocked.stop_reason,
-                                "userMessage": blocked.user_message,
-                            },
-                        )
-                        await progress(f"SQL stage blocked: {blocked.user_message}")
-                        blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
-                        blocked_response = self._sql_generation_blocked_response(
-                            blocked=blocked,
-                            session_depth=len(self._session_history.get(session_id, [])),
-                            trace_steps=self._trace_until_sql_failure(
-                                request=request,
-                                prior_history=prior_history,
-                                context=blocked_context,
+                                session_depth=len(self._session_history.get(session_id, [])),
+                                trace_step=self._planner_blocked_trace_step(
+                                    request=request,
+                                    prior_history=prior_history,
+                                    blocked=blocked,
+                                    llm_entries=llm_collector.entries,
+                                    stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
+                                ),
+                            )
+                            await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
+                            await emit({"type": "done"})
+                            return
+                        except SqlGenerationBlockedError as blocked:
+                            logger.info(
+                                "Orchestrator stream blocked by SQL stage",
+                                extra={
+                                    "event": "orchestrator.stream.blocked.sql",
+                                    "stopReason": blocked.stop_reason,
+                                    "userMessage": blocked.user_message,
+                                },
+                            )
+                            await progress(f"SQL stage blocked: {blocked.user_message}")
+                            blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
+                            blocked_response = self._sql_generation_blocked_response(
                                 blocked=blocked,
-                                llm_entries=llm_collector.entries,
-                                stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
-                            ),
+                                session_depth=len(self._session_history.get(session_id, [])),
+                                trace_steps=self._trace_until_sql_failure(
+                                    request=request,
+                                    prior_history=prior_history,
+                                    context=blocked_context,
+                                    blocked=blocked,
+                                    llm_entries=llm_collector.entries,
+                                    stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
+                                ),
+                            )
+                            await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
+                            await emit({"type": "done"})
+                            return
+
+                        await progress("Preparing initial answer from retrieved data")
+                        fast_synthesis_started_at = perf_counter()
+                        with stage_span(
+                            span_name="pipeline.t4_synthesis_draft",
+                            stage_id="t4",
+                            input_value={
+                                "phase": "draft",
+                                "message": request.message,
+                                "resultCount": len(results),
+                                "planStepCount": len(context.plan),
+                            },
+                        ):
+                            fast_response = await self._run_with_heartbeat(
+                                operation=lambda: self._dependencies.build_fast_response(request, context, results, prior_history),
+                                progress_callback=progress,
+                                heartbeat_message="Building initial answer...",
+                            )
+                            draft_stage_timings_ms = dict(stage_timings_ms)
+                            draft_stage_timings_ms["t4"] = round((perf_counter() - fast_synthesis_started_at) * 1000, 2)
+                            fast_response = self._apply_synthesis_inline_checks(fast_response, phase="draft")
+                            set_stage_output(
+                                self._response_summary(fast_response),
+                                attributes={
+                                    "response.confidence": fast_response.confidence,
+                                    "response.table_count": len(fast_response.dataTables),
+                                    "response.artifact_count": len(fast_response.artifacts),
+                                    "runtime.ms": draft_stage_timings_ms["t4"],
+                                },
+                            )
+                        fast_response.trace = self._build_trace(
+                            request=request,
+                            prior_history=prior_history,
+                            context=context,
+                            results=results,
+                            validation=validation,
+                            response=fast_response,
+                            phase="draft",
+                            llm_entries=llm_collector.entries,
+                            stage_timings_ms=draft_stage_timings_ms,
                         )
-                        await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
+                        fast_response = self._finalize_response(
+                            response=fast_response,
+                            validation=validation,
+                            session_depth=len(self._session_history.get(session_id, [])),
+                        )
+                        await emit({"type": "response", "phase": "draft", "response": fast_response.model_dump()})
+
+                        await progress("Generating final narrative and recommendations")
+                        final_synthesis_started_at = perf_counter()
+                        with stage_span(
+                            span_name="pipeline.t4_synthesis_final",
+                            stage_id="t4",
+                            input_value={
+                                "phase": "final",
+                                "message": request.message,
+                                "resultCount": len(results),
+                                "planStepCount": len(context.plan),
+                            },
+                        ):
+                            final_response = await self._run_with_heartbeat(
+                                operation=lambda: self._dependencies.build_response(request, context, results, prior_history),
+                                progress_callback=progress,
+                                heartbeat_message="Synthesizing narrative...",
+                            )
+                            final_stage_timings_ms = dict(stage_timings_ms)
+                            final_stage_timings_ms["t4"] = round((perf_counter() - final_synthesis_started_at) * 1000, 2)
+                            final_response = self._apply_synthesis_inline_checks(final_response, phase="final")
+                            set_stage_output(
+                                self._response_summary(final_response),
+                                attributes={
+                                    "response.confidence": final_response.confidence,
+                                    "response.table_count": len(final_response.dataTables),
+                                    "response.artifact_count": len(final_response.artifacts),
+                                    "runtime.ms": final_stage_timings_ms["t4"],
+                                },
+                            )
+                        final_response.trace = self._build_trace(
+                            request=request,
+                            prior_history=prior_history,
+                            context=context,
+                            results=results,
+                            validation=validation,
+                            response=final_response,
+                            phase="final",
+                            llm_entries=llm_collector.entries,
+                            stage_timings_ms=final_stage_timings_ms,
+                        )
+                        final_response = self._finalize_response(
+                            response=final_response,
+                            validation=validation,
+                            session_depth=len(self._session_history.get(session_id, [])),
+                        )
+
+                        for delta in build_incremental_answer_deltas(fast_response.answer, final_response.answer):
+                            await emit({"type": "answer_delta", "delta": delta})
+
+                        await progress("Finalizing response payload and audit trace")
+                        await emit({"type": "response", "phase": "final", "response": final_response.model_dump()})
                         await emit({"type": "done"})
-                        return
-
-                    await progress("Preparing initial answer from retrieved data")
-                    fast_synthesis_started_at = perf_counter()
-                    with stage_span(
-                        span_name="pipeline.t4_synthesis",
-                        stage_id="t4",
-                        input_value={
-                            "phase": "draft",
-                            "message": request.message,
-                            "resultCount": len(results),
-                            "planStepCount": len(context.plan),
-                        },
-                    ):
-                        fast_response = await self._run_with_heartbeat(
-                            operation=lambda: self._dependencies.build_fast_response(request, context, results, prior_history),
-                            progress_callback=progress,
-                            heartbeat_message="Building initial answer...",
-                        )
-                        draft_stage_timings_ms = dict(stage_timings_ms)
-                        draft_stage_timings_ms["t4"] = round((perf_counter() - fast_synthesis_started_at) * 1000, 2)
-                        fast_response = self._apply_synthesis_inline_checks(fast_response, phase="draft")
-                        set_stage_output(
-                            self._response_summary(fast_response),
-                            attributes={
-                                "response.confidence": fast_response.confidence,
-                                "response.table_count": len(fast_response.dataTables),
-                                "response.artifact_count": len(fast_response.artifacts),
-                                "runtime.ms": draft_stage_timings_ms["t4"],
-                            },
-                        )
-                    fast_response.trace = self._build_trace(
-                        request=request,
-                        prior_history=prior_history,
-                        context=context,
-                        results=results,
-                        validation=validation,
-                        response=fast_response,
-                        phase="draft",
-                        llm_entries=llm_collector.entries,
-                        stage_timings_ms=draft_stage_timings_ms,
-                    )
-                    fast_response = self._finalize_response(
-                        response=fast_response,
-                        validation=validation,
-                        session_depth=len(self._session_history.get(session_id, [])),
-                    )
-                    await emit({"type": "response", "phase": "draft", "response": fast_response.model_dump()})
-
-                    await progress("Generating final narrative and recommendations")
-                    final_synthesis_started_at = perf_counter()
-                    with stage_span(
-                        span_name="pipeline.t4_synthesis",
-                        stage_id="t4",
-                        input_value={
-                            "phase": "final",
-                            "message": request.message,
-                            "resultCount": len(results),
-                            "planStepCount": len(context.plan),
-                        },
-                    ):
-                        final_response = await self._run_with_heartbeat(
-                            operation=lambda: self._dependencies.build_response(request, context, results, prior_history),
-                            progress_callback=progress,
-                            heartbeat_message="Synthesizing narrative...",
-                        )
-                        final_stage_timings_ms = dict(stage_timings_ms)
-                        final_stage_timings_ms["t4"] = round((perf_counter() - final_synthesis_started_at) * 1000, 2)
-                        final_response = self._apply_synthesis_inline_checks(final_response, phase="final")
-                        set_stage_output(
-                            self._response_summary(final_response),
-                            attributes={
-                                "response.confidence": final_response.confidence,
-                                "response.table_count": len(final_response.dataTables),
-                                "response.artifact_count": len(final_response.artifacts),
-                                "runtime.ms": final_stage_timings_ms["t4"],
-                            },
-                        )
-                    final_response.trace = self._build_trace(
-                        request=request,
-                        prior_history=prior_history,
-                        context=context,
-                        results=results,
-                        validation=validation,
-                        response=final_response,
-                        phase="final",
-                        llm_entries=llm_collector.entries,
-                        stage_timings_ms=final_stage_timings_ms,
-                    )
-                    final_response = self._finalize_response(
-                        response=final_response,
-                        validation=validation,
-                        session_depth=len(self._session_history.get(session_id, [])),
-                    )
-
-                    for delta in build_incremental_answer_deltas(fast_response.answer, final_response.answer):
-                        await emit({"type": "answer_delta", "delta": delta})
-
-                    await progress("Finalizing response payload and audit trace")
-                    await emit({"type": "response", "phase": "final", "response": final_response.model_dump()})
-                    await emit({"type": "done"})
+                    finally:
+                        turn_context.__exit__(None, None, None)
             except Exception as error:  # noqa: BLE001
                 logger.exception(
                     "Orchestrator stream failed",

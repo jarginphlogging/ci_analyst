@@ -59,7 +59,38 @@ def _metric_map_from_dataframe(df: pd.DataFrame) -> dict[str, float]:
     return metrics
 
 
+def _label_score(label: str) -> float:
+    normalized = str(label).strip().lower()
+    if normalized in {"correct", "grounded", "good", "complete", "pass", "true"}:
+        return 1.0
+    if normalized in {"partial"}:
+        return 0.5
+    if normalized in {"incorrect", "hallucinated", "bad", "poor", "fail", "false"}:
+        return 0.0
+    return 0.0
+
+
+def _metric_map_from_logged_evaluations(evaluations: list[Any]) -> dict[str, float]:
+    metrics: dict[str, list[float]] = {}
+    for evaluation in evaluations:
+        eval_name = _normalize_metric_name(str(getattr(evaluation, "eval_name", "")).strip())
+        df = getattr(evaluation, "dataframe", pd.DataFrame())
+        if not eval_name or not isinstance(df, pd.DataFrame) or df.empty:
+            continue
+        values: list[float] = []
+        if "score" in df.columns:
+            numeric = pd.to_numeric(df["score"], errors="coerce").dropna()
+            values = [float(item) for item in numeric.tolist()]
+        elif "label" in df.columns:
+            values = [_label_score(item) for item in df["label"].astype(str).tolist()]
+        if not values:
+            continue
+        metrics.setdefault(eval_name, []).extend(values)
+    return {name: sum(values) / max(1, len(values)) for name, values in metrics.items()}
+
+
 def _fetch_metrics(client: Any, experiment_name: str | None = None) -> dict[str, float]:
+    metrics: dict[str, float] = {}
     methods = [
         "get_experiment_results_dataframe",
         "get_experiment_runs_dataframe",
@@ -75,12 +106,23 @@ def _fetch_metrics(client: Any, experiment_name: str | None = None) -> dict[str,
             else:
                 df = method()
             if isinstance(df, pd.DataFrame):
-                metrics = _metric_map_from_dataframe(df)
-                if metrics:
-                    return metrics
+                metrics.update(_metric_map_from_dataframe(df))
         except Exception:  # noqa: BLE001
             continue
-    return {}
+
+    try:
+        get_evaluations = getattr(client, "get_evaluations", None)
+        if callable(get_evaluations):
+            logged = get_evaluations()
+            if isinstance(logged, list):
+                logged_metrics = _metric_map_from_logged_evaluations(logged)
+                for name, value in logged_metrics.items():
+                    if name not in metrics:
+                        metrics[name] = value
+    except Exception:  # noqa: BLE001
+        pass
+
+    return metrics
 
 
 def main() -> None:
@@ -117,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

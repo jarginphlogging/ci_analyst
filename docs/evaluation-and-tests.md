@@ -35,7 +35,8 @@ python -m evaluation.eval_the_evals_v2_1 --min-agreement 0.80
 Phoenix v2.1 role:
 
 - Runtime inline checks on `t1..t4` stages
-- Async production LLM-as-judge scoring
+- Async production LLM-as-judge scoring (decomposition, SQL correctness, hallucination, synthesis quality)
+- Tier 2 intentionally excludes QA correctness scoring because production traces lack ground-truth reference answers
 - Tier 3 golden dataset experiments
 - Authoritative quality gate for release decisions
 

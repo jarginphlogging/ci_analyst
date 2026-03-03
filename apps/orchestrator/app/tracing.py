@@ -40,7 +40,11 @@ except Exception:  # noqa: BLE001
 logger = logging.getLogger(__name__)
 
 _TRACING_INITIALIZED = False
-_TRACER = trace.get_tracer("ci_analyst.orchestrator")
+
+
+def _get_tracer():
+    # Resolve tracer lazily so post-register providers are honored.
+    return trace.get_tracer("ci_analyst.orchestrator")
 
 
 def _compact_json(value: Any) -> str:
@@ -83,6 +87,22 @@ def initialize_tracing(*, project_name: str = "cortex-analyst-pipeline") -> None
 
 
 @contextmanager
+def turn_span(
+    *,
+    session_id: str,
+    mode: str,
+    message: str,
+    history_depth: int,
+) -> Iterator[None]:
+    with _get_tracer().start_as_current_span("pipeline.turn") as span:
+        span.set_attribute("session.id", session_id)
+        span.set_attribute("turn.mode", mode)
+        span.set_attribute("history.depth", history_depth)
+        span.set_attribute("input.message", _compact_json({"message": message}))
+        yield
+
+
+@contextmanager
 def stage_span(
     *,
     span_name: str,
@@ -90,7 +110,7 @@ def stage_span(
     input_value: Any,
     attributes: dict[str, Any] | None = None,
 ) -> Iterator[None]:
-    with _TRACER.start_as_current_span(span_name) as span:
+    with _get_tracer().start_as_current_span(span_name) as span:
         span.set_attribute("eval.stage", stage_id)
         span.set_attribute("input.value", _compact_json(input_value))
         for key, value in (attributes or {}).items():

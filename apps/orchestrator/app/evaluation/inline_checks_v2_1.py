@@ -14,12 +14,31 @@ _ERROR_PATTERNS = (
 
 _SSN_PATTERN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 _ACCOUNT_PATTERN = re.compile(r"\b(?:account|acct)[\s:#-]*\d{6,17}\b", re.IGNORECASE)
-_CARD_PATTERN = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
+_CARD_PATTERN = re.compile(r"\b(?:\d[ -]?){13,19}\b")
 _MASK = "[REDACTED]"
 
 
 def _as_text(value: Any) -> str:
     return str(value) if value is not None else ""
+
+
+def _digits_only(text: str) -> str:
+    return re.sub(r"\D", "", text)
+
+
+def _passes_luhn(number: str) -> bool:
+    if not number.isdigit() or not (13 <= len(number) <= 19):
+        return False
+    total = 0
+    parity = len(number) % 2
+    for index, char in enumerate(number):
+        digit = int(char)
+        if index % 2 == parity:
+            digit *= 2
+            if digit > 9:
+                digit -= 9
+        total += digit
+    return total % 10 == 0
 
 
 def check_plan_sanity(plan: list[dict[str, object]], *, max_steps: int = 5) -> tuple[bool, str]:
@@ -52,7 +71,7 @@ def check_sql_syntax(sql: str) -> tuple[bool, str]:
     if not parsed:
         return False, "SQL failed to parse."
     first = parsed[0]
-    sql_type = first.get_type().upper()
+    sql_type = (first.get_type() or "UNKNOWN").upper()
     if sql_type not in {"SELECT", "UNKNOWN"}:
         # sqlparse can classify WITH queries as UNKNOWN.
         return False, f"SQL type is {sql_type}, expected SELECT/WITH."
@@ -111,8 +130,10 @@ def check_pii(answer: str) -> tuple[bool, str]:
         return False, "Detected SSN pattern."
     if _ACCOUNT_PATTERN.search(text):
         return False, "Detected account number pattern."
-    if _CARD_PATTERN.search(text):
-        return False, "Detected card-like number pattern."
+    for candidate in _CARD_PATTERN.findall(text):
+        digits = _digits_only(candidate)
+        if _passes_luhn(digits):
+            return False, "Detected card-like number pattern."
     return True, "passed"
 
 
@@ -122,4 +143,3 @@ def redact_pii(answer: str) -> str:
     redacted = _ACCOUNT_PATTERN.sub(lambda _: f"account {_MASK}", redacted)
     redacted = _CARD_PATTERN.sub(_MASK, redacted)
     return redacted
-

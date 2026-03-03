@@ -11,7 +11,6 @@ from evaluation.llm_evaluators_v2_1 import (
     build_decomposition_classifier,
     build_judge,
     classify_hallucination,
-    classify_qa,
     classify_sql_generation,
     classify_synthesis_quality,
 )
@@ -29,8 +28,12 @@ def _safe_series(df: pd.DataFrame, column: str, default: Any = "") -> pd.Series:
     return pd.Series([default for _ in range(len(df))])
 
 
+def _name_series(df: pd.DataFrame) -> pd.Series:
+    return _safe_series(df, "name", "").astype(str)
+
+
 def _build_decomposition_df(spans_df: pd.DataFrame) -> pd.DataFrame:
-    t1 = spans_df[spans_df.get("name", "").astype(str).str.contains("t1_plan", na=False)].copy()
+    t1 = spans_df[_name_series(spans_df).str.contains("t1_plan", na=False)].copy()
     return pd.DataFrame(
         {
             "question": _safe_series(t1, "attributes.input.value", "{}").astype(str),
@@ -41,7 +44,7 @@ def _build_decomposition_df(spans_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_sql_df(spans_df: pd.DataFrame) -> pd.DataFrame:
-    t2 = spans_df[spans_df.get("name", "").astype(str).str.contains("t2_sql", na=False)].copy()
+    t2 = spans_df[_name_series(spans_df).str.contains("t2_sql", na=False)].copy()
     return pd.DataFrame(
         {
             "question": _safe_series(t2, "attributes.input.value", "{}").astype(str),
@@ -53,7 +56,9 @@ def _build_sql_df(spans_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_synthesis_df(spans_df: pd.DataFrame) -> pd.DataFrame:
-    t4 = spans_df[spans_df.get("name", "").astype(str).str.contains("t4_synthesis", na=False)].copy()
+    t4 = spans_df[
+        _name_series(spans_df).str.contains(r"pipeline\.t4_synthesis($|_final)", regex=True, na=False)
+    ].copy()
     input_series = _safe_series(t4, "attributes.input.value", "{}").astype(str)
     output_series = _safe_series(t4, "attributes.output.value", "{}").astype(str)
     return pd.DataFrame(
@@ -61,12 +66,44 @@ def _build_synthesis_df(spans_df: pd.DataFrame) -> pd.DataFrame:
             "input": input_series,
             "output": output_series,
             "context": input_series,
-            "query": input_series,
-            "reference": input_series,
-            "sampled_answer": output_series,
             "context.span_id": _safe_series(t4, "context.span_id", ""),
         }
     )
+
+
+def _normalize_span_eval_df(result_df: pd.DataFrame, *, span_ids: pd.Series) -> pd.DataFrame:
+    df = result_df.copy()
+    if "context.span_id" not in df.columns:
+        df.insert(0, "context.span_id", span_ids.astype(str).tolist())
+    else:
+        df["context.span_id"] = df["context.span_id"].fillna(span_ids).astype(str)
+    if "score" not in df.columns and "label" in df.columns:
+        mapping = {
+            "correct": 1.0,
+            "grounded": 1.0,
+            "good": 1.0,
+            "complete": 1.0,
+            "partial": 0.5,
+            "incorrect": 0.0,
+            "hallucinated": 0.0,
+            "bad": 0.0,
+            "poor": 0.0,
+        }
+        df["score"] = (
+            df["label"]
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .map(mapping)
+            .fillna(0.0)
+            .astype(float)
+        )
+    columns = ["context.span_id", "score"]
+    if "label" in df.columns:
+        columns.append("label")
+    if "explanation" in df.columns:
+        columns.append("explanation")
+    return df[columns]
 
 
 def main() -> None:
@@ -100,22 +137,44 @@ def main() -> None:
     decomp_results = decomp_classifier.evaluate(dataframe=decomp_df)
     sql_results = classify_sql_generation(sql_df, judge)
     hallucination_results = classify_hallucination(synth_df[["input", "output", "context"]], judge)
-    qa_results = classify_qa(synth_df[["query", "reference", "sampled_answer"]], judge)
     synthesis_results = classify_synthesis_quality(
         pd.DataFrame({"input": synth_df["context"], "output": synth_df["output"]}),
         judge,
     )
 
     client.log_evaluations(
-        SpanEvaluations(dataframe=decomp_results, eval_name="Decomposition Quality v2.1"),
-        SpanEvaluations(dataframe=sql_results, eval_name="SQL Correctness v2.1"),
-        SpanEvaluations(dataframe=hallucination_results, eval_name="Hallucination v2.1"),
-        SpanEvaluations(dataframe=qa_results, eval_name="QA Correctness v2.1"),
-        SpanEvaluations(dataframe=synthesis_results, eval_name="Synthesis Quality v2.1"),
+        SpanEvaluations(
+            dataframe=_normalize_span_eval_df(
+                decomp_results,
+                span_ids=decomp_df["context.span_id"],
+            ),
+            eval_name="Decomposition Quality v2.1",
+        ),
+        SpanEvaluations(
+            dataframe=_normalize_span_eval_df(
+                sql_results,
+                span_ids=sql_df["context.span_id"],
+            ),
+            eval_name="SQL Correctness v2.1",
+        ),
+        SpanEvaluations(
+            dataframe=_normalize_span_eval_df(
+                hallucination_results,
+                span_ids=synth_df["context.span_id"],
+            ),
+            eval_name="Hallucination v2.1",
+        ),
+        SpanEvaluations(
+            dataframe=_normalize_span_eval_df(
+                synthesis_results,
+                span_ids=synth_df["context.span_id"],
+            ),
+            eval_name="Synthesis Quality v2.1",
+        ),
     )
 
     flagged = []
-    for result_df in (sql_results, hallucination_results, qa_results):
+    for result_df in (sql_results, hallucination_results):
         if "label" in result_df:
             flagged.append(result_df[result_df["label"].isin(["incorrect", "hallucinated"])])
     flagged_df = pd.concat(flagged) if flagged else pd.DataFrame()
@@ -130,4 +189,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

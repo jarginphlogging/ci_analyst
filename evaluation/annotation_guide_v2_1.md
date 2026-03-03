@@ -12,11 +12,23 @@ python -m evaluation.async_production_eval_v2_1 --hours 24
 
 - `evaluation/flagged/review_YYYYMMDD.csv`
 
-3. For each flagged trace in Phoenix, label stage outcomes:
+3. Open Phoenix UI and review traces:
+
+- Project: `cortex-analyst-pipeline`
+- Filter spans by `pipeline.t1_plan`, `pipeline.t2_sql`, and `pipeline.t4_synthesis*`
+- Open each trace from the flagged CSV by `context.span_id`/`context.trace_id`
+
+4. For each flagged trace, label stage outcomes in Phoenix annotations:
 
 - `correct`
 - `partial`
 - `incorrect`
+
+Label definitions:
+
+- `correct`: output is fully aligned with the stage input/contract and does not require remediation.
+- `partial`: output is directionally useful but incomplete, imprecise, or weakly justified.
+- `incorrect`: output is wrong, unsupported, policy-violating, or unusable.
 
 Stage targets:
 
@@ -24,7 +36,7 @@ Stage targets:
 - `t2` SQL quality
 - `t4` answer groundedness and correctness
 
-4. Promote confirmed failures to golden dataset:
+5. Promote confirmed failures to golden dataset:
 
 - append new case to `evaluation/golden_examples_v2_1.yaml`
 - upload dataset:

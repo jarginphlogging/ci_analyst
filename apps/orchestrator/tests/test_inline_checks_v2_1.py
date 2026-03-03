@@ -28,10 +28,23 @@ def test_check_sql_syntax_rejects_non_select() -> None:
     assert "SELECT/WITH" in reason
 
 
+def test_check_sql_syntax_handles_comment_only_input() -> None:
+    passed, reason = check_sql_syntax("-- only a comment")
+    assert passed is False
+    assert "SELECT or WITH" in reason
+
+
 def test_check_result_sanity_rejects_empty_rows() -> None:
     passed, reason = check_result_sanity([], 0, max_rows=10_000)
     assert passed is False
     assert "row count is zero" in reason
+
+
+def test_check_result_sanity_rejects_oversized_cell() -> None:
+    huge = "x" * 101
+    passed, reason = check_result_sanity([{"payload": huge}], 1, max_rows=10_000, max_cell_bytes=100)
+    assert passed is False
+    assert "cell larger" in reason
 
 
 def test_validation_contract_requires_checks() -> None:
@@ -49,8 +62,17 @@ def test_pii_detection_and_redaction() -> None:
     assert "[REDACTED]" in redacted
 
 
+def test_pii_card_detection_uses_luhn_validation() -> None:
+    card_like_but_invalid = "Payment attempt id 1234 5678 9012 3456"
+    pii_pass_invalid, _ = check_pii(card_like_but_invalid)
+    assert pii_pass_invalid is True
+
+    valid_test_card = "Card used: 4111 1111 1111 1111"
+    pii_pass_valid, _ = check_pii(valid_test_card)
+    assert pii_pass_valid is False
+
+
 def test_answer_sanity_rejects_known_error_pattern() -> None:
     passed, reason = check_answer_sanity("I couldn't complete that request. Please review the trace for details.")
     assert passed is False
     assert "error pattern" in reason
-

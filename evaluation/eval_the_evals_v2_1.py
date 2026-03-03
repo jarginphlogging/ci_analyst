@@ -23,8 +23,8 @@ def _fetch_annotation_df(client: Any) -> pd.DataFrame:
 def _cohen_kappa(lhs: list[str], rhs: list[str]) -> float:
     try:
         from sklearn.metrics import cohen_kappa_score
-    except Exception:  # noqa: BLE001
-        return 0.0
+    except Exception as error:  # noqa: BLE001
+        raise RuntimeError("scikit-learn is required to compute Cohen's kappa.") from error
     return float(cohen_kappa_score(lhs, rhs))
 
 
@@ -79,4 +79,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
