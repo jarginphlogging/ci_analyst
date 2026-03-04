@@ -125,7 +125,6 @@ class SqlStepGenerator:
         self,
         *,
         message: str,
-        route: str,
         step: QueryPlanStep,
         history: list[str],
         prior_sql: list[str],
@@ -145,7 +144,6 @@ class SqlStepGenerator:
         }
         analyst_trace_system, analyst_trace_user = sql_prompt(
             message,
-            route,
             step.id,
             step.goal,
             self._model,
@@ -322,7 +320,6 @@ class SqlStepGenerator:
         self,
         *,
         message: str,
-        route: str,
         step: QueryPlanStep,
         history: list[str],
         prior_sql: list[str],
@@ -341,7 +338,6 @@ class SqlStepGenerator:
         try:
             system_prompt, user_prompt = sql_prompt(
                 message,
-                route,
                 step.id,
                 step.goal,
                 self._model,
@@ -448,7 +444,6 @@ class SqlStepGenerator:
         *,
         index: int,
         message: str,
-        route: str,
         step: QueryPlanStep,
         history: list[str],
         prior_sql: list[str],
@@ -461,7 +456,6 @@ class SqlStepGenerator:
             try:
                 generated = await self._generate_with_analyst(
                     message=message,
-                    route=route,
                     step=step,
                     history=history,
                     prior_sql=prior_sql,
@@ -510,7 +504,6 @@ class SqlStepGenerator:
         else:
             generated = await self._generate_with_llm(
                 message=message,
-                route=route,
                 step=step,
                 history=history,
                 prior_sql=prior_sql,

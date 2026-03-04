@@ -16,7 +16,7 @@ ArtifactKind = Literal[
 ]
 VisualType = Literal["trend", "ranking", "comparison", "distribution", "snapshot", "table"]
 DisplayType = Literal["inline", "table", "chart"]
-ChartType = Literal["line", "bar", "stacked_bar", "grouped_bar"]
+ChartType = Literal["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"]
 TableStyle = Literal["simple", "ranked", "comparison"]
 
 
@@ -165,7 +165,6 @@ class QueryPlanStep(BaseModel):
 
 class SynthesisQueryContext(BaseModel):
     originalUserQuery: str
-    route: str
 
 
 class SynthesisVisualArtifact(BaseModel):

@@ -250,7 +250,7 @@ function buildTrace(query: string, sql: string): TraceStep[] {
         historyDepth: 0,
       },
       stageOutput: {
-        route: "single_step",
+        planStepCount: 1,
         domainScope: "customer_insights",
       },
     },
@@ -262,7 +262,7 @@ function buildTrace(query: string, sql: string): TraceStep[] {
       sql,
       qualityChecks: ["Allowlist guard passed", "Read-only SQL guard passed"],
       stageInput: {
-        route: "single_step",
+        planStepCount: 1,
         planStepIds: [primaryPlanStepId],
       },
       stageOutput: {

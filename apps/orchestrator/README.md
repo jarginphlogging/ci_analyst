@@ -10,13 +10,12 @@ FastAPI orchestration service for conversational analytics.
 
 ## Pipeline Shape
 
-1. classify route (`fast_path` or `deep_path`)
-2. generate bounded plan
-3. execute governed SQL steps
-4. build deterministic pandas-based table summaries (no LLM) for synthesis context
-5. run numeric validation checks
-6. synthesize final insights from original query + plan + executed SQL + table summaries
-7. carry forward bounded prior-turn context into route/plan/sql/response prompts
+1. generate bounded plan
+2. execute governed SQL steps
+3. build deterministic pandas-based table summaries (no LLM) for synthesis context
+4. run numeric validation checks
+5. synthesize final insights from original query + plan + executed SQL + table summaries
+6. carry forward bounded prior-turn context into plan/sql/response prompts
 
 Provider modes:
 - `mock`: static deterministic demo responses

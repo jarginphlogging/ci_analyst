@@ -41,7 +41,7 @@ async def execute_sandbox_sql(sql: str) -> List[Dict[str, Optional[Union[str, in
         },
     )
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
+        async with httpx.AsyncClient(timeout=settings.sandbox_sql_timeout_seconds) as client:
             response = await client.post(
                 f"{settings.sandbox_cortex_base_url.rstrip('/')}/query",
                 headers=headers,
@@ -106,7 +106,6 @@ async def analyze_message(
     conversation_id: str,
     message: str,
     history: list[str] | None = None,
-    route: str | None = None,
     step_id: str | None = None,
     retry_feedback: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -114,7 +113,6 @@ async def analyze_message(
         "conversationId": conversation_id,
         "message": message,
         "history": history or [],
-        "route": route,
         "stepId": step_id,
         "retryFeedback": retry_feedback or [],
     }

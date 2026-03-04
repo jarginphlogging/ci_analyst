@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
@@ -16,6 +17,7 @@ PLANNER_MAX_STEPS = max(1, settings.plan_max_steps)
 OUT_OF_DOMAIN_MESSAGE = "I can only answer questions about Customer Insights."
 TOO_COMPLEX_MESSAGE = "Your request is too complex, please simplify it and try again."
 logger = logging.getLogger(__name__)
+_STEP_REF_PATTERN = re.compile(r"(?:^|\b)(?:step|task)?\s*[_\-#:]?\s*(\d+)\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -59,9 +61,9 @@ def _normalize_display_type(value: Any) -> Literal["inline", "table", "chart"]:
     return "table"
 
 
-def _normalize_chart_type(value: Any) -> Literal["line", "bar", "stacked_bar", "grouped_bar"] | None:
+def _normalize_chart_type(value: Any) -> Literal["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"] | None:
     raw = str(value or "").strip().lower().replace("-", "_")
-    if raw in {"line", "bar", "stacked_bar", "grouped_bar"}:
+    if raw in {"line", "bar", "stacked_bar", "stacked_area", "grouped_bar"}:
         return raw
     return None
 
@@ -104,18 +106,19 @@ def _extract_steps(raw_tasks: Any, max_steps: int) -> list[QueryPlanStep]:
     if not isinstance(raw_tasks, list):
         return []
 
-    steps: list[QueryPlanStep] = []
+    extracted: list[tuple[str, list[str], bool | None]] = []
     seen: set[str] = set()
     for entry in raw_tasks:
         task_text = ""
-        depends_on: list[str] = []
-        independent = True
+        depends_on_raw: list[str] = []
+        independent_override: bool | None = None
         if isinstance(entry, dict):
             task_text = str(entry.get("task", "") or entry.get("goal", "")).strip()
             raw_depends = entry.get("dependsOn", entry.get("depends_on", []))
             if isinstance(raw_depends, list):
-                depends_on = [str(item).strip() for item in raw_depends if str(item).strip()]
-            independent = not depends_on if "independent" not in entry else bool(entry.get("independent"))
+                depends_on_raw = [str(item).strip() for item in raw_depends if str(item).strip()]
+            if "independent" in entry:
+                independent_override = bool(entry.get("independent"))
         elif isinstance(entry, str):
             task_text = entry.strip()
         if not task_text:
@@ -125,16 +128,59 @@ def _extract_steps(raw_tasks: Any, max_steps: int) -> list[QueryPlanStep]:
         if key in seen:
             continue
         seen.add(key)
+        extracted.append((task_text, depends_on_raw, independent_override))
+        if len(extracted) >= max_steps:
+            break
+
+    if not extracted:
+        return []
+
+    ids = [f"step_{index + 1}" for index in range(len(extracted))]
+    id_to_index = {step_id: index for index, step_id in enumerate(ids)}
+    goal_to_id = {_normalized(task_text): ids[index] for index, (task_text, _, _) in enumerate(extracted)}
+
+    def _resolve_dependency(raw_dependency: str, current_index: int) -> str | None:
+        token = raw_dependency.strip()
+        if not token:
+            return None
+
+        direct_index = id_to_index.get(token)
+        if direct_index is not None and direct_index < current_index:
+            return token
+
+        normalized_token = _normalized(token)
+        goal_match_id = goal_to_id.get(normalized_token)
+        if goal_match_id is not None and id_to_index.get(goal_match_id, -1) < current_index:
+            return goal_match_id
+
+        ordinal_match = _STEP_REF_PATTERN.search(token)
+        if ordinal_match:
+            candidate_index = int(ordinal_match.group(1)) - 1
+            if 0 <= candidate_index < current_index:
+                return ids[candidate_index]
+        return None
+
+    steps: list[QueryPlanStep] = []
+    for index, (task_text, depends_on_raw, independent_override) in enumerate(extracted):
+        depends_on: list[str] = []
+        seen_dependencies: set[str] = set()
+        for raw_dependency in depends_on_raw:
+            resolved = _resolve_dependency(raw_dependency, index)
+            if not resolved or resolved in seen_dependencies:
+                continue
+            seen_dependencies.add(resolved)
+            depends_on.append(resolved)
+        independent = independent_override if independent_override is not None else not depends_on
+        if depends_on:
+            independent = False
         steps.append(
             QueryPlanStep(
-                id=f"step_{len(steps) + 1}",
+                id=ids[index],
                 goal=task_text,
                 dependsOn=depends_on,
                 independent=independent,
             )
         )
-        if len(steps) >= max_steps:
-            break
     return steps
 
 

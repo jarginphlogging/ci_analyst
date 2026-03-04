@@ -26,14 +26,13 @@
    - `sandbox` path: Anthropic + local pseudo-Cortex Analyst REST + local SQLite
    - `prod` path: Azure + Snowflake + guardrails
 5. Real path stages:
-   - classify route (`fast_path` vs `deep_path`)
    - create bounded plan
    - generate SQL per step
    - run SQL guardrails (allowlist, restricted columns, read-only checks, limit policy)
    - execute SQL via Snowflake adapter
    - validate results
    - synthesize response with deterministic table profiling + Azure narrative
-   - carry forward bounded session history into route/plan/sql/response prompts
+   - carry forward bounded session history into plan/sql/response prompts
 6. Response is returned with answer, metrics, evidence, insights, trace, assumptions, and `dataTables`.
 
 ## 3) Orchestrator Modules (Current)

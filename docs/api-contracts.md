@@ -85,7 +85,6 @@ Request:
   "conversationId": "session-123",
   "message": "What were my sales by state in Q4 2025?",
   "history": ["Show me channel mix first"],
-  "route": "deep_path",
   "stepId": "step_1"
 }
 ```

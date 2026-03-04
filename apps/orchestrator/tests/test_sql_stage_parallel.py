@@ -66,7 +66,6 @@ async def test_parallel_sql_execution_preserves_plan_order() -> None:
         object.__setattr__(settings, "real_max_parallel_queries", 2)
         results, assumptions = await stage.run_sql(
             message="run parallel query steps",
-            route="deep_path",
             plan=plan,
             history=[],
         )
@@ -109,7 +108,6 @@ async def test_sql_stage_does_not_run_hardcoded_repair_queries() -> None:
 
     results, assumptions = await stage.run_sql(
         message="Show me sales by state",
-        route="standard",
         plan=plan,
         history=[],
     )
@@ -146,7 +144,6 @@ async def test_sql_stage_raises_clarification_when_analyst_requests_it() -> None
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="Analyze performance",
-            route="fast_path",
             plan=plan,
             history=[],
             conversation_id="conv-clarify",
@@ -160,7 +157,7 @@ async def test_sql_stage_raises_clarification_when_analyst_requests_it() -> None
 
 
 @pytest.mark.asyncio
-async def test_sql_stage_does_not_retry_generation_technical_failure() -> None:
+async def test_sql_stage_retries_generation_technical_failure_until_retry_limit() -> None:
     model = load_semantic_model()
     analyst_calls = 0
     seen_retry_feedback: list[list[dict[str, object]]] = []
@@ -185,18 +182,60 @@ async def test_sql_stage_does_not_retry_generation_technical_failure() -> None:
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="What is my total spend?",
-            route="standard",
             plan=plan,
             history=[],
             conversation_id="conv-generation-tech-failure",
         )
 
-    assert analyst_calls == 1
-    assert len(seen_retry_feedback) == 1
+    assert analyst_calls >= 2
+    assert len(seen_retry_feedback) == analyst_calls
     assert seen_retry_feedback[0] == []
+    assert len(seen_retry_feedback[-1]) >= 1
     assert blocked.value.stop_reason == "clarification"
     assert "technical error" in blocked.value.user_message.lower() or "failed" in blocked.value.user_message.lower()
-    assert blocked.value.detail.get("retryFeedback") == []
+    retry_feedback = blocked.value.detail.get("retryFeedback") or []
+    assert isinstance(retry_feedback, list)
+    assert len(retry_feedback) >= 1
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_surfaces_execution_timeout_without_generation_retry() -> None:
+    model = load_semantic_model()
+    sql_calls = 0
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "generationType": "sql_ready",
+            "sql": "SELECT transaction_state FROM cia_sales_insights_cortex LIMIT 1",
+            "assumptions": [],
+        }
+
+    async def fake_sql(_: str) -> list[dict[str, object]]:
+        nonlocal sql_calls
+        sql_calls += 1
+        raise TimeoutError("query timed out")
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [QueryPlanStep(id="step-1", goal="Show one row")]
+
+    original_sla = settings.sql_step_sla_seconds
+    try:
+        object.__setattr__(settings, "sql_step_sla_seconds", 120.0)
+        with pytest.raises(SqlGenerationBlockedError) as blocked:
+            await stage.run_sql(
+                message="Show one row",
+                plan=plan,
+                history=[],
+            )
+    finally:
+        object.__setattr__(settings, "sql_step_sla_seconds", original_sla)
+
+    assert sql_calls == 1
+    assert blocked.value.detail.get("errorCode") == "execution_timeout"
+    retry_feedback = blocked.value.detail.get("retryFeedback") or []
+    assert retry_feedback
+    assert retry_feedback[-1].get("errorCode") == "execution_timeout"
 
 
 @pytest.mark.asyncio
@@ -221,7 +260,6 @@ async def test_sql_stage_removes_clarification_text_from_assumptions() -> None:
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="Analyze performance",
-            route="fast_path",
             plan=plan,
             history=[],
             conversation_id="conv-assumption-dedupe",
@@ -256,7 +294,6 @@ async def test_sql_stage_passes_planner_task_verbatim_to_analyst() -> None:
 
     results, _ = await stage.run_sql(
         message="what were my total sales for last month",
-        route="standard",
         plan=plan,
         history=[],
         conversation_id="conv-verbatim",
@@ -289,7 +326,6 @@ async def test_sql_stage_raises_not_relevant_when_analyst_flags_out_of_scope() -
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="What is the weather today?",
-            route="fast_path",
             plan=plan,
             history=[],
             conversation_id="conv-irrelevant",
@@ -336,7 +372,6 @@ async def test_sql_stage_respects_serial_dependencies() -> None:
         object.__setattr__(settings, "use_mock_providers", False)
         await stage.run_sql(
             message="Top stores and then repeat/new mix",
-            route="deep_path",
             plan=plan,
             history=[],
         )
@@ -345,6 +380,65 @@ async def test_sql_stage_respects_serial_dependencies() -> None:
         object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
 
     assert execution_order[:2] == ["step-1", "step-2"]
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_resolves_textual_depends_on_references() -> None:
+    model = load_semantic_model()
+    execution_order: list[str] = []
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        user_prompt = str(kwargs.get("user_prompt", ""))
+        match = re.search(r"Step id:\s*(step-[0-9]+)", user_prompt, flags=re.IGNORECASE)
+        step_id = match.group(1).lower() if match else "step-x"
+        return {
+            "generationType": "sql_ready",
+            "sql": (
+                f"SELECT '{step_id}' AS segment, 1.0 AS prior, 2.0 AS current, 10.0 AS changeBps, 0.5 AS contribution "
+                "FROM cia_sales_insights_cortex LIMIT 1"
+            ),
+            "assumptions": [],
+        }
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        match = re.search(r"'(step-[0-9]+)'\s+AS\s+segment", sql, flags=re.IGNORECASE)
+        step_id = match.group(1).lower() if match else "step-x"
+        execution_order.append(step_id)
+        await asyncio.sleep(0.01)
+        return [{"segment": step_id, "prior": 1.0, "current": 2.0, "changeBps": 10.0, "contribution": 0.5}]
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [
+        QueryPlanStep(id="step-1", goal="Identify top and bottom stores"),
+        QueryPlanStep(
+            id="step-2",
+            goal="Show new vs repeat mix for those stores",
+            dependsOn=["Identify top and bottom stores"],
+            independent=False,
+        ),
+        QueryPlanStep(
+            id="step-3",
+            goal="Compare the same mix to last year",
+            dependsOn=["task 2"],
+            independent=False,
+        ),
+    ]
+
+    original_provider_mode_raw = settings.provider_mode_raw
+    original_use_mock_providers = settings.use_mock_providers
+    try:
+        object.__setattr__(settings, "provider_mode_raw", "prod")
+        object.__setattr__(settings, "use_mock_providers", False)
+        await stage.run_sql(
+            message="top and bottom stores with new vs repeat mix and last year comparison",
+            plan=plan,
+            history=[],
+        )
+    finally:
+        object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
+        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
+
+    assert execution_order[:3] == ["step-1", "step-2", "step-3"]
 
 
 @pytest.mark.asyncio
@@ -394,7 +488,6 @@ async def test_sql_stage_parallel_dispatch_on_prod_target() -> None:
         object.__setattr__(settings, "use_mock_providers", False)
         results, _ = await stage.run_sql(
             message="run independent query steps",
-            route="deep_path",
             plan=plan,
             history=[],
         )
@@ -404,6 +497,69 @@ async def test_sql_stage_parallel_dispatch_on_prod_target() -> None:
 
     assert peak_active_calls > 1
     assert [row.rows[0]["segment"] for row in results] == ["step-a", "step-b", "step-c"]
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_retries_analyst_generation_without_llm_fallback() -> None:
+    model = load_semantic_model()
+    analyst_calls = 0
+    llm_calls = 0
+
+    async def fake_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal analyst_calls
+        _ = kwargs
+        analyst_calls += 1
+        if analyst_calls == 1:
+            return {
+                "type": "clarification",
+                "clarificationQuestion": "SQL generation failed: model returned sql_ready without executable SQL.",
+                "clarificationKind": "technical_failure",
+                "assumptions": [],
+            }
+        return {
+            "type": "sql_ready",
+            "sql": (
+                "SELECT 'step-1' AS segment, 1.0 AS prior, 2.0 AS current, 10.0 AS changeBps, 0.5 AS contribution "
+                "FROM cia_sales_insights_cortex LIMIT 1"
+            ),
+            "assumptions": [],
+        }
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal llm_calls
+        llm_calls += 1
+        user_prompt = str(kwargs.get("user_prompt", ""))
+        match = re.search(r"Step id:\s*(step-[0-9]+)", user_prompt, flags=re.IGNORECASE)
+        step_id = match.group(1).lower() if match else "step-1"
+        return {
+            "generationType": "sql_ready",
+            "sql": (
+                f"SELECT '{step_id}' AS segment, 1.0 AS prior, 2.0 AS current, 10.0 AS changeBps, 0.5 AS contribution "
+                "FROM cia_sales_insights_cortex LIMIT 1"
+            ),
+            "assumptions": [],
+        }
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        match = re.search(r"'(step-[0-9]+)'\s+AS\s+segment", sql, flags=re.IGNORECASE)
+        step_id = match.group(1).lower() if match else "step-1"
+        return [{"segment": step_id, "prior": 1.0, "current": 2.0, "changeBps": 10.0, "contribution": 0.5}]
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql, analyst_fn=fake_analyst)
+    plan = [QueryPlanStep(id="step-1", goal="Identify top and bottom stores")]
+
+    results, assumptions = await stage.run_sql(
+        message="Identify top and bottom stores",
+        plan=plan,
+        history=[],
+        conversation_id="conv-analyst-retry",
+    )
+
+    assert analyst_calls == 2
+    assert llm_calls == 0
+    assert results
+    assert results[0].rows[0]["segment"] == "step-1"
+    assert any("SQL generation retry 1 failed" in item for item in assumptions)
 
 
 @pytest.mark.asyncio
@@ -440,7 +596,6 @@ async def test_sql_stage_retries_generation_after_execution_failure() -> None:
 
     results, assumptions = await stage.run_sql(
         message="What is my total spend?",
-        route="standard",
         plan=plan,
         history=[],
     )
@@ -486,7 +641,6 @@ async def test_sql_stage_execution_failure_does_not_request_user_clarification_b
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="What is my total spend?",
-            route="standard",
             plan=plan,
             history=[],
     )
@@ -532,7 +686,6 @@ async def test_sql_stage_retries_when_sql_returns_all_null_rows() -> None:
 
     results, assumptions = await stage.run_sql(
         message="What is my total sales?",
-        route="standard",
         plan=plan,
         history=[],
     )
@@ -572,7 +725,6 @@ async def test_sql_stage_exhausts_execution_retries_when_bad_sql_repeats() -> No
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="What is my total spend?",
-            route="standard",
             plan=plan,
             history=[],
         )
@@ -598,7 +750,6 @@ async def test_sql_stage_blocks_execution_above_five_steps() -> None:
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await stage.run_sql(
             message="Run many steps",
-            route="deep_path",
             plan=plan,
             history=[],
         )

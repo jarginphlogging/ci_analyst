@@ -57,13 +57,13 @@ export const dataTableSchema = z.object({
 
 export const presentationIntentSchema = z.object({
   displayType: z.enum(["inline", "table", "chart"]),
-  chartType: z.enum(["line", "bar", "stacked_bar", "grouped_bar"]).nullable().optional(),
+  chartType: z.enum(["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"]).nullable().optional(),
   tableStyle: z.enum(["simple", "ranked", "comparison"]).nullable().optional(),
   rationale: z.string().optional(),
 });
 
 export const chartConfigSchema = z.object({
-  type: z.enum(["line", "bar", "stacked_bar", "grouped_bar"]),
+  type: z.enum(["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"]),
   x: z.string(),
   y: z.union([z.string(), z.array(z.string())]),
   series: z.string().nullable().optional(),

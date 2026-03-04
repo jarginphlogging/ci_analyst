@@ -239,8 +239,8 @@ Do not solve the analysis yourself and do not write SQL.
 
 ## Presentation Decision Tree
 1. Single scalar → displayType="inline"
-2. Time-series → displayType="chart", chartType="line"
-3. Composition/breakdown → "chart"+"bar"/"stacked_bar" or "table"+"simple"
+2. Time-series → displayType="chart", chartType="line" or "stacked_area" (for category composition over time)
+3. Composition/breakdown → "chart"+"bar"/"stacked_bar"/"stacked_area" or "table"+"simple"
 4. Ranking/top-N → "table"+"ranked"
 5. Side-by-side comparison → "table"+"comparison"
 6. Default → "table"+"simple"
@@ -304,7 +304,6 @@ A `TurnExecutionContext`:
 
 ```python
 TurnExecutionContext(
-    route="standard",
     plan=[
         QueryPlanStep(
             id="step_1",
@@ -347,7 +346,6 @@ This runs **once per plan step**, respecting dependency order. Steps marked `ind
 | `history` | Last 6 turns | Conversation context |
 | `prior_sql` | SQL from earlier steps (this turn) | `[]` (first step) |
 | `retry_feedback` | Failed prior attempts | `[]` (first try) |
-| `route` | Execution mode | `"standard"` |
 
 #### LLM System Prompt (sql_system.md)
 
@@ -383,7 +381,6 @@ Semantic model summary:
 Question: What were my sales in each state in descending order?
 Step id: step_1
 Step goal: Retrieve total sales for each state, ordered descending by sales amount.
-Route: standard
 
 Prior SQL in this turn:
 - none
@@ -574,12 +571,11 @@ Conversation history:
 - Revenue in Q4 was $12.3M across all regions.
 
 Question: What were my sales in each state in descending order?
-Route: standard
 Presentation intent: {"displayType":"table","tableStyle":"ranked","rationale":"Descending order implies a ranked table..."}
 
 Synthesis context package:
 {
-  "queryContext": {"originalUserQuery": "What were my sales in each state...", "route": "standard"},
+  "queryContext": {"originalUserQuery": "What were my sales in each state..."},
   "plan": [{"id": "step_1", "goal": "Retrieve total sales for each state..."}],
   "executedSteps": [{
     "stepIndex": 1,
@@ -752,7 +748,7 @@ Assistant Message
 │   │
 │   ├── EvidenceTable                     ← response.chartConfig + response.tableConfig + response.dataTables
 │   │   ├── ChartPanel (if chartConfig valid)
-│   │   │   ├── AreaChart (line/stacked_bar) — custom SVG
+│   │   │   ├── AreaChart (line/stacked_area) — custom SVG
 │   │   │   └── BarChart (bar/grouped_bar) — custom SVG
 │   │   └── TablePanel (if chartConfig null or invalid)
 │   │       └── Ranked/simple/comparison table with formatted cells

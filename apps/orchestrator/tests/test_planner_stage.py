@@ -155,11 +155,11 @@ async def test_planner_preserves_task_text_for_multi_step_plan() -> None:
 
 @pytest.mark.asyncio
 async def test_planner_prompt_includes_general_step_minimization_policy() -> None:
-    captured_user_prompt = ""
+    captured_system_prompt = ""
 
     async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
-        nonlocal captured_user_prompt
-        captured_user_prompt = str(kwargs.get("user_prompt", ""))
+        nonlocal captured_system_prompt
+        captured_system_prompt = str(kwargs.get("system_prompt", ""))
         return {
             "relevance": "in_domain",
             "relevanceReason": "Request is in scope.",
@@ -172,5 +172,69 @@ async def test_planner_prompt_includes_general_step_minimization_policy() -> Non
     decision = await stage.create_plan("What are my top and bottom states by sales in 2025?", [])
 
     assert decision.stop_reason == "none"
-    assert "Default to one task when requested outputs share the same business scope" in captured_user_prompt
-    assert "Split into multiple tasks only when a single readable output would be materially worse or impossible" in captured_user_prompt
+    assert "Output exactly one task when the question targets a single result set" in captured_system_prompt
+    assert "Split when any of these apply" in captured_system_prompt
+
+
+@pytest.mark.asyncio
+async def test_planner_normalizes_stacked_area_chart_type_alias() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "relevance": "in_domain",
+            "relevanceReason": "In scope trend composition request.",
+            "presentationIntent": {"displayType": "chart", "chartType": "stacked-area"},
+            "tooComplex": False,
+            "tasks": [
+                {
+                    "task": "Show monthly sales split by customer type for the last 12 months.",
+                    "dependsOn": [],
+                    "independent": True,
+                }
+            ],
+        }
+
+    stage = PlannerStage(model=load_semantic_model(), ask_llm_json=fake_ask_llm_json)
+    decision = await stage.create_plan("Show monthly sales split by customer type for the last 12 months.", [])
+
+    assert decision.stop_reason == "none"
+    assert decision.presentation_intent.displayType == "chart"
+    assert decision.presentation_intent.chartType == "stacked_area"
+    assert len(decision.steps) == 1
+
+
+@pytest.mark.asyncio
+async def test_planner_normalizes_depends_on_to_prior_step_ids() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "relevance": "in_domain",
+            "relevanceReason": "In scope comparison request.",
+            "presentationIntent": {"displayType": "table", "tableStyle": "comparison"},
+            "tooComplex": False,
+            "tasks": [
+                {"task": "Identify top and bottom performing stores", "dependsOn": [], "independent": True},
+                {
+                    "task": "Show new vs repeat customer mix for those stores",
+                    "dependsOn": ["Identify top and bottom performing stores"],
+                    "independent": False,
+                },
+                {
+                    "task": "Compare the same mix to last year",
+                    "dependsOn": ["step_1", "Show new vs repeat customer mix for those stores", "task 2"],
+                    "independent": False,
+                },
+            ],
+        }
+
+    stage = PlannerStage(model=load_semantic_model(), ask_llm_json=fake_ask_llm_json)
+    decision = await stage.create_plan(
+        "top and bottom stores with new vs repeat mix compared to last year",
+        [],
+    )
+
+    assert decision.stop_reason == "none"
+    assert [step.id for step in decision.steps] == ["step_1", "step_2", "step_3"]
+    assert decision.steps[0].dependsOn == []
+    assert decision.steps[1].dependsOn == ["step_1"]
+    assert decision.steps[2].dependsOn == ["step_1", "step_2"]

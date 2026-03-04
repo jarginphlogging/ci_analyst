@@ -126,11 +126,9 @@ async def analyze_message(
     conversation_id: str,
     message: str,
     history: list[str] | None = None,
-    route: str | None = None,
     step_id: str | None = None,
     retry_feedback: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    _ = route
     _ = step_id
     _ = retry_feedback
     if not settings.has_snowflake_analyst_credentials():

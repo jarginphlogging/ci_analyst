@@ -8,7 +8,6 @@ from app.models import AgentResponse, ChatTurnRequest, PresentationIntent, Query
 
 @dataclass
 class TurnExecutionContext:
-    route: str
     plan: list[QueryPlanStep]
     presentation_intent: PresentationIntent = field(
         default_factory=lambda: PresentationIntent(displayType="table", tableStyle="simple")

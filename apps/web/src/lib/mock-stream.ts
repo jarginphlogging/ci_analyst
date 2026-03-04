@@ -15,10 +15,10 @@ export function buildMockEvents(message: string): ChatStreamEvent[] {
     : response;
   const events: ChatStreamEvent[] = [
     { type: "status", message: "Understanding your question" },
-    { type: "status", message: "Building governed plan" },
+    { type: "status", message: "Planning analysis..." },
     { type: "status", message: "Resolving latest RESP_DATE context from semantic model" },
-    { type: "status", message: "Generating governed SQL and running checks" },
-    { type: "status", message: "Executing SQL and retrieving evidence tables" },
+    { type: "status", message: "Preparing data retrieval and running checks" },
+    { type: "status", message: "Retrieving data and preparing evidence tables" },
     { type: "status", message: "Running numeric QA and consistency checks" },
     { type: "status", message: "Ranking insights by impact and confidence" },
     { type: "response", phase: "draft", response: draftResponse },

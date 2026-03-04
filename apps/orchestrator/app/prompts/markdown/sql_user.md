@@ -1,13 +1,12 @@
 Conversation history:
 {{history}}
 
-Semantic model summary:
-{{semantic_model_summary}}
+Semantic model (full semantic_model.yaml):
+{{semantic_model_yaml}}
 
 Question: {{user_message}}
 Step id: {{step_id}}
 Step goal: {{step_goal}}
-Route: {{route}}
 Execution target: {{execution_target}}
 
 Dialect constraints:

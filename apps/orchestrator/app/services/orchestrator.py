@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from contextlib import suppress
 from time import perf_counter
 from typing import Any, AsyncIterator, Awaitable, Callable, TypeVar
@@ -77,6 +78,40 @@ class ConversationalOrchestrator:
             except asyncio.TimeoutError:
                 await progress_callback(heartbeat_message)
 
+    @staticmethod
+    def _client_progress_message(message: str) -> str:
+        text = (message or "").strip()
+        if not text:
+            return "Retrieving data"
+
+        replacements: list[tuple[re.Pattern[str], str]] = [
+            (re.compile(r"\bSQL stage blocked\b", re.IGNORECASE), "Data retrieval blocked"),
+            (re.compile(r"\bBuilding governed plan\b", re.IGNORECASE), "Planning analysis..."),
+            (re.compile(r"\bBuilding plan\b", re.IGNORECASE), "Planning analysis..."),
+            (
+                re.compile(r"\bExecuting SQL and retrieving result tables\b", re.IGNORECASE),
+                "Retrieving data and preparing result tables",
+            ),
+            (re.compile(r"\bExecuting governed SQL\b", re.IGNORECASE), "Retrieving data"),
+            (re.compile(r"\bGenerating governed SQL\b", re.IGNORECASE), "Preparing data retrieval"),
+            (re.compile(r"\bGenerating SQL for step\b", re.IGNORECASE), "Preparing data retrieval for step"),
+            (re.compile(r"\bDrafting governed SQL\b", re.IGNORECASE), "Preparing data retrieval"),
+            (re.compile(r"\bgoverned data retrieval\b", re.IGNORECASE), "data retrieval"),
+            (re.compile(r"\bPreparing SQL step\b", re.IGNORECASE), "Preparing data retrieval step"),
+            (re.compile(r"\bRegenerating SQL\b", re.IGNORECASE), "Refining data retrieval step"),
+            (re.compile(r"\bRunning SQL step\b", re.IGNORECASE), "Running data retrieval step"),
+            (re.compile(r"\bCompleted SQL step\b", re.IGNORECASE), "Completed data retrieval step"),
+            (re.compile(r"\bDispatching (\d+) SQL step\(s\)\b", re.IGNORECASE), r"Dispatching \1 data retrieval step(s)"),
+            (re.compile(r"\bNo SQL was attempted\b", re.IGNORECASE), "No data retrieval was attempted"),
+        ]
+
+        sanitized = text
+        for pattern, replacement in replacements:
+            sanitized = pattern.sub(replacement, sanitized)
+        sanitized = re.sub(r"\bSQL\b", "data retrieval", sanitized, flags=re.IGNORECASE)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        return sanitized or "Retrieving data"
+
     async def _execute_pipeline(
         self,
         request: ChatTurnRequest,
@@ -94,7 +129,7 @@ class ConversationalOrchestrator:
                 "messageChars": len(request.message),
             },
         )
-        await progress_callback("Building governed plan")
+        await progress_callback("Planning analysis...")
         plan_started_at = perf_counter()
         with stage_span(
             span_name="pipeline.t1_plan",
@@ -108,7 +143,7 @@ class ConversationalOrchestrator:
                 context = await self._run_with_heartbeat(
                     operation=lambda: self._dependencies.create_plan(request, prior_history),
                     progress_callback=progress_callback,
-                    heartbeat_message="Building plan...",
+                    heartbeat_message="Planning analysis...",
                 )
             except PlannerBlockedError as blocked:
                 stage_timings_ms["t1"] = round((perf_counter() - plan_started_at) * 1000, 2)
@@ -177,7 +212,7 @@ class ConversationalOrchestrator:
             )
         await progress_callback(f"Plan ready with {len(context.plan)} step(s)")
 
-        await progress_callback("Executing SQL and retrieving result tables")
+        await progress_callback("Retrieving data and preparing result tables")
         sql_started_at = perf_counter()
         with stage_span(
             span_name="pipeline.t2_sql",
@@ -197,7 +232,7 @@ class ConversationalOrchestrator:
                         progress_callback=progress_callback,
                     ),
                     progress_callback=progress_callback,
-                    heartbeat_message="Executing governed SQL...",
+                    heartbeat_message="Retrieving data",
                 )
             except SqlGenerationBlockedError as blocked:
                 stage_timings_ms["t2"] = round((perf_counter() - sql_started_at) * 1000, 2)
@@ -1043,7 +1078,7 @@ class ConversationalOrchestrator:
                             "detail": blocked.detail,
                         },
                     )
-                    blocked_context = getattr(blocked, "context", TurnExecutionContext(route="", plan=[]))
+                    blocked_context = getattr(blocked, "context", TurnExecutionContext(plan=[]))
                     response = self._sql_generation_blocked_response(
                         blocked=blocked,
                         session_depth=len(self._session_history.get(session_id, [])),
@@ -1095,7 +1130,7 @@ class ConversationalOrchestrator:
             await event_queue.put(event)
 
         async def progress(message: str) -> None:
-            await emit({"type": "status", "message": message})
+            await emit({"type": "status", "message": self._client_progress_message(message)})
 
         async def worker() -> None:
             llm_collector = LlmTraceCollector()
@@ -1156,8 +1191,8 @@ class ConversationalOrchestrator:
                                     "userMessage": blocked.user_message,
                                 },
                             )
-                            await progress(f"SQL stage blocked: {blocked.user_message}")
-                            blocked_context = getattr(blocked, "context", TurnExecutionContext(route="", plan=[]))
+                            await progress(f"Data retrieval blocked: {blocked.user_message}")
+                            blocked_context = getattr(blocked, "context", TurnExecutionContext(plan=[]))
                             blocked_response = self._sql_generation_blocked_response(
                                 blocked=blocked,
                                 session_depth=len(self._session_history.get(session_id, [])),

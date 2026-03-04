@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
@@ -36,7 +37,6 @@ class MessageRequest(BaseModel):
     conversationId: str
     message: str
     history: list[str] = Field(default_factory=list)
-    route: Optional[str] = None
     stepId: Optional[str] = None
     retryFeedback: list[dict[str, Any]] = Field(default_factory=list)
 
@@ -222,14 +222,12 @@ def _to_analyst_payload(*, parsed: SqlGenerationResponsePayload) -> dict[str, An
 async def _generate_sql_from_message(
     *,
     message: str,
-    route: str,
     step_id: str,
     conversation_history: list[str],
     retry_feedback: list[dict[str, Any]],
 ) -> dict[str, Any]:
     system_prompt, user_prompt = sql_prompt(
         user_message=message,
-        route=route,
         step_id=step_id,
         step_goal=message,
         model=_model(),
@@ -288,7 +286,11 @@ async def health() -> dict[str, Any]:
 async def query(payload: QueryRequest, authorization: Optional[str] = Header(default=None)) -> dict[str, Any]:
     _check_auth(authorization)
     try:
-        rows = execute_readonly_query(settings.sandbox_sqlite_path, payload.sql)
+        rows = await run_in_threadpool(
+            execute_readonly_query,
+            settings.sandbox_sqlite_path,
+            payload.sql,
+        )
     except ValueError as error:
         logger.exception(
             "Sandbox SQL query validation failed",
@@ -330,7 +332,6 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
     try:
         generated = await _generate_sql_from_message(
             message=user_message,
-            route=(payload.route or "").strip(),
             step_id=(payload.stepId or "").strip(),
             conversation_history=generation_history,
             retry_feedback=retry_feedback,

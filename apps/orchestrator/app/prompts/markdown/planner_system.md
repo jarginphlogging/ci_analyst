@@ -55,7 +55,7 @@ Evaluate top-to-bottom. Stop at the first match.
 | # | Signal | Intent |
 |---|---|---|
 | 1 | Answer is a single scalar (one number, name, date, or yes/no) | `displayType = "inline"` |
-| 2 | One or more measures plotted over a time dimension (day/week/month/quarter/year) | `displayType = "chart"`, `chartType = "line"` |
+| 2 | One or more measures plotted over a time dimension (day/week/month/quarter/year) | `displayType = "chart"`, `chartType = "line"` or `"stacked_area"` when comparing category composition over time |
 | 3 | Breakdown across ≤ 8 categories (composition, share, distribution) | `displayType = "chart"`, `chartType = "bar"` or `"stacked_bar"` |
 | 4 | Breakdown across > 8 categories or open-ended category list | `displayType = "table"`, `tableStyle = "simple"` |
 | 5 | Ranking, top-N, or bottom-N | `displayType = "table"`, `tableStyle = "ranked"` |
@@ -78,7 +78,7 @@ relevanceReason:    string
 tooComplex:         boolean
 presentationIntent:
   displayType:      inline | table | chart
-  chartType:        line | bar | stacked_bar | grouped_bar | null
+  chartType:        line | bar | stacked_bar | stacked_area | grouped_bar | null
   tableStyle:       simple | ranked | comparison | null
   rationale:        string
 tasks:              array<Task>   (empty when out_of_domain or tooComplex)

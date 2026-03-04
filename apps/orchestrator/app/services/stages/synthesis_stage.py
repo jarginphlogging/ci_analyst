@@ -225,7 +225,7 @@ def _sanitize_chart_config(raw: Any, table: DataTable) -> ChartConfig | None:
     if not isinstance(raw, dict):
         return None
     chart_type = str(raw.get("type", "")).strip().lower().replace("-", "_")
-    if chart_type not in {"line", "bar", "stacked_bar", "grouped_bar"}:
+    if chart_type not in {"line", "bar", "stacked_bar", "stacked_area", "grouped_bar"}:
         return None
     x = str(raw.get("x", "")).strip()
     if x not in table.columns:
@@ -259,7 +259,7 @@ def _sanitize_chart_config(raw: Any, table: DataTable) -> ChartConfig | None:
     if y_format not in {"currency", "number", "percent"}:
         y_format = "number"
     return ChartConfig(
-        type=cast(Literal["line", "bar", "stacked_bar", "grouped_bar"], chart_type),
+        type=cast(Literal["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"], chart_type),
         x=x,
         y=y_value,
         series=series,
@@ -355,7 +355,13 @@ def _resolve_visual_config(
 
 def _primary_visual_from_config(chart_config: ChartConfig | None, table_config: TableConfig | None) -> PrimaryVisual | None:
     if chart_config is not None:
-        visual_type = "trend" if chart_config.type == "line" else "comparison" if chart_config.type == "grouped_bar" else "ranking"
+        visual_type = (
+            "trend"
+            if chart_config.type in {"line", "stacked_area"}
+            else "comparison"
+            if chart_config.type == "grouped_bar"
+            else "ranking"
+        )
         return PrimaryVisual(
             title=f"{_prettify(chart_config.y[0] if isinstance(chart_config.y, list) else chart_config.y)} by {_prettify(chart_config.x)}",
             description="Validated chart generated from retrieved SQL output.",
@@ -379,7 +385,6 @@ class SynthesisStage:
         self,
         *,
         message: str,
-        route: str,
         plan: list[QueryPlanStep] | None,
         presentation_intent: PresentationIntent,
         results: list[SqlExecutionResult],
@@ -388,7 +393,6 @@ class SynthesisStage:
     ) -> AgentResponse:
         return await self._build_response(
             message=message,
-            route=route,
             plan=plan,
             presentation_intent=presentation_intent,
             results=results,
@@ -401,7 +405,6 @@ class SynthesisStage:
         self,
         *,
         message: str,
-        route: str,
         plan: list[QueryPlanStep] | None,
         presentation_intent: PresentationIntent,
         results: list[SqlExecutionResult],
@@ -410,7 +413,6 @@ class SynthesisStage:
     ) -> AgentResponse:
         return await self._build_response(
             message=message,
-            route=route,
             plan=plan,
             presentation_intent=presentation_intent,
             results=results,
@@ -423,12 +425,10 @@ class SynthesisStage:
         self,
         *,
         message: str,
-        route: str,
         plan: list[QueryPlanStep] | None,
         results: list[SqlExecutionResult],
         artifacts: list[AnalysisArtifact],
     ) -> SynthesisContextPackage:
-        resolved_route = route.strip() or "unclassified"
         plan_steps = plan or []
         table_summaries = self._data_summarizer.summarize_tables(results=results, message=message)
         synthesis_plan = [
@@ -454,7 +454,7 @@ class SynthesisStage:
                 )
             )
         return SynthesisContextPackage(
-            queryContext=SynthesisQueryContext(originalUserQuery=message, route=resolved_route),
+            queryContext=SynthesisQueryContext(originalUserQuery=message),
             plan=synthesis_plan,
             executedSteps=executed_steps,
             availableVisualArtifacts=[
@@ -472,7 +472,6 @@ class SynthesisStage:
         self,
         *,
         message: str,
-        route: str,
         plan: list[QueryPlanStep] | None,
         presentation_intent: PresentationIntent,
         results: list[SqlExecutionResult],
@@ -487,7 +486,6 @@ class SynthesisStage:
         data_tables = results_to_data_tables(results)
         synthesis_context = self._synthesis_context_package(
             message=message,
-            route=route,
             plan=plan,
             results=results,
             artifacts=artifacts,
@@ -500,7 +498,6 @@ class SynthesisStage:
             try:
                 system_prompt, user_prompt = response_prompt(
                     message,
-                    route,
                     json.dumps(presentation_intent.model_dump(), ensure_ascii=True),
                     result_summary,
                     evidence_summary,

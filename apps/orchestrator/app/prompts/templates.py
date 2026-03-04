@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from typing import Any
 
 from app.config import settings
 from app.services.semantic_model import SemanticModel, semantic_model_summary
+from app.services.semantic_model_yaml import load_semantic_model_yaml
 
 _PROMPT_TEMPLATE_DIR = Path(__file__).resolve().parent / "markdown"
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{([a-zA-Z0-9_]+)\}\}")
@@ -61,6 +63,11 @@ def _retry_feedback_text(retry_feedback: list[dict[str, Any]] | None) -> str:
     return "\n".join(lines)
 
 
+@lru_cache(maxsize=1)
+def _full_semantic_model_yaml_text() -> str:
+    return load_semantic_model_yaml().raw_text.strip()
+
+
 def plan_prompt(
     user_message: str,
     semantic_model_summary_text: str,
@@ -82,7 +89,6 @@ def plan_prompt(
 
 def sql_prompt(
     user_message: str,
-    route: str,
     step_id: str,
     step_goal: str,
     model: SemanticModel,
@@ -120,11 +126,10 @@ def sql_prompt(
         "sql_user",
         values={
             "history": _history_text(history),
-            "semantic_model_summary": semantic_model_summary(model),
+            "semantic_model_yaml": _full_semantic_model_yaml_text(),
             "user_message": user_message,
             "step_id": step_id,
             "step_goal": step_goal,
-            "route": route,
             "execution_target": execution_target,
             "dialect_rules": dialect_rules,
             "prior_sql": prior_text,
@@ -136,7 +141,6 @@ def sql_prompt(
 
 def response_prompt(
     user_message: str,
-    route: str,
     presentation_intent: str,
     result_summary: str,
     evidence_summary: str,
@@ -148,7 +152,6 @@ def response_prompt(
         values={
             "history": _history_text(history),
             "user_message": user_message,
-            "route": route,
             "presentation_intent": presentation_intent,
             "result_summary": result_summary,
             "evidence_summary": evidence_summary,

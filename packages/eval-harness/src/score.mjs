@@ -2,29 +2,6 @@ export function normalize(text) {
   return String(text ?? "").trim().toLowerCase();
 }
 
-function routeFromText(value) {
-  const normalized = normalize(value);
-  if (!normalized) {
-    return null;
-  }
-  if (normalized.includes("deep path was selected")) {
-    return "deep_path";
-  }
-  if (normalized.includes("fast path was selected")) {
-    return "fast_path";
-  }
-  if (normalized.includes("deep_path") || normalized.includes("deep path")) {
-    return "deep_path";
-  }
-  if (normalized.includes("fast_path") || normalized.includes("fast path")) {
-    return "fast_path";
-  }
-  if (normalized.includes("standard")) {
-    return "standard";
-  }
-  return null;
-}
-
 export function scoreTokenMatch(answer, expectedTokens, minHits = 1) {
   const normalized = normalize(answer);
   const tokens = Array.isArray(expectedTokens) ? expectedTokens : [];
@@ -34,41 +11,6 @@ export function scoreTokenMatch(answer, expectedTokens, minHits = 1) {
     hitCount: hits.length,
     hits,
   };
-}
-
-export function detectRoute(payload) {
-  const assumptions = payload?.response?.assumptions;
-  if (Array.isArray(assumptions)) {
-    for (const item of assumptions) {
-      const detected = routeFromText(item);
-      if (detected) {
-        return detected;
-      }
-    }
-  }
-
-  const trace = Array.isArray(payload?.response?.trace) ? payload.response.trace : [];
-  if (trace.length) {
-    const planStep = trace.find((step) => {
-      const title = normalize(step?.title);
-      const id = normalize(step?.id);
-      return id === "t1" || title.includes("build plan");
-    });
-    const stageOutput = planStep?.stageOutput;
-    if (stageOutput && typeof stageOutput === "object") {
-      const explicit = routeFromText(stageOutput.route);
-      if (explicit) {
-        return explicit;
-      }
-      const stepCount = Number(stageOutput.stepCount);
-      if (Number.isFinite(stepCount) && stepCount > 0) {
-        // Backward-compatible heuristic while route is not explicitly emitted:
-        // 1-2 steps => fast_path, 3+ => deep_path.
-        return stepCount >= 3 ? "deep_path" : "fast_path";
-      }
-    }
-  }
-  return "unknown";
 }
 
 function isFiniteNumber(value) {

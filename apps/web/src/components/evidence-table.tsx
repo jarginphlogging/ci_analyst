@@ -160,8 +160,8 @@ function evaluateChartReadiness(table: DataTable, config: ChartConfig): ChartRea
   if (distinctX.size < 2) {
     return { ok: false, reason: "Chart downgraded to table: not enough x-axis points." };
   }
-  if (config.type === "line" && distinctX.size < 3) {
-    return { ok: false, reason: "Chart downgraded to table: line charts need at least 3 points." };
+  if ((config.type === "line" || config.type === "stacked_area") && distinctX.size < 3) {
+    return { ok: false, reason: "Chart downgraded to table: trend charts need at least 3 points." };
   }
   if (config.series) {
     const seriesCount = new Set(rows.map((row) => String(row[config.series ?? ""] ?? ""))).size;
@@ -229,7 +229,7 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const pointCount = Math.max(1, series[0]?.points.length ?? 1);
-  const stacked = config.type === "stacked_bar" && series.length > 1;
+  const stacked = config.type === "stacked_area" && series.length > 1;
   const stackedTotals = stacked
     ? Array.from({ length: pointCount }, (_, idx) =>
         series.reduce((sum, entry) => {
@@ -400,31 +400,84 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
 function BarChart({ table, config }: { table: DataTable; config: ChartConfig }) {
   const series = useMemo(() => chartSeriesFromTable(table, config), [table, config]);
   const xValues = series[0]?.points.map((point) => point.x) ?? [];
+  const stacked = config.type === "stacked_bar" && series.length > 1;
+  const stackedTotals = stacked
+    ? xValues.map((_, idx) =>
+        series.reduce((sum, entry) => {
+          const value = entry.points[idx]?.y;
+          return sum + (value !== null && Number.isFinite(value) ? Math.max(0, value) : 0);
+        }, 0),
+      )
+    : [];
   const maxValue = Math.max(
     1,
-    ...series.flatMap((entry) => entry.points.map((point) => point.y).filter((value): value is number => value !== null)),
+    ...(stacked
+      ? stackedTotals
+      : series.flatMap((entry) => entry.points.map((point) => point.y).filter((value): value is number => value !== null))),
   );
   return (
     <div className="mt-3 space-y-3 rounded-2xl border border-slate-200 bg-white p-3">
       {xValues.map((x, idx) => (
         <div key={`${x}-${idx}`} className="rounded-xl border border-slate-200 bg-slate-50 p-2.5">
           <p className="text-xs font-semibold text-slate-700">{formatXLabel(x)}</p>
-          <div className="mt-1.5 space-y-1.5">
-            {series.map((entry, seriesIdx) => {
-              const value = entry.points[idx]?.y ?? null;
-              const widthPct = value === null ? 0 : Math.max(0, Math.min(100, (value / maxValue) * 100));
-              const color = CHART_COLORS[seriesIdx % CHART_COLORS.length];
-              return (
-                <div key={`${x}-${entry.key}`} className="grid grid-cols-[140px_minmax(0,1fr)_120px] items-center gap-2 text-xs">
-                  <span className="font-medium text-slate-700">{prettify(entry.key)}</span>
-                  <div className="h-2.5 rounded-full bg-slate-200">
-                    <div className="h-2.5 rounded-full" style={{ width: `${widthPct}%`, backgroundColor: color }} />
+          {stacked ? (
+            <div className="mt-1.5 space-y-2">
+              <div className="h-3 rounded-full bg-slate-200">
+                <div
+                  className="h-3 overflow-hidden rounded-full"
+                  style={{ width: `${Math.max(0, Math.min(100, ((stackedTotals[idx] ?? 0) / maxValue) * 100))}%` }}
+                >
+                  <div className="flex h-full">
+                    {series.map((entry, seriesIdx) => {
+                      const value = entry.points[idx]?.y;
+                      const normalized = value !== null && Number.isFinite(value) ? Math.max(0, value) : 0;
+                      const widthPct = (stackedTotals[idx] ?? 0) <= 0 ? 0 : (normalized / (stackedTotals[idx] ?? 1)) * 100;
+                      return (
+                        <div
+                          key={`${x}-${entry.key}`}
+                          style={{ width: `${widthPct}%`, backgroundColor: CHART_COLORS[seriesIdx % CHART_COLORS.length] }}
+                          title={`${prettify(entry.key)}: ${formatValue(normalized, config.yFormat ?? "number")}`}
+                        />
+                      );
+                    })}
                   </div>
-                  <span className="text-right font-semibold text-slate-700">{formatValue(value, config.yFormat ?? "number")}</span>
                 </div>
-              );
-            })}
-          </div>
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_120px] items-center gap-2 text-xs">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  {series.map((entry, seriesIdx) => (
+                    <span key={`${entry.key}-${seriesIdx}`} className="inline-flex items-center gap-1 text-slate-700">
+                      <span
+                        className="h-2 w-2 rounded-full"
+                        style={{ backgroundColor: CHART_COLORS[seriesIdx % CHART_COLORS.length] }}
+                      />
+                      {prettify(entry.key)}
+                    </span>
+                  ))}
+                </div>
+                <span className="text-right font-semibold text-slate-700">
+                  {formatValue(stackedTotals[idx] ?? 0, config.yFormat ?? "number")}
+                </span>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-1.5 space-y-1.5">
+              {series.map((entry, seriesIdx) => {
+                const value = entry.points[idx]?.y ?? null;
+                const widthPct = value === null ? 0 : Math.max(0, Math.min(100, (value / maxValue) * 100));
+                const color = CHART_COLORS[seriesIdx % CHART_COLORS.length];
+                return (
+                  <div key={`${x}-${entry.key}`} className="grid grid-cols-[140px_minmax(0,1fr)_120px] items-center gap-2 text-xs">
+                    <span className="font-medium text-slate-700">{prettify(entry.key)}</span>
+                    <div className="h-2.5 rounded-full bg-slate-200">
+                      <div className="h-2.5 rounded-full" style={{ width: `${widthPct}%`, backgroundColor: color }} />
+                    </div>
+                    <span className="text-right font-semibold text-slate-700">{formatValue(value, config.yFormat ?? "number")}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -436,7 +489,13 @@ function ChartPanel({ table, config }: { table: DataTable; config: ChartConfig }
     config.xLabel || prettify(config.x)
   }`;
   const chartLabel =
-    config.type === "line" ? "line" : config.type === "stacked_bar" ? "stacked bar" : config.type.replace("_", " ");
+    config.type === "line"
+      ? "line"
+      : config.type === "stacked_bar"
+      ? "stacked bar"
+      : config.type === "stacked_area"
+      ? "stacked area"
+      : config.type.replace("_", " ");
   return (
     <section className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -445,7 +504,7 @@ function ChartPanel({ table, config }: { table: DataTable; config: ChartConfig }
           {chartLabel}
         </span>
       </div>
-      {config.type === "line" || config.type === "stacked_bar" ? (
+      {config.type === "line" || config.type === "stacked_area" ? (
         <AreaChart table={table} config={config} />
       ) : (
         <BarChart table={table} config={config} />

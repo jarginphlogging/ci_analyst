@@ -32,7 +32,6 @@ class HistorySpyDependencies:
     ) -> TurnExecutionContext:
         self.plan_histories.append(list(history))
         return TurnExecutionContext(
-            route="fast_path",
             plan=[QueryPlanStep(id="step_1", goal="Retrieve primary KPI")],
         )
 

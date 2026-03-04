@@ -50,7 +50,6 @@ class OutOfDomainDependencies:
 class ClarificationDependencies:
     async def create_plan(self, request: ChatTurnRequest, history: list[str]):  # noqa: ARG002
         return TurnExecutionContext(
-            route="single_step",
             plan=[QueryPlanStep(id="step_1", goal="Generate metric table")],
         )
 
@@ -92,7 +91,6 @@ class ClarificationDependencies:
 class SqlRuntimeFailureDependencies:
     async def create_plan(self, request: ChatTurnRequest, history: list[str]):  # noqa: ARG002
         return TurnExecutionContext(
-            route="standard",
             plan=[QueryPlanStep(id="step_1", goal="Calculate total sales for last month")],
         )
 

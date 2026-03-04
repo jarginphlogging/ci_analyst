@@ -112,6 +112,8 @@ class Settings:
         "http://127.0.0.1:8788/api/v2/cortex/analyst",
     )
     sandbox_cortex_api_key: Optional[str] = _as_optional(os.getenv("SANDBOX_CORTEX_API_KEY"))
+    sandbox_sql_timeout_seconds: float = max(1.0, _as_float(os.getenv("SANDBOX_SQL_TIMEOUT_SECONDS"), 120.0))
+    sql_step_sla_seconds: float = max(1.0, _as_float(os.getenv("SQL_STEP_SLA_SECONDS"), 120.0))
     sandbox_sqlite_path: str = _as_nonempty(
         os.getenv("SANDBOX_SQLITE_PATH"),
         str(Path(__file__).resolve().parents[1] / ".sandbox" / "ci_analyst_sandbox.db"),

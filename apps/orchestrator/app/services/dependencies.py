@@ -46,21 +46,13 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class MockDependencies:
-    @staticmethod
-    def _resolve_route(plan_steps: int) -> str:
-        if plan_steps <= 1:
-            return "single_step"
-        if plan_steps <= max(1, settings.real_fast_plan_steps):
-            return "fast_path"
-        return "deep_path"
-
     async def create_plan(
         self,
         request: ChatTurnRequest,
         history: list[str],  # noqa: ARG002
     ) -> TurnExecutionContext:
         plan = await mock_create_plan(request)
-        return TurnExecutionContext(route=self._resolve_route(len(plan)), plan=plan)
+        return TurnExecutionContext(plan=plan)
 
     async def run_sql(
         self,
@@ -126,14 +118,6 @@ class RealDependencies:
         self._validation_stage = ValidationStage(max_row_limit=self._model.policy.max_row_limit)
         self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_synthesis_payload)
         self._llm_provider_label = self._resolve_llm_provider_label()
-
-    @staticmethod
-    def _resolve_route(plan_steps: int) -> str:
-        if plan_steps <= 1:
-            return "single_step"
-        if plan_steps <= max(1, settings.real_fast_plan_steps):
-            return "fast_path"
-        return "deep_path"
 
     def _resolve_llm_provider_label(self) -> str:
         module_name = getattr(self._llm_fn, "__module__", "")
@@ -364,9 +348,7 @@ class RealDependencies:
                 "stepCount": len(decision.steps),
             },
         )
-        route = self._resolve_route(len(decision.steps))
         return TurnExecutionContext(
-            route=route,
             plan=decision.steps,
             presentation_intent=decision.presentation_intent,
         )
@@ -388,7 +370,6 @@ class RealDependencies:
         try:
             results, accumulated_assumptions = await self._sql_stage.run_sql(
                 message=request.message,
-                route=context.route,
                 plan=context.plan,
                 history=history,
                 conversation_id=str(request.sessionId or "anonymous"),
@@ -426,7 +407,6 @@ class RealDependencies:
         )
         return await self._synthesis_stage.build_response(
             message=request.message,
-            route=context.route,
             plan=context.plan,
             presentation_intent=context.presentation_intent,
             results=results,
@@ -450,7 +430,6 @@ class RealDependencies:
         )
         return await self._synthesis_stage.build_fast_response(
             message=request.message,
-            route=context.route,
             plan=context.plan,
             presentation_intent=context.presentation_intent,
             results=results,

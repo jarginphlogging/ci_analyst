@@ -6,10 +6,9 @@ The real backend uses stage-specific prompts from:
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/prompts/templates.py`
 
 Stages:
-1. `route_prompt` -> choose `fast_path` or `deep_path`
-2. `plan_prompt` -> generate bounded plan steps
-3. `sql_prompt` -> produce one SQL statement per step
-4. `response_prompt` -> produce final narrative payload
+1. `plan_prompt` -> generate bounded plan steps
+2. `sql_prompt` -> produce one SQL statement per step
+3. `response_prompt` -> produce final narrative payload
 
 All stages request strict JSON output and run through parser safeguards.
 All stages include bounded recent conversation history (up to 6 turns) for multi-turn continuity.

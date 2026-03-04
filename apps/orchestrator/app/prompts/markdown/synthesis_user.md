@@ -2,7 +2,6 @@ Conversation history:
 {{history}}
 
 Question: {{user_message}}
-Route: {{route}}
 Presentation intent: {{presentation_intent}}
 
 Synthesis context package:
@@ -37,7 +36,7 @@ Populate these structured fields:
 
 Enum constraints:
 
-- `chartConfig.type`: `line|bar|stacked_bar|grouped_bar`
+- `chartConfig.type`: `line|bar|stacked_bar|stacked_area|grouped_bar`
 - `chartConfig.yFormat`: `currency|number|percent`
 - `tableConfig.style`: `simple|ranked|comparison`
 - `tableConfig.sortDir`: `asc|desc|null`

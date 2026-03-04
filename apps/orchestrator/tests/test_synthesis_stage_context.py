@@ -79,7 +79,6 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
 
     response = await stage.build_response(
         message="Compare Q4 2025 performance by state.",
-        route="deep_path",
         plan=plan,
         presentation_intent=PresentationIntent(displayType="chart", chartType="grouped_bar"),
         results=results,
@@ -103,3 +102,59 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
     assert '"availableVisualArtifacts"' in prompt_text
     assert '"tableSummary":' in prompt_text
     assert '"numericStats"' in prompt_text
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stage_accepts_stacked_area_chart_config() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "answer": "Sales are rising and repeat customers now drive a larger share over time.",
+            "whyItMatters": "Composition trend highlights retention momentum.",
+            "confidence": "high",
+            "confidenceReason": "Data is complete across the period.",
+            "summaryCards": [{"label": "Latest Month", "value": "$12.3M"}],
+            "chartConfig": {
+                "type": "stacked_area",
+                "x": "month",
+                "y": "sales",
+                "series": "customer_type",
+                "xLabel": "Month",
+                "yLabel": "Sales",
+                "yFormat": "currency",
+            },
+            "tableConfig": None,
+            "insights": [{"title": "Repeat share up", "detail": "Repeat segment contribution is increasing.", "importance": "high"}],
+            "suggestedQuestions": ["Q1", "Q2", "Q3"],
+            "assumptions": [],
+        }
+
+    stage = SynthesisStage(ask_llm_json=fake_ask_llm_json)
+    results = [
+        SqlExecutionResult(
+            sql="SELECT month, customer_type, sales FROM cia_sales_insights_cortex",
+            rows=[
+                {"month": "2025-01-01", "customer_type": "new", "sales": 50.0},
+                {"month": "2025-01-01", "customer_type": "repeat", "sales": 75.0},
+                {"month": "2025-02-01", "customer_type": "new", "sales": 60.0},
+                {"month": "2025-02-01", "customer_type": "repeat", "sales": 85.0},
+                {"month": "2025-03-01", "customer_type": "new", "sales": 55.0},
+                {"month": "2025-03-01", "customer_type": "repeat", "sales": 95.0},
+            ],
+            rowCount=6,
+        )
+    ]
+
+    response = await stage.build_response(
+        message="How is monthly sales composition changing between new and repeat customers?",
+        plan=[],
+        presentation_intent=PresentationIntent(displayType="chart", chartType="stacked_area"),
+        results=results,
+        prior_assumptions=[],
+        history=[],
+    )
+
+    assert response.chartConfig is not None
+    assert response.chartConfig.type == "stacked_area"
+    assert response.primaryVisual is not None
+    assert response.primaryVisual.visualType == "trend"

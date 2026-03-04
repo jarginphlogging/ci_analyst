@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { detectRoute, evaluateNumericAssertions, percentile, scoreTokenMatch } from "./score.mjs";
+import { evaluateNumericAssertions, percentile, scoreTokenMatch } from "./score.mjs";
 
 test("scoreMatch passes when any expected token is present", () => {
   const result = scoreTokenMatch("Fraud loss rate rose 28 bps.", ["deposit", "fraud"]);
@@ -12,45 +12,6 @@ test("scoreMatch fails when expected tokens are absent", () => {
   const result = scoreTokenMatch("Charge-off increased.", ["liquidity", "nim"]);
   assert.equal(result.pass, false);
   assert.equal(result.hitCount, 0);
-});
-
-test("detectRoute returns deep_path from assumptions", () => {
-  const payload = {
-    response: {
-      assumptions: ["Deep path was selected for multi-step reasoning."],
-    },
-  };
-  assert.equal(detectRoute(payload), "deep_path");
-});
-
-test("detectRoute infers fast_path from trace plan step count", () => {
-  const payload = {
-    response: {
-      trace: [
-        {
-          id: "t1",
-          title: "Build plan",
-          stageOutput: { stepCount: 2 },
-        },
-      ],
-    },
-  };
-  assert.equal(detectRoute(payload), "fast_path");
-});
-
-test("detectRoute infers deep_path from trace plan step count", () => {
-  const payload = {
-    response: {
-      trace: [
-        {
-          id: "t1",
-          title: "Build plan",
-          stageOutput: { stepCount: 4 },
-        },
-      ],
-    },
-  };
-  assert.equal(detectRoute(payload), "deep_path");
 });
 
 test("evaluateNumericAssertions validates metric value and unit", () => {

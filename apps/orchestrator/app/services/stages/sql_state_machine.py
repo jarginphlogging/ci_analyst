@@ -15,6 +15,7 @@ class SqlFailureCode(str, Enum):
     GENERATION_PROVIDER_ERROR = "generation_provider_error"
     EXECUTION_WAREHOUSE_ERROR = "execution_warehouse_error"
     EXECUTION_ALL_NULL_ROWS = "execution_all_null_rows"
+    EXECUTION_TIMEOUT = "execution_timeout"
     RETRY_LIMIT_EXHAUSTED = "retry_limit_exhausted"
     TOO_COMPLEX = "too_complex"
 
@@ -22,7 +23,11 @@ class SqlFailureCode(str, Enum):
 def error_category(code: SqlFailureCode) -> str:
     if code in {SqlFailureCode.USER_INPUT_REQUIRED, SqlFailureCode.NOT_RELEVANT, SqlFailureCode.TOO_COMPLEX}:
         return "user"
-    if code in {SqlFailureCode.EXECUTION_WAREHOUSE_ERROR, SqlFailureCode.EXECUTION_ALL_NULL_ROWS}:
+    if code in {
+        SqlFailureCode.EXECUTION_WAREHOUSE_ERROR,
+        SqlFailureCode.EXECUTION_ALL_NULL_ROWS,
+        SqlFailureCode.EXECUTION_TIMEOUT,
+    }:
         return "execution"
     return "generation"
 

@@ -206,7 +206,7 @@ class SqlExecutionStage:
                     return False
             return True
 
-        await _emit_progress(progress_callback, f"Running SQL step {generated.index + 1}/{total_steps}")
+        await _emit_progress(progress_callback, f"Running data retrieval step {generated.index + 1}/{total_steps}")
         if generated.rows is not None and generated.sql:
             normalized_rows = normalize_rows(generated.rows)
             result = SqlExecutionResult(
@@ -222,7 +222,7 @@ class SqlExecutionStage:
             raise _AllNullRowsError("SQL returned only null values.")
         await _emit_progress(
             progress_callback,
-            f"Completed SQL step {generated.index + 1}/{total_steps} ({result.rowCount} rows)",
+            f"Completed data retrieval step {generated.index + 1}/{total_steps} ({result.rowCount} rows)",
         )
         return generated.index, result
 
@@ -233,7 +233,6 @@ class SqlExecutionStage:
         step: QueryPlanStep,
         total_steps: int,
         message: str,
-        route: str,
         history: list[str],
         prior_sql: list[str],
         conversation_id: str,
@@ -245,45 +244,77 @@ class SqlExecutionStage:
     ) -> tuple[GeneratedStep, int]:
         step_retry_feedback = retry_feedback_by_step.setdefault(step.id, [])
         attempt = max(1, start_attempt)
-        if attempt == 1:
-            await _emit_progress(progress_callback, f"Preparing SQL step {index + 1}/{total_steps}: {step.goal}")
-            if self._analyst_fn is not None:
+        generation_history = list(history)
+        while True:
+            if attempt == 1:
+                await _emit_progress(progress_callback, f"Preparing data retrieval step {index + 1}/{total_steps}: {step.goal}")
+                if self._analyst_fn is not None:
+                    await _emit_progress(
+                        progress_callback,
+                        f"Preparing data retrieval for step {index + 1}/{total_steps}",
+                    )
+                else:
+                    await _emit_progress(progress_callback, f"Preparing data retrieval for step {index + 1}/{total_steps}")
+            else:
                 await _emit_progress(
                     progress_callback,
-                    f"Generating SQL for step {index + 1}/{total_steps}",
+                    f"Refining data retrieval for step {index + 1}/{total_steps} (attempt {attempt}/{MAX_SQL_ATTEMPTS})",
                 )
-            else:
-                await _emit_progress(progress_callback, f"Drafting governed SQL for step {index + 1}/{total_steps}")
-        else:
-            await _emit_progress(
-                progress_callback,
-                f"Regenerating SQL for step {index + 1}/{total_steps} (attempt {attempt}/{MAX_SQL_ATTEMPTS})",
+
+            generated = await self._generator.generate(
+                index=index,
+                message=message,
+                step=step,
+                history=generation_history,
+                prior_sql=prior_sql,
+                conversation_id=conversation_id,
+                attempt_number=attempt,
+                retry_feedback=step_retry_feedback,
             )
+            assumptions.extend(generated.assumptions[:4])
+            if generated.rationale:
+                assumptions.append(f"{generated.step.id} rationale: {generated.rationale}")
 
-        generated = await self._generator.generate(
-            index=index,
-            message=message,
-            route=route,
-            step=step,
-            history=history,
-            prior_sql=prior_sql,
-            conversation_id=conversation_id,
-            attempt_number=attempt,
-            retry_feedback=step_retry_feedback,
-        )
-        assumptions.extend(generated.assumptions[:4])
-        if generated.rationale:
-            assumptions.append(f"{generated.step.id} rationale: {generated.rationale}")
+            if generated.status == "sql_ready" and generated.sql:
+                return generated, attempt
 
-        if generated.status == "sql_ready" and generated.sql:
-            return generated, attempt
+            failure_code = failure_code_for_generated(generated)
+            is_generation_retryable = (
+                generated.status == "clarification"
+                and generated.clarification_kind == "technical_failure"
+                and attempt < MAX_SQL_ATTEMPTS
+            )
+            if is_generation_retryable:
+                failure_text = generated.clarification_question or generated.rationale or "technical SQL generation failure"
+                step_retry_feedback.append(
+                    build_retry_event(
+                        code=failure_code,
+                        step_id=generated.step.id,
+                        attempt=attempt,
+                        provider=generated.provider,
+                        error=failure_text,
+                        failed_sql=generated.attempted_sql or generated.sql,
+                        clarification_question=generated.clarification_question,
+                        clarification_kind=generated.clarification_kind,
+                    )
+                )
+                sync_retry_feedback()
+                assumptions.append(
+                    f"SQL generation retry {attempt} failed for {generated.step.id}: {failure_text}"
+                )
+                generation_history = [
+                    *generation_history,
+                    f"Previous SQL generation failed for {generated.step.id}: {failure_text}",
+                ]
+                attempt += 1
+                continue
 
-        sync_retry_feedback()
-        raise self._blocked_from_generated(
-            generated,
-            attempt=attempt,
-            retry_feedback=step_retry_feedback,
-        )
+            sync_retry_feedback()
+            raise self._blocked_from_generated(
+                generated,
+                attempt=attempt,
+                retry_feedback=step_retry_feedback,
+            )
 
     async def _execute_with_retries(
         self,
@@ -292,7 +323,6 @@ class SqlExecutionStage:
         generated_attempt: int,
         total_steps: int,
         message: str,
-        route: str,
         history: list[str],
         prior_sql: list[str],
         conversation_id: str,
@@ -301,9 +331,51 @@ class SqlExecutionStage:
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
     ) -> tuple[int, SqlExecutionResult]:
+        def _is_timeout_error(error: Exception) -> bool:
+            if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+                return True
+            return "timeout" in type(error).__name__.lower()
+
+        def _raise_execution_timeout(
+            *,
+            step_id: str,
+            attempt: int,
+            failed_sql: str | None,
+            retry_feedback: list[dict[str, Any]],
+            error_text: str,
+            elapsed_seconds: float,
+        ) -> None:
+            retry_feedback_tail = normalize_retry_feedback(retry_feedback[-8:], max_items=6)
+            user_message = informed_clarification_message(
+                step_goal=current_generated.step.goal,
+                clarification_question=current_generated.clarification_question,
+                clarification_kind=current_generated.clarification_kind,
+                retry_feedback=retry_feedback_tail,
+                max_attempts=MAX_SQL_ATTEMPTS,
+                fallback_error=error_text,
+            )
+            raise SqlGenerationBlockedError(
+                stop_reason="clarification",
+                user_message=user_message,
+                detail={
+                    "phase": "sql_execution",
+                    "stepId": step_id,
+                    "attempt": attempt,
+                    "maxAttempts": MAX_SQL_ATTEMPTS,
+                    "error": error_text,
+                    "errorCode": SqlFailureCode.EXECUTION_TIMEOUT.value,
+                    "errorCategory": error_category(SqlFailureCode.EXECUTION_TIMEOUT),
+                    "failedSql": failed_sql,
+                    "retryFeedback": retry_feedback_tail,
+                    "elapsedSeconds": round(elapsed_seconds, 2),
+                    "slaSeconds": settings.sql_step_sla_seconds,
+                },
+            )
+
         current_generated = generated
         attempt_cursor = generated_attempt
         step_retry_feedback = retry_feedback_by_step.setdefault(current_generated.step.id, [])
+        step_started_at = perf_counter()
 
         while True:
             try:
@@ -328,7 +400,11 @@ class SqlExecutionStage:
                 failure_code = (
                     SqlFailureCode.EXECUTION_ALL_NULL_ROWS
                     if isinstance(error, _AllNullRowsError)
-                    else SqlFailureCode.EXECUTION_WAREHOUSE_ERROR
+                    else (
+                        SqlFailureCode.EXECUTION_TIMEOUT
+                        if _is_timeout_error(error)
+                        else SqlFailureCode.EXECUTION_WAREHOUSE_ERROR
+                    )
                 )
                 step_retry_feedback.append(
                     build_retry_event(
@@ -346,6 +422,18 @@ class SqlExecutionStage:
                 assumptions.append(
                     f"SQL execution retry {attempt_cursor} failed for {current_generated.step.id}: {error}"
                 )
+                elapsed_seconds = perf_counter() - step_started_at
+
+                if failure_code == SqlFailureCode.EXECUTION_TIMEOUT or elapsed_seconds >= settings.sql_step_sla_seconds:
+                    timeout_text = error_text or "SQL execution exceeded SLA."
+                    _raise_execution_timeout(
+                        step_id=current_generated.step.id,
+                        attempt=attempt_cursor,
+                        failed_sql=current_generated.sql,
+                        retry_feedback=step_retry_feedback,
+                        error_text=timeout_text,
+                        elapsed_seconds=elapsed_seconds,
+                    )
 
                 if attempt_cursor >= MAX_SQL_ATTEMPTS:
                     retry_feedback_tail = normalize_retry_feedback(step_retry_feedback[-8:], max_items=6)
@@ -376,7 +464,7 @@ class SqlExecutionStage:
                 await _emit_progress(
                     progress_callback,
                     (
-                        f"SQL step {current_generated.index + 1}/{total_steps} failed on attempt {attempt_cursor}: "
+                        f"Data retrieval step {current_generated.index + 1}/{total_steps} failed on attempt {attempt_cursor}: "
                         f"{error}. Regenerating and retrying."
                     ),
                 )
@@ -391,7 +479,6 @@ class SqlExecutionStage:
                         step=current_generated.step,
                         total_steps=total_steps,
                         message=message,
-                        route=route,
                         history=retry_history,
                         prior_sql=prior_sql,
                         conversation_id=conversation_id,
@@ -419,7 +506,6 @@ class SqlExecutionStage:
         self,
         *,
         message: str,
-        route: str,
         plan: list[QueryPlanStep],
         history: list[str],
         conversation_id: str = "anonymous",
@@ -461,7 +547,7 @@ class SqlExecutionStage:
             dispatch = execution_dispatch(self._analyst_fn)
             await _emit_progress(
                 progress_callback,
-                f"Dispatching {total_steps} SQL step(s) to {dispatch.target_label}",
+                f"Dispatching {total_steps} data retrieval step(s) to {dispatch.target_label}",
             )
             levels = dependency_levels(plan)
             generation_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
@@ -489,7 +575,6 @@ class SqlExecutionStage:
                             step=step,
                             total_steps=total_steps,
                             message=message,
-                            route=route,
                             history=history,
                             prior_sql=snapshot_prior_sql,
                             conversation_id=conversation_id,
@@ -535,7 +620,6 @@ class SqlExecutionStage:
                             generated_attempt=generated_attempt_by_index.get(generated.index, 1),
                             total_steps=total_steps,
                             message=message,
-                            route=route,
                             history=history,
                             prior_sql=prior_sql,
                             conversation_id=conversation_id,

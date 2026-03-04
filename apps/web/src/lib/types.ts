@@ -80,13 +80,13 @@ export interface PrimaryVisual {
 
 export interface PresentationIntent {
   displayType: "inline" | "table" | "chart";
-  chartType?: "line" | "bar" | "stacked_bar" | "grouped_bar" | null;
+  chartType?: "line" | "bar" | "stacked_bar" | "stacked_area" | "grouped_bar" | null;
   tableStyle?: "simple" | "ranked" | "comparison" | null;
   rationale?: string;
 }
 
 export interface ChartConfig {
-  type: "line" | "bar" | "stacked_bar" | "grouped_bar";
+  type: "line" | "bar" | "stacked_bar" | "stacked_area" | "grouped_bar";
   x: string;
   y: string | string[];
   series?: string | null;

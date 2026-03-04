@@ -28,7 +28,6 @@ class DeterministicDependencies:
         history: list[str],
     ) -> TurnExecutionContext:
         return TurnExecutionContext(
-            route="fast_path",
             plan=[QueryPlanStep(id="step_1", goal="Retrieve KPI summary by state.")],
         )
 

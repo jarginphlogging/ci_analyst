@@ -47,17 +47,16 @@ This memory is in-process only. If the service restarts, memory resets.
 
 ## 4) If I Took `/v1/chat/turn` (Non-Streaming Path)
 
-My route is:
+My execution path is:
 
 1. `run_turn(...)` starts.
 2. I pass through pipeline execution:
-   - route classification,
    - plan generation,
    - SQL generation/execution,
    - validation.
 3. Final response is synthesized.
 4. Validation checks are injected into trace step `t3`.
-5. Route and session-depth assumptions are appended.
+5. Session-depth assumptions are appended.
 6. I leave as `TurnResult` with:
    - `turnId`,
    - `createdAt`,
@@ -65,7 +64,7 @@ My route is:
 
 ## 5) If I Took `/v1/chat/stream` (Streaming Path)
 
-My route is similar, but I leave in phases:
+The streaming path is similar, but I leave in phases:
 
 1. `status` events while pipeline progresses.
 2. Draft `response` event (`phase="draft"`) from deterministic fast synthesis.
@@ -88,7 +87,7 @@ In `mock` mode only, event pacing delays are applied:
 
 When not in pure mock mode, I go through 4 concrete stages.
 
-### Stage A: Route + Plan (`PlannerStage`)
+### Stage A: Plan (`PlannerStage`)
 
 Files:
 
@@ -97,15 +96,11 @@ Files:
 
 What happens to me:
 
-1. Route classifier prompt tries to classify me as:
-   - `fast_path`, or
-   - `deep_path`.
-2. If LLM classification fails or is malformed, heuristic fallback classifies by keywords.
-3. Plan prompt generates bounded steps.
-4. Step count is clipped by config:
+1. Plan prompt generates bounded steps.
+2. Step count is clipped by config:
    - `REAL_FAST_PLAN_STEPS` (default 2)
    - `REAL_DEEP_PLAN_STEPS` (default 4)
-5. If plan parsing fails, deterministic fallback plan is used.
+3. If plan parsing fails, deterministic fallback plan is used.
 
 ### Stage B: SQL (`SqlExecutionStage`)
 
@@ -280,7 +275,7 @@ A POC usually does:
 
 This backend keeps that core shape but adds enterprise controls:
 
-1. route/plan decomposition,
+1. plan decomposition,
 2. governance guardrails,
 3. validation gates,
 4. deterministic fallback and repair,
