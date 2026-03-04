@@ -11,6 +11,21 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
+class SandboxCortexHttpError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int,
+        detail: Any = None,
+        response_text: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.detail = detail
+        self.response_text = response_text
+
+
 async def execute_sandbox_sql(sql: str) -> List[Dict[str, Optional[Union[str, int, float, bool]]]]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
     if settings.sandbox_cortex_api_key:
@@ -43,6 +58,15 @@ async def execute_sandbox_sql(sql: str) -> List[Dict[str, Optional[Union[str, in
         raise
 
     if response.status_code >= 400:
+        detail: Any = response.text
+        try:
+            body = response.json()
+            if isinstance(body, dict) and "detail" in body:
+                detail = body.get("detail")
+            else:
+                detail = body
+        except Exception:  # noqa: BLE001
+            pass
         logger.error(
             "Sandbox Cortex SQL request returned error",
             extra={
@@ -52,7 +76,12 @@ async def execute_sandbox_sql(sql: str) -> List[Dict[str, Optional[Union[str, in
                 "responsePreview": response.text[:500],
             },
         )
-        raise RuntimeError(f"Sandbox Cortex request failed ({response.status_code}): {response.text}")
+        raise SandboxCortexHttpError(
+            f"Sandbox Cortex request failed ({response.status_code}).",
+            status_code=response.status_code,
+            detail=detail,
+            response_text=response.text,
+        )
 
     payload: Any = response.json()
     logger.info(
@@ -123,6 +152,15 @@ async def analyze_message(
         raise
 
     if response.status_code >= 400:
+        detail: Any = response.text
+        try:
+            body = response.json()
+            if isinstance(body, dict) and "detail" in body:
+                detail = body.get("detail")
+            else:
+                detail = body
+        except Exception:  # noqa: BLE001
+            pass
         logger.error(
             "Sandbox analyst request returned error",
             extra={
@@ -133,7 +171,12 @@ async def analyze_message(
                 "responsePreview": response.text[:500],
             },
         )
-        raise RuntimeError(f"Sandbox Cortex analyst request failed ({response.status_code}): {response.text}")
+        raise SandboxCortexHttpError(
+            f"Sandbox Cortex analyst request failed ({response.status_code}).",
+            status_code=response.status_code,
+            detail=detail,
+            response_text=response.text,
+        )
 
     body: Any = response.json()
     if not isinstance(body, dict):

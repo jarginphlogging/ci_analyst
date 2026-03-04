@@ -41,19 +41,26 @@ from app.services.stages import (
 from app.services.types import OrchestratorDependencies, TurnExecutionContext
 
 ProgressCallback = Optional[Callable[[str], Optional[Awaitable[None]]]]
-EXECUTION_MODE = "standard"
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class MockDependencies:
+    @staticmethod
+    def _resolve_route(plan_steps: int) -> str:
+        if plan_steps <= 1:
+            return "single_step"
+        if plan_steps <= max(1, settings.real_fast_plan_steps):
+            return "fast_path"
+        return "deep_path"
+
     async def create_plan(
         self,
         request: ChatTurnRequest,
         history: list[str],  # noqa: ARG002
     ) -> TurnExecutionContext:
         plan = await mock_create_plan(request)
-        return TurnExecutionContext(route=EXECUTION_MODE, plan=plan)
+        return TurnExecutionContext(route=self._resolve_route(len(plan)), plan=plan)
 
     async def run_sql(
         self,
@@ -118,6 +125,32 @@ class RealDependencies:
         )
         self._validation_stage = ValidationStage(max_row_limit=self._model.policy.max_row_limit)
         self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_synthesis_payload)
+        self._llm_provider_label = self._resolve_llm_provider_label()
+
+    @staticmethod
+    def _resolve_route(plan_steps: int) -> str:
+        if plan_steps <= 1:
+            return "single_step"
+        if plan_steps <= max(1, settings.real_fast_plan_steps):
+            return "fast_path"
+        return "deep_path"
+
+    def _resolve_llm_provider_label(self) -> str:
+        module_name = getattr(self._llm_fn, "__module__", "")
+        if "azure_openai" in module_name:
+            return "azure_openai"
+        if "anthropic" in module_name:
+            return "anthropic"
+        if "mock_provider" in module_name:
+            return "mock"
+        mode = settings.provider_mode.strip().lower()
+        if mode == "prod":
+            return "azure_openai"
+        if mode == "sandbox":
+            return "anthropic"
+        if mode:
+            return mode
+        return "llm"
 
     async def _ask_planner_payload(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:
         return await self._ask_llm_structured(
@@ -221,7 +254,7 @@ class RealDependencies:
                 )
                 parsed_response = payload
             record_llm_trace(
-                provider="llm",
+                provider=self._llm_provider_label,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -255,7 +288,7 @@ class RealDependencies:
                 )
                 raise RuntimeError("Configured provider does not support structured output parameters.") from error
             record_llm_trace(
-                provider="llm",
+                provider=self._llm_provider_label,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -277,7 +310,7 @@ class RealDependencies:
             raise
         except Exception as error:
             record_llm_trace(
-                provider="llm",
+                provider=self._llm_provider_label,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
                 max_tokens=max_tokens,
@@ -322,7 +355,7 @@ class RealDependencies:
             )
             raise PlannerBlockedError(
                 stop_reason=decision.stop_reason,
-                user_message=decision.stop_message or "Unable to process request.",
+                user_message=decision.stop_message or "",
             )
         logger.info(
             "Plan created",
@@ -331,8 +364,9 @@ class RealDependencies:
                 "stepCount": len(decision.steps),
             },
         )
+        route = self._resolve_route(len(decision.steps))
         return TurnExecutionContext(
-            route=EXECUTION_MODE,
+            route=route,
             plan=decision.steps,
             presentation_intent=decision.presentation_intent,
         )

@@ -54,23 +54,12 @@ function asFiniteNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function looksCurrencyLabel(label: string): boolean {
-  return /(spend|sales|revenue|amount|ticket|value|aov)/i.test(label);
-}
-
-function looksPercentLabel(label: string): boolean {
-  return /(share|percent|percentage|ratio|rate|mix|pct)/i.test(label);
-}
-
 function isRowsRetrievedLabel(label: string): boolean {
   return normalizeMetricLabel(label).toLowerCase() === "rows retrieved";
 }
 
 function resolveMetricUnit(metric: KpiMetric): MetricPoint["unit"] {
-  if (metric.unit !== "count") return metric.unit;
-  if (looksPercentLabel(metric.label)) return "pct";
-  if (looksCurrencyLabel(metric.label)) return "usd";
-  return "count";
+  return metric.unit;
 }
 
 function formatUsdValue(value: number, label: string): string {
@@ -583,10 +572,14 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
           }));
         }
       });
-    } catch {
+    } catch (error) {
+      const failureText =
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : "Request failed.";
       updateAssistantMessage(assistantMessageId, (draft) => ({
         ...draft,
-        text: "I could not process that request. Please retry in a moment.",
+        text: failureText,
         isStreaming: false,
         statusUpdates: [...(draft.statusUpdates ?? []), "Request failed"],
         requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
@@ -750,7 +743,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                         <section className="rounded-xl border border-rose-200 bg-rose-50 p-3">
                           <p className="text-xs uppercase tracking-wide text-rose-700">Request Failed</p>
                           <p className="mt-1.5 text-sm text-rose-900">
-                            No governed result payload was returned. Review the trace for failure details.
+                            No result payload was returned. Review the trace for failure details.
                           </p>
                         </section>
                         <AnalysisTrace steps={message.response.trace} />
@@ -908,16 +901,14 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <p className="text-xl font-bold text-slate-100">Current Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">
-              {latestResponseIsFailure
-                ? "Latest request failed. Open the trace for diagnostics."
-                : "Review top signals, confidence context, and suggested next actions for your latest query."}
+              Review top signals, confidence context, and suggested next actions for your latest query.
             </p>
           </div>
 
           {latestResponse ? (
             latestResponseIsFailure ? (
               <div className="mt-4 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-900">
-                The latest run did not return a governed result. Inspect the analysis trace in the conversation panel.
+                The latest run did not return a result. Inspect the analysis trace in the conversation panel.
               </div>
             ) : (
               <div className="mt-4 space-y-3">

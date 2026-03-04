@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+import json
 import logging
 from time import perf_counter
 from typing import Any, Optional
@@ -13,12 +14,11 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config import settings
 from app.observability import bind_log_context, configure_logging
 from app.providers.anthropic_llm import chat_completion as anthropic_chat_completion
+from app.prompts.templates import sql_prompt
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 from app.services.llm_json import as_string_list, parse_json_object
-from app.services.llm_schemas import AnalystResponsePayload
-from app.services.semantic_model import SemanticModel, load_semantic_model, semantic_model_summary
-from app.services.semantic_model_yaml import load_semantic_model_yaml, semantic_model_yaml_prompt_context
-from app.services.sql_guardrails import guard_sql
+from app.services.llm_schemas import SqlGenerationResponsePayload
+from app.services.semantic_model import SemanticModel, load_semantic_model
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -43,15 +43,13 @@ class MessageRequest(BaseModel):
 
 _CONVERSATION_MEMORY: dict[str, list[str]] = {}
 _SEMANTIC_MODEL: SemanticModel | None = None
-_SEMANTIC_YAML_CONTEXT: str | None = None
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    global _SEMANTIC_MODEL, _SEMANTIC_YAML_CONTEXT
+    global _SEMANTIC_MODEL
     ensure_sandbox_database(settings.sandbox_sqlite_path, reset=settings.sandbox_seed_reset)
     _SEMANTIC_MODEL = load_semantic_model()
-    _SEMANTIC_YAML_CONTEXT = semantic_model_yaml_prompt_context(load_semantic_model_yaml())
     yield
 
 
@@ -113,12 +111,6 @@ def _model() -> SemanticModel:
     return _SEMANTIC_MODEL
 
 
-def _semantic_yaml_context() -> str:
-    if _SEMANTIC_YAML_CONTEXT:
-        return _SEMANTIC_YAML_CONTEXT
-    return semantic_model_yaml_prompt_context(load_semantic_model_yaml())
-
-
 def _conversation_history(conversation_id: str, incoming_history: list[str]) -> list[str]:
     stored = _CONVERSATION_MEMORY.get(conversation_id, [])
     merged = [item.strip() for item in [*stored, *incoming_history] if item and item.strip()]
@@ -141,117 +133,109 @@ def _record_message(conversation_id: str, message: str, history: list[str]) -> l
     return _CONVERSATION_MEMORY[conversation_id]
 
 
-def _history_text(history: list[str]) -> str:
-    recent = history[-8:]
-    return "\n".join(f"- {item}" for item in recent) or "- none"
-
-
 def _retry_feedback_history(feedback: list[dict[str, Any]]) -> list[str]:
     entries: list[str] = []
-    for item in feedback[-3:]:
+    for item in feedback[-2:]:
         phase = str(item.get("phase", "")).strip()
+        if phase != "sql_execution":
+            continue
         attempt = str(item.get("attempt", "")).strip()
         error = str(item.get("error", "")).strip()
-        failed_sql = str(item.get("failedSql", "")).strip()
-        parts = ["Retry context from prior SQL attempt"]
-        if phase:
-            parts.append(f"phase={phase}")
-        if attempt:
-            parts.append(f"attempt={attempt}")
+        failed_sql_raw = item.get("failedSql")
+        failed_sql = failed_sql_raw.strip() if isinstance(failed_sql_raw, str) else ""
+        parts = [f"Previous SQL execution attempt {attempt or '?'} failed"]
         if error:
-            parts.append(f"error={error}")
+            parts.append(f"warehouse_error={error}")
+        line = "; ".join(parts)
         if failed_sql:
-            parts.append(f"failedSql={failed_sql}")
-        entries.append("; ".join(parts))
+            line = f"{line}\nFailed SQL:\n{failed_sql}"
+        entries.append(line)
     return entries
 
 
-def _needs_clarification(message: str) -> bool:
-    lowered = message.lower().strip()
-    if len(lowered.split()) <= 3:
-        return True
-    vague_markers = [
-        "what happened",
-        "show me everything",
-        "give me insight",
-        "analyze this",
-        "help me understand",
-        "details please",
-    ]
-    specific_markers = [
-        "state",
-        "store",
-        "channel",
-        "spend",
-        "transaction",
-        "q4",
-        "month",
-        "year",
-        "repeat",
-        "new",
-        "cp",
-        "cnp",
-    ]
-    if any(marker in lowered for marker in specific_markers):
-        return False
-    return any(marker in lowered for marker in vague_markers)
+def _clean_assumptions(assumptions: list[str], *, clarification_question: str) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    question_key = " ".join(str(clarification_question or "").split()).strip().lower()
+    for item in assumptions:
+        text = " ".join(str(item).split()).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if question_key and key == question_key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+    return deduped[:6]
 
 
-# Keep sandbox analyst single-attempt so orchestrator-level retry logic remains
-# authoritative and trace output is consistent across providers.
-_MAX_SQL_ATTEMPTS = 1
-
-_SQL_GENERATION_SCHEMA: dict[str, Any] = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "type": {"type": "string", "enum": ["sql_ready", "clarification", "not_relevant"]},
-        "sql": {"type": "string"},
-        "lightResponse": {"type": "string"},
-        "clarificationQuestion": {"type": "string"},
-        "notRelevantReason": {"type": "string"},
-        "assumptions": {"type": "array", "items": {"type": "string"}},
-    },
-    "required": [
-        "type",
-        "sql",
-        "lightResponse",
-        "clarificationQuestion",
-        "notRelevantReason",
-        "assumptions",
-    ],
-}
+_SQL_GENERATION_SCHEMA: dict[str, Any] = SqlGenerationResponsePayload.model_json_schema()
 
 
-def _retry_feedback_line(*, error: str, sql: str, attempt: int, max_attempts: int) -> str:
-    return (
-        f"That didn't work (attempt {attempt}/{max_attempts}). "
-        f"Warehouse error (verbatim): {error}\n"
-        f"Failed SQL:\n{sql}"
-    )
+class SandboxSqlGenerationError(RuntimeError):
+    def __init__(self, message: str, *, code: str, detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+        self.detail = detail or {}
 
 
-async def _generate_sql_from_message(message: str, conversation_history: list[str]) -> dict[str, Any]:
-    model = _model()
-    system_prompt = (
-        "You are a sandbox Snowflake Cortex Analyst emulator for banking analytics. "
-        "For each request, return exactly one outcome: sql_ready, clarification, or not_relevant. "
-        "Use semantic_model.yaml context to determine scope. "
-        "When sql_ready, generate one Snowflake-style read-only SQL query from conversation context. "
-        "Return strict JSON only."
-    )
-    user_prompt = (
-        f"{_semantic_yaml_context()}\n\n"
-        f"{semantic_model_summary(model)}\n\n"
-        f"Conversation history:\n{_history_text(conversation_history)}\n\n"
-        f"User question:\n{message}\n\n"
-        "Return JSON with keys:\n"
-        '- "type": one of sql_ready|clarification|not_relevant\n'
-        '- "sql": string (required when type=sql_ready)\n'
-        '- "lightResponse": short one-sentence summary\n'
-        '- "clarificationQuestion": string (required when type=clarification)\n'
-        '- "notRelevantReason": string (required when type=not_relevant)\n'
-        '- "assumptions": array of strings\n'
+def _preview_text(value: Any, *, max_chars: int = 1200) -> str:
+    collapsed = " ".join(str(value or "").split()).strip()
+    if len(collapsed) <= max_chars:
+        return collapsed
+    return f"{collapsed[: max_chars - 3]}..."
+
+
+def _preview_payload(value: Any, *, max_chars: int = 2000) -> str:
+    try:
+        rendered = json.dumps(value, ensure_ascii=True)
+    except Exception:  # noqa: BLE001
+        rendered = str(value)
+    if len(rendered) <= max_chars:
+        return rendered
+    return f"{rendered[: max_chars - 3]}..."
+
+
+def _to_analyst_payload(*, parsed: SqlGenerationResponsePayload) -> dict[str, Any]:
+    response_type = parsed.generationType.strip().lower().replace("-", "_")
+    sql = (parsed.sql or "").strip()
+    light_response = parsed.rationale.strip()
+    clarification_question = (parsed.clarificationQuestion or "").strip()
+    clarification_kind = (parsed.clarificationKind or "").strip().lower().replace("-", "_")
+    not_relevant_reason = (parsed.notRelevantReason or "").strip()
+    assumptions = as_string_list(parsed.assumptions, max_items=4)
+
+    assumptions = _clean_assumptions(assumptions, clarification_question=clarification_question)
+    return {
+        "type": response_type,
+        "sql": sql,
+        "lightResponse": light_response,
+        "clarificationQuestion": clarification_question,
+        "clarificationKind": clarification_kind,
+        "notRelevantReason": not_relevant_reason,
+        "assumptions": assumptions,
+    }
+
+
+async def _generate_sql_from_message(
+    *,
+    message: str,
+    route: str,
+    step_id: str,
+    conversation_history: list[str],
+    retry_feedback: list[dict[str, Any]],
+) -> dict[str, Any]:
+    system_prompt, user_prompt = sql_prompt(
+        user_message=message,
+        route=route,
+        step_id=step_id,
+        step_goal=message,
+        model=_model(),
+        prior_sql=[],
+        history=conversation_history,
+        retry_feedback=retry_feedback,
     )
 
     llm_text = await anthropic_chat_completion(
@@ -262,44 +246,32 @@ async def _generate_sql_from_message(message: str, conversation_history: list[st
         response_schema=_SQL_GENERATION_SCHEMA,
         response_schema_name="sandbox_sql_generation",
     )
-    payload = parse_json_object(llm_text)
-    parsed = AnalystResponsePayload.model_validate(payload)
-    response_type = parsed.type.strip().lower().replace("-", "_")
-    if response_type in {"answer", "sql"}:
-        response_type = "sql_ready"
-    elif response_type == "clarify":
-        response_type = "clarification"
-    elif response_type in {"out_of_domain", "irrelevant"}:
-        response_type = "not_relevant"
-
-    sql = parsed.sql.strip()
-    light_response = parsed.lightResponse.strip()
-    clarification_question = parsed.clarificationQuestion.strip()
-    not_relevant_reason = parsed.notRelevantReason.strip() or parsed.relevanceReason.strip()
-    assumptions = as_string_list(parsed.assumptions, max_items=4)
-
-    if response_type == "sql_ready" and not sql:
-        response_type = "clarification"
-        clarification_question = (
-            clarification_question
-            or "SQL generation failed: model returned sql_ready without executable SQL."
-        )
-        assumptions.append("SQL generation failed: model returned sql_ready without executable SQL.")
-
-    return {
-        "type": response_type,
-        "sql": sql,
-        "lightResponse": light_response,
-        "clarificationQuestion": clarification_question,
-        "notRelevantReason": not_relevant_reason,
-        "assumptions": assumptions,
-    }
-
-
-def _execute_guarded_sql(sql: str) -> tuple[str, list[dict[str, Any]]]:
-    guarded_sql = guard_sql(sql, _model())
-    rows = execute_readonly_query(settings.sandbox_sqlite_path, guarded_sql)
-    return guarded_sql, rows
+    try:
+        raw_payload = parse_json_object(llm_text)
+    except Exception as error:  # noqa: BLE001
+        raise SandboxSqlGenerationError(
+            "Sandbox SQL generation output was not valid JSON.",
+            code="json_parse_error",
+            detail={
+                "errorType": type(error).__name__,
+                "parseError": _preview_text(str(error), max_chars=800),
+                "llmTextPreview": _preview_text(llm_text, max_chars=1400),
+            },
+        ) from error
+    try:
+        parsed = SqlGenerationResponsePayload.model_validate(raw_payload)
+    except Exception as error:  # noqa: BLE001
+        raise SandboxSqlGenerationError(
+            "Sandbox SQL generation payload failed schema validation.",
+            code="schema_validation_error",
+            detail={
+                "errorType": type(error).__name__,
+                "validationError": _preview_text(str(error), max_chars=1400),
+                "rawPayloadPreview": _preview_payload(raw_payload, max_chars=2200),
+                "llmTextPreview": _preview_text(llm_text, max_chars=1400),
+            },
+        ) from error
+    return _to_analyst_payload(parsed=parsed)
 
 
 @app.get("/health")
@@ -353,132 +325,76 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
     conversation_history = _record_message(payload.conversationId, user_message, payload.history)
     retry_feedback = [item for item in payload.retryFeedback if isinstance(item, dict)]
     retry_feedback_history = _retry_feedback_history(retry_feedback)
-    clarification_question = ""
-    assumptions: list[str] = []
 
-    guarded_sql = ""
-    rows: list[dict[str, Any]] = []
-    sql_text = ""
-    last_failed_sql = ""
-    last_execution_error = ""
-    last_retry_message = ""
-    had_execution_failure = False
-    light_response = "Returned a governed summary for the requested customer-insights metric."
-    response_type = "sql_ready"
-    not_relevant_reason = ""
-
-    if _needs_clarification(user_message):
-        response_type = "clarification"
-        clarification_question = (
-            "Could you clarify the metric and time window? For example: spend vs transactions, and which month/quarter."
+    generation_history = [*conversation_history, *retry_feedback_history]
+    try:
+        generated = await _generate_sql_from_message(
+            message=user_message,
+            route=(payload.route or "").strip(),
+            step_id=(payload.stepId or "").strip(),
+            conversation_history=generation_history,
+            retry_feedback=retry_feedback,
         )
-        assumptions.append("Question was interpreted as broad; clarification is required before SQL generation.")
-    else:
-        if retry_feedback:
-            assumptions.append(f"Used retry feedback from {len(retry_feedback)} prior SQL attempt(s).")
-        generation_history = [*conversation_history, *retry_feedback_history]
-        for attempt in range(1, _MAX_SQL_ATTEMPTS + 1):
-            try:
-                generated = await _generate_sql_from_message(user_message, generation_history)
-            except Exception as error:  # noqa: BLE001
-                logger.exception(
-                    "Sandbox SQL generation attempt failed",
-                    extra={
-                        "event": "sandbox.message.sql_generation.failed",
-                        "attempt": attempt,
-                        "conversationId": payload.conversationId,
-                    },
-                )
-                assumptions.append(f"SQL generation attempt {attempt} failed: {error}")
-                response_type = "clarification"
-                clarification_question = str(error).strip()
-                if attempt >= _MAX_SQL_ATTEMPTS:
-                    break
-                generation_history = [*generation_history, f"SQL generation error: {error}"]
-                continue
+    except SandboxSqlGenerationError as error:
+        logger.exception(
+            "Sandbox SQL generation failed",
+            extra={
+                "event": "sandbox.message.sql_generation.failed",
+                "conversationId": payload.conversationId,
+                "errorCode": error.code,
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": error.code,
+                "message": str(error),
+                **error.detail,
+            },
+        ) from error
+    except Exception as error:  # noqa: BLE001
+        logger.exception(
+            "Sandbox SQL generation failed",
+            extra={
+                "event": "sandbox.message.sql_generation.failed",
+                "conversationId": payload.conversationId,
+            },
+        )
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "code": "provider_error",
+                "message": "SQL generation provider error.",
+                "errorType": type(error).__name__,
+                "error": _preview_text(str(error), max_chars=1200),
+            },
+        ) from error
 
-            response_type = str(generated.get("type", "sql_ready"))
-            sql_text = str(generated.get("sql", "")).strip()
-            light_response = str(generated.get("lightResponse", "")).strip() or light_response
-            clarification_question = str(generated.get("clarificationQuestion", "")).strip()
-            not_relevant_reason = str(generated.get("notRelevantReason", "")).strip()
-            assumptions.extend(as_string_list(generated.get("assumptions"), max_items=4))
-
-            if response_type != "sql_ready":
-                if had_execution_failure and attempt < _MAX_SQL_ATTEMPTS:
-                    assumptions.append(
-                        "SQL agent requested clarification after execution failure; continuing retry with warehouse error feedback."
-                    )
-                    if last_retry_message:
-                        generation_history = [*generation_history, last_retry_message]
-                    continue
-                break
-            if not sql_text:
-                response_type = "clarification"
-                clarification_question = clarification_question or not_relevant_reason or "SQL generator returned empty SQL."
-                if had_execution_failure and attempt < _MAX_SQL_ATTEMPTS:
-                    assumptions.append("SQL generator returned empty SQL after execution failure; continuing retry.")
-                    if last_retry_message:
-                        generation_history = [*generation_history, last_retry_message]
-                    continue
-                break
-
-            try:
-                guarded_sql, rows = _execute_guarded_sql(sql_text)
-                last_failed_sql = ""
-                break
-            except Exception as error:  # noqa: BLE001
-                logger.exception(
-                    "Sandbox SQL execution attempt failed",
-                    extra={
-                        "event": "sandbox.message.sql_execution.failed",
-                        "attempt": attempt,
-                        "conversationId": payload.conversationId,
-                    },
-                )
-                assumptions.append(f"SQL execution attempt {attempt} failed: {error}")
-                had_execution_failure = True
-                last_execution_error = str(error).strip()
-                last_failed_sql = sql_text
-                last_retry_message = _retry_feedback_line(
-                    error=last_execution_error,
-                    sql=sql_text,
-                    attempt=attempt,
-                    max_attempts=_MAX_SQL_ATTEMPTS,
-                )
-                if attempt >= _MAX_SQL_ATTEMPTS:
-                    response_type = "clarification"
-                    clarification_question = clarification_question or not_relevant_reason or last_execution_error
-                    break
-                generation_history = [*generation_history, last_retry_message]
-
-    if response_type == "sql_ready":
-        if not guarded_sql:
-            if not sql_text:
-                raise HTTPException(status_code=400, detail="Sandbox analyst did not return executable SQL.")
-            try:
-                guarded_sql, rows = _execute_guarded_sql(sql_text)
-            except Exception as error:  # noqa: BLE001
-                logger.exception(
-                    "Sandbox final SQL execution failed",
-                    extra={
-                        "event": "sandbox.message.final_sql.failed",
-                        "conversationId": payload.conversationId,
-                    },
-                )
-                raise HTTPException(status_code=400, detail=f"{error}") from error
+    response_type = str(generated.get("type", "sql_ready")).strip().lower()
+    sql_text = str(generated.get("sql", "")).strip()
+    light_response = str(generated.get("lightResponse", "")).strip()
+    clarification_question = str(generated.get("clarificationQuestion", "")).strip()
+    clarification_kind = str(generated.get("clarificationKind", "")).strip()
+    not_relevant_reason = str(generated.get("notRelevantReason", "")).strip()
+    assumptions = _clean_assumptions(
+        as_string_list(generated.get("assumptions"), max_items=4),
+        clarification_question=clarification_question,
+    )
+    if response_type == "sql_ready" and not sql_text:
+        raise HTTPException(status_code=502, detail="SQL generation provider error: empty SQL.")
 
     return {
-        "type": "answer" if response_type == "sql_ready" else response_type,
+        "type": response_type,
         "conversationId": payload.conversationId,
-        "sql": guarded_sql,
+        "sql": sql_text if response_type == "sql_ready" else "",
         "lightResponse": light_response,
         "clarificationQuestion": clarification_question,
+        "clarificationKind": clarification_kind,
         "notRelevantReason": not_relevant_reason,
-        "rows": rows,
-        "rowCount": len(rows),
-        "failedSql": last_failed_sql,
-        "assumptions": assumptions[:6],
+        "rows": [],
+        "rowCount": 0,
+        "failedSql": None,
+        "assumptions": assumptions,
     }
 
 

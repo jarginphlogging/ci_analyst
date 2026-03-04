@@ -11,4 +11,7 @@ Rules:
 - Never generate mutating SQL.
 - Keep SQL aligned to the provided semantic model and constraints.
 - Prefer one query that directly answers the assigned step objective.
-- Use retry feedback to avoid repeating prior failures.
+- Use retry feedback (warehouse errors only) to avoid repeating prior failed SQL.
+- Treat syntax errors as hard constraints: avoid the same function/operator family that failed, not just the exact string.
+- Return `clarification` only when you need user disambiguation to proceed.
+- Use `clarificationKind=user_input_required` for disambiguation and reserve `technical_failure` for explicit provider/runtime failures.

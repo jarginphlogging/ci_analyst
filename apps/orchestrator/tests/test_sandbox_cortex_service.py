@@ -32,7 +32,7 @@ def test_sandbox_cortex_query_endpoint(tmp_path: Path) -> None:
     assert payload.get("rowCount") == len(payload["rows"])
 
 
-def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> None:
+def test_sandbox_cortex_message_provider_error_and_history(tmp_path: Path) -> None:
     db_path = str(tmp_path / "cortex_sandbox.db")
 
     original_path = settings.sandbox_sqlite_path
@@ -44,30 +44,21 @@ def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> Non
         object.__setattr__(settings, "anthropic_api_key", None)
         client = TestClient(app)
 
-        vague_response = client.post(
+        first_response = client.post(
             "/api/v2/cortex/analyst/message",
             headers={"Authorization": "Bearer test-key"},
             json={"conversationId": "conv-1", "message": "help"},
         )
-        assert vague_response.status_code == 200
-        vague_payload = vague_response.json()
-        assert vague_payload["type"] == "clarification"
-        assert vague_payload["clarificationQuestion"]
-        assert isinstance(vague_payload["rows"], list)
-        assert "failedSql" in vague_payload
+        assert first_response.status_code == 502
+        assert "SQL generation provider error" in str(first_response.json().get("detail", ""))
 
         answer_response = client.post(
             "/api/v2/cortex/analyst/message",
             headers={"Authorization": "Bearer test-key"},
             json={"conversationId": "conv-1", "message": "Show spend by state for Q4 2025"},
         )
-        assert answer_response.status_code == 200
-        answer_payload = answer_response.json()
-        assert answer_payload["type"] == "clarification"
-        assert answer_payload["clarificationQuestion"]
-        assert answer_payload["sql"] == ""
-        assert answer_payload["rowCount"] == 0
-        assert "failedSql" in answer_payload
+        assert answer_response.status_code == 502
+        assert "SQL generation provider error" in str(answer_response.json().get("detail", ""))
 
         history_response = client.get(
             "/api/v2/cortex/analyst/history/conv-1",
@@ -82,7 +73,7 @@ def test_sandbox_cortex_message_clarification_and_history(tmp_path: Path) -> Non
         object.__setattr__(settings, "anthropic_api_key", original_anthropic_key)
 
 
-def test_sandbox_cortex_message_total_sales_last_month_returns_clarification_when_generation_unavailable(tmp_path: Path) -> None:
+def test_sandbox_cortex_message_total_sales_last_month_returns_provider_error_when_generation_unavailable(tmp_path: Path) -> None:
     db_path = str(tmp_path / "cortex_sandbox.db")
 
     original_path = settings.sandbox_sqlite_path
@@ -103,13 +94,8 @@ def test_sandbox_cortex_message_total_sales_last_month_returns_clarification_whe
             },
         )
 
-        assert response.status_code == 200
-        payload = response.json()
-        assert payload["type"] == "clarification"
-        assert payload["clarificationQuestion"]
-        assert payload["sql"] == ""
-        assert payload["rowCount"] == 0
-        assert "failedSql" in payload
+        assert response.status_code == 502
+        assert "SQL generation provider error" in str(response.json().get("detail", ""))
     finally:
         object.__setattr__(settings, "sandbox_sqlite_path", original_path)
         object.__setattr__(settings, "sandbox_cortex_api_key", original_key)

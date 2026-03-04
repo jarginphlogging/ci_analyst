@@ -6,8 +6,6 @@ from typing import Any
 import sqlparse
 
 _ERROR_PATTERNS = (
-    "i couldn't complete that request",
-    "please review the trace for details",
     "result validation failed",
     "sql generation blocked",
 )

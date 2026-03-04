@@ -70,7 +70,7 @@ def test_build_evidence_rows_returns_empty_for_simple_ranking_output() -> None:
     assert build_evidence_rows(results) == []
 
 
-def test_detect_grain_mismatch_reports_store_vs_state() -> None:
+def test_detect_grain_mismatch_requires_explicit_requested_grain() -> None:
     results = [
         SqlExecutionResult(
             sql="SELECT transaction_state, SUM(spend) AS spend_total FROM cia_sales_insights_cortex GROUP BY transaction_state",
@@ -84,9 +84,7 @@ def test_detect_grain_mismatch_reports_store_vs_state() -> None:
 
     mismatch = detect_grain_mismatch(results, "What are my top and bottom performing stores for 2025?")
 
-    assert mismatch is not None
-    assert mismatch[0] == "store"
-    assert mismatch[1] == "state"
+    assert mismatch is None
 
 
 def test_build_analysis_artifacts_prefers_comparison_table_for_q4_yoy_prompt() -> None:

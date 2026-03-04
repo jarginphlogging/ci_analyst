@@ -73,6 +73,6 @@ def test_pii_card_detection_uses_luhn_validation() -> None:
 
 
 def test_answer_sanity_rejects_known_error_pattern() -> None:
-    passed, reason = check_answer_sanity("I couldn't complete that request. Please review the trace for details.")
+    passed, reason = check_answer_sanity("SQL generation blocked due to warehouse parser error.")
     assert passed is False
     assert "error pattern" in reason

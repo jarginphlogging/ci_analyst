@@ -34,6 +34,7 @@ class SqlGenerationResponsePayload(BaseModel):
     sql: Optional[str] = None
     rationale: str = ""
     clarificationQuestion: Optional[str] = None
+    clarificationKind: Optional[Literal["user_input_required", "technical_failure"]] = None
     notRelevantReason: Optional[str] = None
     assumptions: list[str] = Field(default_factory=list)
 
@@ -55,10 +56,11 @@ class AnalystResponsePayload(BaseModel):
     sql: str = ""
     lightResponse: str = ""
     clarificationQuestion: str = ""
+    clarificationKind: str = ""
     notRelevantReason: str = ""
     assumptions: list[str] = Field(default_factory=list)
     rows: Optional[list[dict[str, Any]]] = None
-    failedSql: str = ""
+    failedSql: Optional[str] = None
     relevance: str = ""
     relevanceReason: str = ""
     explanation: str = ""
@@ -80,6 +82,23 @@ class AnalystResponsePayload(BaseModel):
         }
         if normalized not in allowed:
             raise ValueError("type must map to sql_ready, clarification, or not_relevant")
+
+        mapped = normalized
+        if mapped in {"answer", "sql"}:
+            mapped = "sql_ready"
+        elif mapped == "clarify":
+            mapped = "clarification"
+        elif mapped in {"out_of_domain", "irrelevant"}:
+            mapped = "not_relevant"
+
+        if mapped == "sql_ready" and not self.sql.strip():
+            raise ValueError("sql is required when type=sql_ready")
+        if mapped == "clarification" and not self.clarificationQuestion.strip():
+            raise ValueError("clarificationQuestion is required when type=clarification")
+        if mapped == "not_relevant" and not (
+            self.notRelevantReason.strip() or self.relevanceReason.strip()
+        ):
+            raise ValueError("notRelevantReason is required when type=not_relevant")
         return self
 
 

@@ -7,7 +7,6 @@ from app.config import settings
 from app.models import QueryPlanStep
 
 OUT_OF_DOMAIN_MESSAGE = "I can only answer questions about Customer Insights."
-TOO_COMPLEX_MESSAGE = "Your request is too complex, please simplify it and try again."
 MAX_SQL_ATTEMPTS = max(1, settings.sql_max_attempts)
 
 
@@ -22,8 +21,10 @@ class GeneratedStep:
     assumptions: list[str]
     clarification_question: str
     not_relevant_reason: str
+    clarification_kind: Literal["none", "user_input_required", "technical_failure"] = "none"
     attempted_sql: str | None = None
     rows: list[dict[str, Any]] | None = None
+    generation_error_detail: dict[str, Any] | None = None
 
 
 class SqlGenerationBlockedError(RuntimeError):

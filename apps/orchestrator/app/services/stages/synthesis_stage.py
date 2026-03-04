@@ -428,7 +428,7 @@ class SynthesisStage:
         results: list[SqlExecutionResult],
         artifacts: list[AnalysisArtifact],
     ) -> SynthesisContextPackage:
-        _ = route
+        resolved_route = route.strip() or "unclassified"
         plan_steps = plan or []
         table_summaries = self._data_summarizer.summarize_tables(results=results, message=message)
         synthesis_plan = [
@@ -454,7 +454,7 @@ class SynthesisStage:
                 )
             )
         return SynthesisContextPackage(
-            queryContext=SynthesisQueryContext(originalUserQuery=message, route="standard"),
+            queryContext=SynthesisQueryContext(originalUserQuery=message, route=resolved_route),
             plan=synthesis_plan,
             executedSteps=executed_steps,
             availableVisualArtifacts=[

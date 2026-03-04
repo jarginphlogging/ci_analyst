@@ -288,29 +288,40 @@ def _tables_from_sql_results(results: list[SqlExecutionResult]) -> list[DataTabl
 
 
 async def mock_create_plan(request: ChatTurnRequest) -> list[QueryPlanStep]:
+    def _plan(goals: list[str]) -> list[QueryPlanStep]:
+        return [QueryPlanStep(id=f"step_{index}", goal=goal) for index, goal in enumerate(goals, start=1)]
+
     profile = _query_profile(request.message)
     if profile == "state_sales":
-        return [
-            QueryPlanStep(id="step_1", goal="Resolve latest available RESP_DATE window"),
-            QueryPlanStep(id="step_2", goal="Aggregate spend and transactions by transaction_state"),
-        ]
+        return _plan(
+            [
+                "Resolve latest available RESP_DATE window",
+                "Aggregate spend and transactions by transaction_state",
+            ]
+        )
     if profile == "q4_yoy":
-        return [
-            QueryPlanStep(id="step_1", goal="Resolve latest available RESP_DATE and identify comparison windows"),
-            QueryPlanStep(id="step_2", goal="Compute Q4 2025 versus Q4 2024 sales, transactions, and ticket metrics"),
-            QueryPlanStep(id="step_3", goal="Decompose YoY movement by channel and top states"),
-        ]
+        return _plan(
+            [
+                "Resolve latest available RESP_DATE and identify comparison windows",
+                "Compute Q4 2025 versus Q4 2024 sales, transactions, and ticket metrics",
+                "Decompose YoY movement by channel and top states",
+            ]
+        )
     if profile == "store_performance":
-        return [
-            QueryPlanStep(id="step_1", goal="Rank top and bottom TD_ID stores for 2025 spend"),
-            QueryPlanStep(id="step_2", goal="Compute repeat versus new customer mix for ranked stores"),
-            QueryPlanStep(id="step_3", goal="Compare store performance to 2024 baseline and portfolio averages"),
-            QueryPlanStep(id="step_4", goal="Surface household/store context for low-performing locations"),
+        return _plan(
+            [
+                "Rank top and bottom TD_ID stores for 2025 spend",
+                "Compute repeat versus new customer mix for ranked stores",
+                "Compare store performance to 2024 baseline and portfolio averages",
+                "Surface household/store context for low-performing locations",
+            ]
+        )
+    return _plan(
+        [
+            "Retrieve spend and transactions trend by month",
+            "Highlight channel and repeat/new mix drivers",
         ]
-    return [
-        QueryPlanStep(id="step_1", goal="Retrieve spend and transactions trend by month"),
-        QueryPlanStep(id="step_2", goal="Highlight channel and repeat/new mix drivers"),
-    ]
+    )
 
 
 async def mock_run_sql(request: ChatTurnRequest, plan: list[QueryPlanStep]) -> list[SqlExecutionResult]:

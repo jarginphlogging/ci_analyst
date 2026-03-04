@@ -123,15 +123,19 @@ async def test_sql_stage_does_not_run_hardcoded_repair_queries() -> None:
 @pytest.mark.asyncio
 async def test_sql_stage_raises_clarification_when_analyst_requests_it() -> None:
     model = load_semantic_model()
+    analyst_calls = 0
 
     async def fake_sql(_: str) -> list[dict[str, object]]:
         return []
 
     async def fake_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal analyst_calls
         _ = kwargs
+        analyst_calls += 1
         return {
             "type": "clarification",
             "clarificationQuestion": "Which metric and time window should I use?",
+            "clarificationKind": "user_input_required",
             "failedSql": "SELECT SUM(spend) FROM bad_schema.bad_table",
             "assumptions": ["user intent is broad"],
         }
@@ -151,96 +155,80 @@ async def test_sql_stage_raises_clarification_when_analyst_requests_it() -> None
     assert blocked.value.stop_reason == "clarification"
     assert "Which metric and time window" in blocked.value.user_message
     assert "bad_schema.bad_table" in str(blocked.value.detail.get("failedSql", ""))
+    assert blocked.value.detail.get("clarificationKind") == "user_input_required"
+    assert analyst_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_sql_stage_retries_after_blocked_generation_with_failed_sql() -> None:
+async def test_sql_stage_does_not_retry_generation_technical_failure() -> None:
     model = load_semantic_model()
     analyst_calls = 0
-    analyst_retry_feedback: list[list[dict[str, object]]] = []
+    seen_retry_feedback: list[list[dict[str, object]]] = []
 
-    async def fake_sql(sql: str) -> list[dict[str, object]]:
-        assert "cia_sales_insights_cortex" in sql.lower()
-        return [{"total_spend": 321.0}]
+    async def fake_sql(_: str) -> list[dict[str, object]]:
+        return []
 
     async def fake_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
         nonlocal analyst_calls
-        analyst_retry_feedback.append(list(kwargs.get("retry_feedback", []) or []))
         analyst_calls += 1
-        if analyst_calls == 1:
-            return {
-                "type": "clarification",
-                "clarificationQuestion": "I couldn't execute a valid query for that task.",
-                "failedSql": "SELECT SUM(spend) FROM cia_sales_insights_cortex WHERE bogus_col = 1",
-                "assumptions": ["SQL execution attempt 1 failed: invalid identifier BOGUS_COL"],
-            }
+        seen_retry_feedback.append(list(kwargs.get("retry_feedback", []) or []))
         return {
-            "type": "sql_ready",
-            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex",
+            "type": "clarification",
+            "clarificationQuestion": "SQL generation failed: model returned sql_ready without executable SQL.",
+            "clarificationKind": "technical_failure",
             "assumptions": [],
         }
 
     stage = SqlExecutionStage(model=model, ask_llm_json=_fake_ask_llm_json, sql_fn=fake_sql, analyst_fn=fake_analyst)
     plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
 
-    results, assumptions = await stage.run_sql(
-        message="What is my total spend?",
-        route="standard",
-        plan=plan,
-        history=[],
-        conversation_id="conv-retry-blocked",
-    )
+    with pytest.raises(SqlGenerationBlockedError) as blocked:
+        await stage.run_sql(
+            message="What is my total spend?",
+            route="standard",
+            plan=plan,
+            history=[],
+            conversation_id="conv-generation-tech-failure",
+        )
 
-    assert analyst_calls == 2
-    assert len(analyst_retry_feedback[0]) == 0
-    assert len(analyst_retry_feedback[1]) == 1
-    assert analyst_retry_feedback[1][0]["phase"] == "sql_generation_blocked"
-    assert "bogus_col" in str(analyst_retry_feedback[1][0]["failedSql"]).lower()
-    assert results
-    assert results[0].rows[0]["total_spend"] == 321.0
-    assert any("SQL generation retry 1 triggered for step-1 after blocked attempt." in item for item in assumptions)
+    assert analyst_calls == 1
+    assert len(seen_retry_feedback) == 1
+    assert seen_retry_feedback[0] == []
+    assert blocked.value.stop_reason == "clarification"
+    assert "technical error" in blocked.value.user_message.lower() or "failed" in blocked.value.user_message.lower()
+    assert blocked.value.detail.get("retryFeedback") == []
 
 
 @pytest.mark.asyncio
-async def test_sql_stage_retries_after_generation_failed_clarification() -> None:
+async def test_sql_stage_removes_clarification_text_from_assumptions() -> None:
     model = load_semantic_model()
-    analyst_calls = 0
 
-    async def fake_sql(sql: str) -> list[dict[str, object]]:
-        assert "cia_sales_insights_cortex" in sql.lower()
-        return [{"total_spend": 222.0}]
+    async def fake_sql(_: str) -> list[dict[str, object]]:
+        return []
 
     async def fake_analyst(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
-        nonlocal analyst_calls
         _ = kwargs
-        analyst_calls += 1
-        if analyst_calls == 1:
-            return {
-                "type": "clarification",
-                "clarificationQuestion": "SQL generation failed: model returned sql_ready without executable SQL.",
-                "assumptions": ["SQL generation failed: model returned sql_ready without executable SQL."],
-            }
         return {
-            "type": "sql_ready",
-            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex",
-            "assumptions": [],
+            "type": "clarification",
+            "clarificationQuestion": "Which metric should I use?",
+            "clarificationKind": "user_input_required",
+            "assumptions": ["Which metric should I use?"],
         }
 
     stage = SqlExecutionStage(model=model, ask_llm_json=_fake_ask_llm_json, sql_fn=fake_sql, analyst_fn=fake_analyst)
-    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
+    plan = [QueryPlanStep(id="step-1", goal="Analyze performance")]
 
-    results, assumptions = await stage.run_sql(
-        message="What is my total spend?",
-        route="standard",
-        plan=plan,
-        history=[],
-        conversation_id="conv-generation-failed-retry",
-    )
+    with pytest.raises(SqlGenerationBlockedError) as blocked:
+        await stage.run_sql(
+            message="Analyze performance",
+            route="fast_path",
+            plan=plan,
+            history=[],
+            conversation_id="conv-assumption-dedupe",
+        )
 
-    assert analyst_calls == 2
-    assert results
-    assert results[0].rows[0]["total_spend"] == 222.0
-    assert any("SQL generation retry 1 triggered for step-1 after blocked attempt." in item for item in assumptions)
+    assumptions = blocked.value.detail.get("assumptions") or []
+    assert all(str(item).strip().lower() != "which metric should i use?" for item in assumptions)
 
 
 @pytest.mark.asyncio
@@ -463,7 +451,7 @@ async def test_sql_stage_retries_generation_after_execution_failure() -> None:
     assert results[0].rows[0]["total_spend"] == 123.45
     assert "bogus_col" not in results[0].sql.lower()
     assert len(user_prompts) == 2
-    assert "Retry feedback from prior attempts" in user_prompts[1]
+    assert "Retry feedback from prior SQL execution attempts" in user_prompts[1]
     assert "invalid identifier BOGUS_COL" in user_prompts[1]
     assert any("SQL execution retry 1 failed" in item for item in assumptions)
 
@@ -501,16 +489,14 @@ async def test_sql_stage_execution_failure_does_not_request_user_clarification_b
             route="standard",
             plan=plan,
             history=[],
-        )
+    )
 
     assert blocked.value.stop_reason == "clarification"
-    assert "which metric and time window" in blocked.value.user_message.lower()
-    assert blocked.value.detail.get("phase") == "sql_execution"
-    assert "invalid identifier" in str(blocked.value.detail.get("error", "")).lower()
-    assert llm_calls == 3
+    assert "which metric and time window should i use" in blocked.value.user_message.lower()
+    assert llm_calls == 2
     retry_feedback = blocked.value.detail.get("retryFeedback")
     assert isinstance(retry_feedback, list)
-    assert any(str(item.get("phase", "")).startswith("sql_execution") for item in retry_feedback if isinstance(item, dict))
+    assert any(str(item.get("phase", "")).strip() == "sql_execution" for item in retry_feedback if isinstance(item, dict))
 
 
 @pytest.mark.asyncio
@@ -558,6 +544,48 @@ async def test_sql_stage_retries_when_sql_returns_all_null_rows() -> None:
 
 
 @pytest.mark.asyncio
+async def test_sql_stage_exhausts_execution_retries_when_bad_sql_repeats() -> None:
+    model = load_semantic_model()
+    llm_calls = 0
+    sql_calls = 0
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal llm_calls
+        _ = kwargs
+        llm_calls += 1
+        return {
+            "generationType": "sql_ready",
+            "sql": "SELECT SUM(spend) AS total_spend FROM cia_sales_insights_cortex WHERE bogus_col = 1",
+            "assumptions": [],
+        }
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        nonlocal sql_calls
+        sql_calls += 1
+        if "bogus_col" in sql.lower():
+            raise RuntimeError("invalid identifier BOGUS_COL")
+        return [{"total_spend": 555.0}]
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
+
+    with pytest.raises(SqlGenerationBlockedError) as blocked:
+        await stage.run_sql(
+            message="What is my total spend?",
+            route="standard",
+            plan=plan,
+            history=[],
+        )
+
+    assert llm_calls == 3
+    assert sql_calls == 3
+    assert blocked.value.detail.get("phase") == "sql_execution"
+    retry_feedback = blocked.value.detail.get("retryFeedback") or []
+    assert len(retry_feedback) == 3
+    assert all(str(item.get("phase", "")).strip() == "sql_execution" for item in retry_feedback)
+
+
+@pytest.mark.asyncio
 async def test_sql_stage_blocks_execution_above_five_steps() -> None:
     model = load_semantic_model()
 
@@ -575,4 +603,4 @@ async def test_sql_stage_blocks_execution_above_five_steps() -> None:
             history=[],
         )
 
-    assert "too complex" in blocked.value.user_message.lower()
+    assert "exceeds the governed limit" in blocked.value.user_message.lower()

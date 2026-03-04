@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 import logging
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
@@ -9,11 +8,11 @@ from app.config import settings
 from app.models import PresentationIntent, QueryPlanStep
 from app.prompts.templates import plan_prompt
 from app.services.llm_trace import llm_trace_stage
-from app.services.semantic_model import SemanticModel, semantic_model_planner_context
+from app.services.semantic_model import SemanticModel, semantic_model_summary
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 
-PLANNER_MAX_STEPS = 5
+PLANNER_MAX_STEPS = max(1, settings.plan_max_steps)
 OUT_OF_DOMAIN_MESSAGE = "I can only answer questions about Customer Insights."
 TOO_COMPLEX_MESSAGE = "Your request is too complex, please simplify it and try again."
 logger = logging.getLogger(__name__)
@@ -53,10 +52,6 @@ def _as_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes"}
 
 
-def _direct_task_goal(message: str) -> str:
-    return " ".join(message.strip().split())
-
-
 def _normalize_display_type(value: Any) -> Literal["inline", "table", "chart"]:
     raw = str(value or "").strip().lower()
     if raw in {"inline", "table", "chart"}:
@@ -78,30 +73,14 @@ def _normalize_table_style(value: Any) -> Literal["simple", "ranked", "compariso
     return None
 
 
-def _fallback_presentation_intent(message: str) -> PresentationIntent:
-    query = message.lower()
-    if any(token in query for token in ("trend", "over time", "month", "weekly", "daily", "quarter", "year")):
-        return PresentationIntent(
-            displayType="chart",
-            chartType="line",
-            rationale="Time-oriented request defaults to line chart.",
-        )
-    if any(token in query for token in ("top", "bottom", "rank")):
+def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
+    _ = message
+    if not isinstance(raw, dict):
         return PresentationIntent(
             displayType="table",
-            tableStyle="ranked",
-            rationale="Ranking request defaults to ranked table.",
+            tableStyle="simple",
+            rationale="Default to simple table when presentation intent is uncertain.",
         )
-    return PresentationIntent(
-        displayType="table",
-        tableStyle="simple",
-        rationale="Default to simple table when presentation intent is uncertain.",
-    )
-
-
-def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
-    if not isinstance(raw, dict):
-        return _fallback_presentation_intent(message)
     display_type = _normalize_display_type(raw.get("displayType"))
     chart_type = _normalize_chart_type(raw.get("chartType"))
     table_style = _normalize_table_style(raw.get("tableStyle"))
@@ -119,50 +98,6 @@ def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
         tableStyle=table_style,
         rationale=rationale,
     )
-
-
-def _enforce_planner_guardrails(
-    *,
-    message: str,
-    steps: list[QueryPlanStep],
-) -> list[QueryPlanStep]:
-    if not steps:
-        return [QueryPlanStep(id="step_1", goal=_direct_task_goal(message), dependsOn=[], independent=True)]
-
-    sanitized: list[QueryPlanStep] = []
-    for step in steps:
-        goal = _strip_unrequested_schema_terms(message, step.goal)
-        sanitized.append(step.model_copy(update={"goal": goal}))
-    return sanitized
-
-
-def _message_schema_tokens(message: str) -> set[str]:
-    return {token.lower() for token in re.findall(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", message)}
-
-
-def _strip_unrequested_schema_terms(message: str, text: str) -> str:
-    allowed_tokens = _message_schema_tokens(message)
-
-    def _replacement(match: re.Match[str]) -> str:
-        token = match.group(0)
-        lowered = token.lower()
-        if lowered in allowed_tokens:
-            return token
-        if lowered.startswith("cia_"):
-            return "governed customer insights data"
-        if lowered.endswith("_id"):
-            return "business identifier"
-        if re.search(r"_(date|time|day|week|month|quarter|year)$", lowered):
-            return "requested time window"
-        return "requested metric"
-
-    replaced = re.sub(r"\b[a-z][a-z0-9]*_[a-z0-9_]+\b", _replacement, text, flags=re.IGNORECASE)
-    return " ".join(replaced.split())
-
-
-def _heuristic_plan(message: str, max_steps: int) -> list[QueryPlanStep]:
-    _ = max_steps
-    return [QueryPlanStep(id="step_1", goal=_direct_task_goal(message), dependsOn=[], independent=True)]
 
 
 def _extract_steps(raw_tasks: Any, max_steps: int) -> list[QueryPlanStep]:
@@ -207,13 +142,13 @@ class PlannerStage:
     def __init__(self, *, model: SemanticModel, ask_llm_json: AskLlmJsonFn) -> None:
         self._model = model
         self._ask_llm_json = ask_llm_json
-        self._planner_scope_context = semantic_model_planner_context(self._model)
+        self._semantic_model_summary = semantic_model_summary(self._model)
 
     async def create_plan(self, message: str, history: list[str]) -> PlannerDecision:
         max_steps = PLANNER_MAX_STEPS
         system_prompt, user_prompt = plan_prompt(
             message,
-            self._planner_scope_context,
+            self._semantic_model_summary,
             max_steps,
             history,
         )
@@ -263,8 +198,7 @@ class PlannerStage:
                 )
 
             if not steps:
-                steps = _heuristic_plan(message, max_steps=max_steps)
-            steps = _enforce_planner_guardrails(message=message, steps=steps)
+                raise RuntimeError("Planner returned no executable tasks.")
 
             return PlannerDecision(
                 relevance=relevance,
@@ -274,21 +208,11 @@ class PlannerStage:
                 stop_reason="none",
             )
         except Exception:
-            if settings.provider_mode in {"sandbox", "prod"}:
-                raise
             logger.exception(
-                "Planner LLM call failed; using deterministic fallback",
+                "Planner LLM call failed",
                 extra={
-                    "event": "planner.fallback_on_error",
+                    "event": "planner.failed",
                     "historyDepth": len(history),
                 },
             )
-            steps = _heuristic_plan(message, max_steps=max_steps)
-            steps = _enforce_planner_guardrails(message=message, steps=steps)
-            return PlannerDecision(
-                relevance="unclear",
-                relevance_reason="LLM planner unavailable; used deterministic decomposition fallback.",
-                presentation_intent=_fallback_presentation_intent(message),
-                steps=steps,
-                stop_reason="none",
-            )
+            raise

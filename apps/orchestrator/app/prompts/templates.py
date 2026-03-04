@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 
 from typing import Any
 
+from app.config import settings
 from app.services.semantic_model import SemanticModel, semantic_model_summary
 
 _PROMPT_TEMPLATE_DIR = Path(__file__).resolve().parent / "markdown"
@@ -38,41 +38,32 @@ def _retry_feedback_text(retry_feedback: list[dict[str, Any]] | None) -> str:
     if not retry_feedback:
         return "- none"
 
-    def _compact(value: Any, *, max_chars: int = 240) -> str:
-        text = " ".join(str(value).split())
-        if len(text) <= max_chars:
-            return text
-        return f"{text[: max_chars - 3]}..."
-
-    cleaned: list[dict[str, Any]] = []
-    for item in retry_feedback[-3:]:
+    lines: list[str] = []
+    for item in retry_feedback[-2:]:
         if not isinstance(item, dict):
             continue
-        preview: dict[str, Any] = {}
-        for key in (
-            "phase",
-            "attempt",
-            "stepId",
-            "provider",
-            "error",
-            "failedSql",
-            "clarificationQuestion",
-            "notRelevantReason",
-        ):
-            value = item.get(key)
-            if value in (None, ""):
-                continue
-            preview[key] = _compact(value, max_chars=320 if key == "failedSql" else 200)
-        if preview:
-            cleaned.append(preview)
-    if not cleaned:
+        if str(item.get("phase", "")).strip() != "sql_execution":
+            continue
+        attempt = int(item.get("attempt", 0) or 0)
+        error = " ".join(str(item.get("error", "")).split()).strip()
+        raw_failed_sql = item.get("failedSql")
+        failed_sql = " ".join(raw_failed_sql.split()) if isinstance(raw_failed_sql, str) else ""
+        if len(failed_sql) > 320:
+            failed_sql = f"{failed_sql[:317]}..."
+        parts = [f"- attempt {attempt}"]
+        if error:
+            parts.append(f"warehouse_error: {error}")
+        if failed_sql:
+            parts.append(f"failed_sql: {failed_sql}")
+        lines.append("; ".join(parts))
+    if not lines:
         return "- none"
-    return json.dumps(cleaned, ensure_ascii=True, indent=2)
+    return "\n".join(lines)
 
 
 def plan_prompt(
     user_message: str,
-    planner_scope_context: str,
+    semantic_model_summary_text: str,
     max_steps: int,
     history: list[str],
 ) -> tuple[str, str]:
@@ -81,7 +72,7 @@ def plan_prompt(
         "planner_user",
         values={
             "history": _history_text(history),
-            "planner_scope_context": planner_scope_context,
+            "semantic_model_summary": semantic_model_summary_text,
             "max_steps": str(max_steps),
             "user_message": user_message,
         },
@@ -101,6 +92,29 @@ def sql_prompt(
 ) -> tuple[str, str]:
     prior_text = "\n".join(f"- {sql}" for sql in prior_sql[-3:]) or "- none"
     retry_text = _retry_feedback_text(retry_feedback)
+    mode = settings.provider_mode
+    execution_target = "configured SQL warehouse"
+    dialect_rules = (
+        "- Use the warehouse dialect shown above.\n"
+        "- Treat retry feedback syntax errors as hard constraints and avoid repeating the same syntax family."
+    )
+    if mode == "sandbox":
+        execution_target = "SQLite sandbox warehouse"
+        dialect_rules = (
+            "- Use SQLite-compatible SQL.\n"
+            "- Use CURRENT_DATE without parentheses.\n"
+            "- For date math/truncation in sandbox, use DATEADD('year'|'month'|'day', amount, date_value) and "
+            "DATE_TRUNC('year'|'month'|'day', date_value).\n"
+            "- Do not use DATE_ADD(... INTERVAL ...), INTERVAL literals, or CURRENT_DATE()."
+        )
+    elif mode == "prod":
+        execution_target = "Snowflake warehouse"
+        dialect_rules = (
+            "- Use Snowflake SQL dialect.\n"
+            "- Use retry feedback syntax errors as hard constraints and avoid equivalent rewrites that keep the same "
+            "invalid construct."
+        )
+
     system = _render_prompt_template("sql_system", values={})
     user = _render_prompt_template(
         "sql_user",
@@ -111,6 +125,8 @@ def sql_prompt(
             "step_id": step_id,
             "step_goal": step_goal,
             "route": route,
+            "execution_target": execution_target,
+            "dialect_rules": dialect_rules,
             "prior_sql": prior_text,
             "retry_feedback": retry_text,
         },

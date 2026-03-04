@@ -81,7 +81,7 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     validation = await deps.validate_results(results)
     response = await deps.build_response(request, context, results, [])
 
-    assert context.route == "standard"
+    assert context.route in {"fast_path", "deep_path"}
     assert context.presentation_intent.displayType == "chart"
     assert context.presentation_intent.chartType == "grouped_bar"
     assert len(context.plan) >= 1
@@ -117,7 +117,7 @@ async def test_real_dependencies_requires_sql_generation_provider_when_analyst_i
     with pytest.raises(SqlGenerationBlockedError) as blocked:
         await deps.run_sql(request, context, [])
 
-    assert context.route == "standard"
+    assert context.route == "single_step"
     assert len(context.plan) >= 1
     assert blocked.value.stop_reason == "clarification"
 

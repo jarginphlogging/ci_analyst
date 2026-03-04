@@ -11,7 +11,6 @@ from uuid import uuid4
 from app.models import (
     AgentResponse,
     ChatTurnRequest,
-    QueryPlanStep,
     SqlExecutionResult,
     StreamResult,
     TraceStep,
@@ -32,13 +31,13 @@ from app.evaluation.inline_checks_v2_1 import (
 )
 from app.services.llm_trace import LlmTraceCollector, LlmTraceEntry, bind_llm_trace_collector
 from app.services.stages import PlannerBlockedError, SqlGenerationBlockedError
+from app.services.stages.sql_state_machine import execution_error_view, normalize_retry_feedback
 from app.services.stages.synthesis_stage import build_incremental_answer_deltas
 from app.services.types import OrchestratorDependencies, TurnExecutionContext
+from app.config import settings
 
 T = TypeVar("T")
 ProgressCallback = Callable[[str], Awaitable[None]]
-GENERIC_FAILURE_MESSAGE = "I couldn't complete that request. Please review the trace for details."
-GENERIC_FAILURE_WHY = "The request did not produce a governed result."
 logger = logging.getLogger(__name__)
 
 
@@ -146,7 +145,10 @@ class ConversationalOrchestrator:
                 }
                 for step in context.plan
             ]
-            plan_check_pass, plan_check_reason = check_plan_sanity(plan_checks_payload, max_steps=5)
+            plan_check_pass, plan_check_reason = check_plan_sanity(
+                plan_checks_payload,
+                max_steps=max(1, settings.plan_max_steps),
+            )
             self._record_inline_check(
                 stage_id="t1",
                 check_name="plan_sanity",
@@ -154,33 +156,17 @@ class ConversationalOrchestrator:
                 reason=plan_check_reason,
             )
             if not plan_check_pass:
-                if not context.plan:
-                    context.plan = [
-                        QueryPlanStep(
-                            id="step_1",
-                            goal=(request.message.strip() or "Address user question."),
-                            dependsOn=[],
-                            independent=True,
-                        )
-                    ]
-                    self._record_inline_check(
-                        stage_id="t1",
-                        check_name="plan_sanity_repair",
-                        passed=True,
-                        reason="Inserted fallback single-step plan.",
-                    )
-                else:
-                    logger.warning(
-                        "Plan failed inline sanity checks",
-                        extra={
-                            "event": "orchestrator.pipeline.plan.inline_check_failed",
-                            "reason": plan_check_reason,
-                        },
-                    )
-                    raise PlannerBlockedError(
-                        stop_reason="too_complex",
-                        user_message="I need clarification before executing because the generated analysis plan failed policy checks.",
-                    )
+                logger.warning(
+                    "Plan failed inline sanity checks",
+                    extra={
+                        "event": "orchestrator.pipeline.plan.inline_check_failed",
+                        "reason": plan_check_reason,
+                    },
+                )
+                raise PlannerBlockedError(
+                    stop_reason="too_complex",
+                    user_message="I need clarification before executing because the generated analysis plan failed policy checks.",
+                )
             logger.info(
                 "Plan created",
                 extra={
@@ -533,9 +519,18 @@ class ConversationalOrchestrator:
             for entry in llm_entries
         ]
 
+    @staticmethod
+    def _provider_request_payloads(llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
+        payloads: list[dict[str, Any]] = []
+        for entry in llm_entries:
+            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
+            raw_payload = metadata.get("providerRequestPayload")
+            if isinstance(raw_payload, dict):
+                payloads.append(raw_payload)
+        return payloads
+
     def _sql_retry_feedback(self, llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
         collected: list[dict[str, Any]] = []
-        seen: set[str] = set()
         for entry in llm_entries:
             metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
             raw_feedback = metadata.get("retryFeedback")
@@ -544,29 +539,12 @@ class ConversationalOrchestrator:
             for item in raw_feedback:
                 if not isinstance(item, dict):
                     continue
-                key = str(item)
-                if key in seen:
-                    continue
-                seen.add(key)
                 collected.append(item)
-        return collected[:6]
+        return normalize_retry_feedback(collected, max_items=6)
 
     @staticmethod
     def _warehouse_errors(retry_feedback: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        errors: list[dict[str, Any]] = []
-        for item in retry_feedback:
-            phase = str(item.get("phase", "")).strip().lower()
-            error = item.get("error")
-            if (
-                "sql_execution" not in phase
-                and "sql_regeneration_blocked" not in phase
-                and "sql_generation" not in phase
-            ):
-                continue
-            if not isinstance(error, str) or not error.strip():
-                continue
-            errors.append(item)
-        return errors[:6]
+        return execution_error_view(retry_feedback, max_items=6)
 
     @staticmethod
     def _step_runtime(stage_timings_ms: dict[str, float], step_id: str) -> float | None:
@@ -597,6 +575,7 @@ class ConversationalOrchestrator:
         synthesis_llm_entries = self._llm_entries_for_stages(llm_entries, {"synthesis_final"}) if phase == "final" else []
         sql_retry_feedback = context.sql_retry_feedback or self._sql_retry_feedback(sql_llm_entries)
         warehouse_errors = self._warehouse_errors(sql_retry_feedback)
+        provider_requests = self._provider_request_payloads(sql_llm_entries)
 
         return [
             TraceStep(
@@ -628,6 +607,7 @@ class ConversationalOrchestrator:
                     "planStepIds": [step.id for step in context.plan],
                     "planGoals": [self._preview_text(step.goal, max_chars=120) for step in context.plan],
                     "historyDepth": len(prior_history),
+                    "providerRequests": provider_requests,
                     "llmPrompts": self._llm_prompt_payload(sql_llm_entries),
                 },
                 stageOutput={
@@ -743,6 +723,7 @@ class ConversationalOrchestrator:
         stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
         sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
+        provider_requests = self._provider_request_payloads(sql_llm_entries)
         resolved_timings = stage_timings_ms or {}
         detail_retry_feedback = blocked.detail.get("retryFeedback") if blocked.detail else None
         if isinstance(detail_retry_feedback, list):
@@ -786,6 +767,7 @@ class ConversationalOrchestrator:
                 "message": request.message,
                 "planStepIds": [step.id for step in context.plan],
                 **self._history_summary(prior_history),
+                "providerRequests": provider_requests,
                 "llmPrompts": self._llm_prompt_payload(sql_llm_entries),
             },
             stageOutput=stage_output,
@@ -858,10 +840,11 @@ class ConversationalOrchestrator:
         error: Exception,
         runtime_ms: float | None = None,
     ) -> AgentResponse:
+        error_message = str(error).strip() or "Execution failed before a governed response could be produced."
         return AgentResponse(
-            answer=GENERIC_FAILURE_MESSAGE,
+            answer=error_message,
             confidence="low",
-            whyItMatters=GENERIC_FAILURE_WHY,
+            whyItMatters="Execution failed before a governed response could be produced.",
             metrics=[],
             evidence=[],
             insights=[],
@@ -898,10 +881,11 @@ class ConversationalOrchestrator:
     ) -> AgentResponse:
         _ = session_depth
 
+        message = blocked.user_message.strip() or "Planner blocked execution."
         return AgentResponse(
-            answer=GENERIC_FAILURE_MESSAGE,
+            answer=message,
             confidence="low",
-            whyItMatters=GENERIC_FAILURE_WHY,
+            whyItMatters="Planner blocked execution until this guidance is addressed.",
             metrics=[],
             evidence=[],
             insights=[],
@@ -1059,7 +1043,7 @@ class ConversationalOrchestrator:
                             "detail": blocked.detail,
                         },
                     )
-                    blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
+                    blocked_context = getattr(blocked, "context", TurnExecutionContext(route="", plan=[]))
                     response = self._sql_generation_blocked_response(
                         blocked=blocked,
                         session_depth=len(self._session_history.get(session_id, [])),
@@ -1173,7 +1157,7 @@ class ConversationalOrchestrator:
                                 },
                             )
                             await progress(f"SQL stage blocked: {blocked.user_message}")
-                            blocked_context = getattr(blocked, "context", TurnExecutionContext(route="standard", plan=[]))
+                            blocked_context = getattr(blocked, "context", TurnExecutionContext(route="", plan=[]))
                             blocked_response = self._sql_generation_blocked_response(
                                 blocked=blocked,
                                 session_depth=len(self._session_history.get(session_id, [])),

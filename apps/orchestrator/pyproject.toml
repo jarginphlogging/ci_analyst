@@ -12,6 +12,7 @@ dependencies = [
   "pandas==2.2.3",
   "python-dotenv==1.0.1",
   "sqlparse==0.5.3",
+  "snowflake-connector-python==3.17.3",
 ]
 
 [project.optional-dependencies]

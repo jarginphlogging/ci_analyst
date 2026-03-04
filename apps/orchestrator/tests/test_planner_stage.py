@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import pytest
 
-from app.config import settings
 from app.services.semantic_model import load_semantic_model
 from app.services.stages.planner_stage import (
     OUT_OF_DOMAIN_MESSAGE,
@@ -80,24 +79,17 @@ async def test_planner_accepts_unclear_relevance_and_outputs_tasks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_planner_falls_back_when_llm_unavailable() -> None:
+async def test_planner_raises_when_llm_unavailable() -> None:
     async def failing_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
         raise RuntimeError("llm unavailable")
 
     stage = PlannerStage(model=load_semantic_model(), ask_llm_json=failing_ask_llm_json)
-    if settings.provider_mode in {"sandbox", "prod"}:
-        with pytest.raises(RuntimeError, match="llm unavailable"):
-            await stage.create_plan("Show me spend by state.", [])
-        return
-
-    decision = await stage.create_plan("Show me spend by state.", [])
-    assert decision.stop_reason == "none"
-    assert decision.presentation_intent.displayType in {"table", "chart"}
-    assert len(decision.steps) >= 1
+    with pytest.raises(RuntimeError, match="llm unavailable"):
+        await stage.create_plan("Show me spend by state.", [])
 
 
 @pytest.mark.asyncio
-async def test_planner_fast_path_forces_single_direct_task() -> None:
+async def test_planner_preserves_single_task_from_planner() -> None:
     async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
         return {
             "relevance": "in_domain",
@@ -121,11 +113,11 @@ async def test_planner_fast_path_forces_single_direct_task() -> None:
     assert decision.presentation_intent.displayType == "table"
     assert len(decision.steps) == 1
     assert decision.steps[0].goal.startswith("Calculate total sales for last month")
-    assert "cia_sales_insights_cortex" not in decision.steps[0].goal
+    assert "cia_sales_insights_cortex" in decision.steps[0].goal
 
 
 @pytest.mark.asyncio
-async def test_planner_deep_path_strips_physical_schema_terms() -> None:
+async def test_planner_preserves_task_text_for_multi_step_plan() -> None:
     async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
         return {
             "relevance": "in_domain",
@@ -156,10 +148,9 @@ async def test_planner_deep_path_strips_physical_schema_terms() -> None:
     assert decision.presentation_intent.displayType == "chart"
     assert decision.presentation_intent.chartType == "grouped_bar"
     assert len(decision.steps) == 2
-    for step in decision.steps:
-        assert "cia_sales_insights_cortex" not in step.goal
-        assert "repeat_spend" not in step.goal
-        assert "new_spend" not in step.goal
+    assert "cia_sales_insights_cortex" in decision.steps[0].goal
+    assert "repeat_spend" in decision.steps[0].goal
+    assert "new_spend" in decision.steps[0].goal
 
 
 @pytest.mark.asyncio

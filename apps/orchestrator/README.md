@@ -21,11 +21,12 @@ FastAPI orchestration service for conversational analytics.
 Provider modes:
 - `mock`: static deterministic demo responses
 - `sandbox`: Anthropic LLM + local Cortex-compatible REST + local SQLite data
-- `prod`: Azure OpenAI + Snowflake Cortex Analyst
+- `prod`: Azure OpenAI + Snowflake Cortex Analyst + Snowflake Python Connector
 
 `prod` mode uses:
-- Azure OpenAI for routing, planning, SQL generation, and narrative synthesis
-- Snowflake Cortex SQL execution adapter
+- Azure OpenAI for routing, planning, and narrative synthesis
+- Snowflake Cortex Analyst REST API for SQL generation and clarification turns
+- Snowflake Python Connector for SQL execution
 - deterministic SQL guardrails and validation checks
 - bounded parallel execution for independent steps, with serial fallback for dependent steps
 
@@ -43,6 +44,11 @@ Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`
 - `AZURE_OPENAI_AUTH_MODE=certificate` with `AZURE_TENANT_ID`, `AZURE_SPN_CLIENT_ID`, `AZURE_SPN_CERT_PATH` (optional `AZURE_SPN_CERT_PASSWORD`)
 - optional enterprise gateway header via `AZURE_OPENAI_GATEWAY_API_KEY` and `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
+
+Snowflake prod auth/config supports:
+- Analyst generation: `SNOWFLAKE_CORTEX_BASE_URL`, `SNOWFLAKE_CORTEX_API_KEY`, and one semantic model reference (`SNOWFLAKE_CORTEX_SEMANTIC_MODEL_FILE` or `SNOWFLAKE_CORTEX_SEMANTIC_MODEL` or `SNOWFLAKE_CORTEX_SEMANTIC_VIEW` or `SNOWFLAKE_CORTEX_SEMANTIC_MODELS_JSON`)
+- SQL execution: `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, and one auth option (`SNOWFLAKE_PASSWORD` or `SNOWFLAKE_PRIVATE_KEY_FILE`)
+- Optional execution context: `SNOWFLAKE_ROLE`, `SNOWFLAKE_WAREHOUSE`, `SNOWFLAKE_DATABASE`, `SNOWFLAKE_SCHEMA`, `SNOWFLAKE_AUTHENTICATOR`
 
 ## Local Setup
 
@@ -96,7 +102,8 @@ npm --workspace @ci/orchestrator run test
 ## Where to Integrate Real Connectors
 
 - `app/providers/azure_openai.py`
-- `app/providers/snowflake_cortex.py`
+- `app/providers/snowflake_analyst.py`
+- `app/providers/snowflake_connector_sql.py`
 - `app/providers/anthropic_llm.py`
 - `app/providers/sandbox_cortex.py`
 - `app/providers/factory.py`
@@ -132,6 +139,14 @@ Execution behavior:
 Concurrency controls:
 - `REAL_MAX_PARALLEL_QUERIES=3`
 - `SQL_MAX_ATTEMPTS=3` (max SQL rewrite/execute attempts before surfacing clarification)
+- `PLAN_MAX_STEPS=5` (max planned SQL steps per turn)
+
+SQL retry/tracing contract:
+- SQL execution uses a centralized state machine (`app/services/stages/sql_state_machine.py`).
+- Retry feedback events include normalized `phase`, `errorCode`, `errorCategory`, `attempt`, and optional `failedSql`.
+- SQL regeneration retries are driven only by SQL execution failures (`phase=sql_execution`).
+- SQL generation/provider failures do not enter the execution retry loop.
+- `warehouseErrors` is an execution-only derived view.
 
 ## Mode Selection
 

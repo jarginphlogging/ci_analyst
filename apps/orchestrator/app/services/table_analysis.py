@@ -311,15 +311,7 @@ def _preferred_dimension(dimension_columns: list[str], message: str) -> Optional
 
 
 def _infer_requested_grain(message: str) -> Optional[str]:
-    query = message.lower()
-    if any(token in query for token in ["store", "stores", "branch", "branches", "td_id", "location"]):
-        return "store"
-    if any(token in query for token in ["channel", "card present", "card not present", "cnp", "cp"]):
-        return "channel"
-    if any(token in query for token in ["state", "states"]):
-        return "state"
-    if any(token in query for token in ["trend", "month", "monthly", "week", "weekly", "quarter", "year", "yoy", "mom"]):
-        return "time"
+    _ = message
     return None
 
 
@@ -763,4 +755,3 @@ def build_metric_points(results: list[SqlExecutionResult], evidence: list[Eviden
         metrics.append(MetricPoint(label=f"Signal {len(metrics) + 1}", value=0.0, delta=0.0, unit="count"))
 
     return metrics[:3]
-

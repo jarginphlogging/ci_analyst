@@ -17,6 +17,39 @@ from app.services.stages.sql_stage_models import GeneratedStep
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
 logger = logging.getLogger(__name__)
+ClarificationKind = Literal["none", "user_input_required", "technical_failure"]
+
+
+class AnalystGenerationError(RuntimeError):
+    def __init__(self, message: str, *, detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail or {}
+
+
+def _compact_text(value: Any, *, max_chars: int = 800) -> str:
+    text = " ".join(str(value or "").split()).strip()
+    if len(text) <= max_chars:
+        return text
+    return f"{text[: max_chars - 3]}..."
+
+
+def _provider_error_detail(error: Exception) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "errorType": type(error).__name__,
+        "message": _compact_text(str(error), max_chars=1200),
+    }
+    status_code = getattr(error, "status_code", None)
+    if isinstance(status_code, int):
+        payload["statusCode"] = status_code
+    raw_detail = getattr(error, "detail", None)
+    if isinstance(raw_detail, dict):
+        payload["providerDetail"] = raw_detail
+    elif raw_detail is not None:
+        payload["providerDetail"] = _compact_text(raw_detail, max_chars=1200)
+    response_text = getattr(error, "response_text", None)
+    if isinstance(response_text, str) and response_text.strip():
+        payload["responseTextPreview"] = _compact_text(response_text, max_chars=1200)
+    return payload
 
 
 def _normalize_generation_type(raw_type: Any) -> Literal["sql_ready", "clarification", "not_relevant"]:
@@ -30,14 +63,50 @@ def _normalize_generation_type(raw_type: Any) -> Literal["sql_ready", "clarifica
     return "sql_ready"
 
 
-def _normalize_rows(value: Any) -> list[dict[str, Any]] | None:
-    if not isinstance(value, list):
-        return None
-    normalized: list[dict[str, Any]] = []
-    for item in value:
-        if isinstance(item, dict):
-            normalized.append(item)
-    return normalized
+def _clean_assumptions(assumptions: list[str], *, clarification_question: str) -> list[str]:
+    deduped: list[str] = []
+    seen: set[str] = set()
+    question_key = " ".join(str(clarification_question or "").split()).strip().lower()
+    for item in assumptions:
+        text = " ".join(str(item).split()).strip()
+        if not text:
+            continue
+        key = text.lower()
+        if question_key and key == question_key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+    return deduped[:4]
+
+
+def _normalize_clarification_kind(raw_kind: Any) -> ClarificationKind:
+    normalized = str(raw_kind or "").strip().lower().replace("-", "_")
+    if normalized in {"user_input_required", "technical_failure"}:
+        return normalized
+    return "none"
+
+
+def _infer_clarification_kind(
+    *,
+    status: Literal["sql_ready", "clarification", "not_relevant"],
+    raw_kind: Any,
+    clarification_question: str,
+    attempted_sql: str | None,
+) -> ClarificationKind:
+    if status != "clarification":
+        return "none"
+
+    normalized_kind = _normalize_clarification_kind(raw_kind)
+    if normalized_kind != "none":
+        return normalized_kind
+
+    if clarification_question:
+        return "user_input_required"
+    if attempted_sql and attempted_sql.strip():
+        return "technical_failure"
+    return "none"
 
 
 class SqlStepGenerator:
@@ -55,8 +124,11 @@ class SqlStepGenerator:
     async def _generate_with_analyst(
         self,
         *,
+        message: str,
+        route: str,
         step: QueryPlanStep,
         history: list[str],
+        prior_sql: list[str],
         conversation_id: str,
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None,
@@ -71,11 +143,27 @@ class SqlStepGenerator:
             "step_id": step.id,
             "retry_feedback": retry_feedback or [],
         }
+        analyst_trace_system, analyst_trace_user = sql_prompt(
+            message,
+            route,
+            step.id,
+            step.goal,
+            self._model,
+            prior_sql,
+            history,
+            retry_feedback=retry_feedback,
+        )
 
         with llm_trace_stage(
             "sql_generation",
             {
                 "provider": "analyst",
+                "providerMode": settings.provider_mode,
+                "analystTarget": (
+                    "sandbox_cortex_emulator"
+                    if settings.provider_mode == "sandbox"
+                    else "snowflake_cortex_analyst"
+                ),
                 "stepId": step.id,
                 "stepGoal": step.goal,
                 "attempt": attempt_number,
@@ -83,23 +171,68 @@ class SqlStepGenerator:
                 "retryFeedback": (retry_feedback or [])[-2:],
             },
         ):
-            analyst_payload_raw = await self._analyst_fn(
-                conversation_id=str(analyst_request["conversation_id"]),
-                message=str(analyst_request["message"]),
-                history=history,
-                step_id=step.id,
-                retry_feedback=retry_feedback or [],
-            )
-            analyst_payload_model = AnalystResponsePayload.model_validate(analyst_payload_raw)
-            analyst_payload = analyst_payload_model.model_dump(mode="json", exclude_none=True)
-            record_llm_trace(
-                provider="analyst",
-                system_prompt="",
-                user_prompt=json.dumps(analyst_request, ensure_ascii=True),
-                max_tokens=None,
-                temperature=None,
-                parsed_response=analyst_payload,
-            )
+            try:
+                analyst_payload_raw = await self._analyst_fn(
+                    conversation_id=str(analyst_request["conversation_id"]),
+                    message=str(analyst_request["message"]),
+                    history=history,
+                    step_id=step.id,
+                    retry_feedback=retry_feedback or [],
+                )
+            except Exception as error:  # noqa: BLE001
+                provider_error = _provider_error_detail(error)
+                record_llm_trace(
+                    provider="analyst",
+                    system_prompt=analyst_trace_system,
+                    user_prompt=analyst_trace_user,
+                    max_tokens=None,
+                    temperature=None,
+                    raw_response=None,
+                    parsed_response=None,
+                    error=str(error),
+                    metadata={
+                        "providerRequestPayload": analyst_request,
+                        "providerError": provider_error,
+                    },
+                )
+                raise AnalystGenerationError(
+                    "Analyst provider request failed.",
+                    detail=provider_error,
+                ) from error
+            analyst_raw_text = json.dumps(analyst_payload_raw, ensure_ascii=True)
+            try:
+                analyst_payload_model = AnalystResponsePayload.model_validate(analyst_payload_raw)
+                analyst_payload = analyst_payload_model.model_dump(mode="json", exclude_none=True)
+                record_llm_trace(
+                    provider="analyst",
+                    system_prompt=analyst_trace_system,
+                    user_prompt=analyst_trace_user,
+                    max_tokens=None,
+                    temperature=None,
+                    raw_response=analyst_raw_text,
+                    parsed_response=analyst_payload,
+                    metadata={"providerRequestPayload": analyst_request},
+                )
+            except Exception as error:  # noqa: BLE001
+                record_llm_trace(
+                    provider="analyst",
+                    system_prompt=analyst_trace_system,
+                    user_prompt=analyst_trace_user,
+                    max_tokens=None,
+                    temperature=None,
+                    raw_response=analyst_raw_text,
+                    parsed_response=analyst_payload_raw if isinstance(analyst_payload_raw, dict) else None,
+                    error=str(error),
+                    metadata={"providerRequestPayload": analyst_request},
+                )
+                raise AnalystGenerationError(
+                    "Analyst response schema validation failed.",
+                    detail={
+                        "errorType": type(error).__name__,
+                        "message": _compact_text(str(error), max_chars=1200),
+                        "providerPayload": analyst_payload_raw if isinstance(analyst_payload_raw, dict) else None,
+                    },
+                ) from error
 
         generation_type = _normalize_generation_type(analyst_payload.get("type"))
         clarification_question = str(analyst_payload.get("clarificationQuestion", "")).strip()
@@ -112,18 +245,63 @@ class SqlStepGenerator:
                 not_relevant_reason = str(analyst_payload.get("relevanceReason", "")).strip()
 
         candidate_sql = str(analyst_payload.get("sql", "")).strip()
-        attempted_sql = str(analyst_payload.get("failedSql", "")).strip() or candidate_sql
+        raw_failed_sql = analyst_payload.get("failedSql")
+        attempted_sql = raw_failed_sql.strip() if isinstance(raw_failed_sql, str) else ""
+        attempted_sql = attempted_sql or candidate_sql
         rationale = str(analyst_payload.get("lightResponse", "") or analyst_payload.get("explanation", "")).strip()
         assumptions = as_string_list(analyst_payload.get("assumptions"), max_items=4)
-        payload_rows = _normalize_rows(analyst_payload.get("rows"))
-
-        guarded_sql = guard_sql(candidate_sql, self._model) if candidate_sql else None
-        if generation_type == "sql_ready" and not guarded_sql:
-            generation_type = "clarification"
-            clarification_question = (
-                clarification_question
-                or "Could you clarify the metric, segment, and time window so I can generate the right SQL?"
+        payload_rows = None
+        clarification_kind = _infer_clarification_kind(
+            status=generation_type,
+            raw_kind=analyst_payload.get("clarificationKind"),
+            clarification_question=clarification_question,
+            attempted_sql=attempted_sql,
+        )
+        if generation_type == "clarification" and clarification_kind == "technical_failure":
+            detail = clarification_question or rationale or "Analyst returned a technical SQL generation failure."
+            raise AnalystGenerationError(
+                detail,
+                detail={
+                    "errorType": "AnalystTechnicalFailure",
+                    "generationType": generation_type,
+                    "clarificationKind": clarification_kind,
+                    "providerPayload": analyst_payload,
+                },
             )
+        if generation_type == "sql_ready" and not candidate_sql:
+            raise AnalystGenerationError(
+                "SQL generation failed: analyst returned sql_ready without executable SQL.",
+                detail={
+                    "errorType": "AnalystMalformedPayload",
+                    "generationType": generation_type,
+                    "providerPayload": analyst_payload,
+                },
+            )
+
+        guarded_sql = None
+        if generation_type == "sql_ready" and candidate_sql:
+            try:
+                guarded_sql = guard_sql(candidate_sql, self._model)
+            except Exception as error:  # noqa: BLE001
+                raise AnalystGenerationError(
+                    f"SQL guardrail validation failed for step {step.id}: {error}",
+                    detail={
+                        "errorType": type(error).__name__,
+                        "message": _compact_text(str(error), max_chars=1200),
+                        "generationType": generation_type,
+                        "sqlPreview": _compact_text(candidate_sql, max_chars=800),
+                    },
+                ) from error
+        if generation_type == "sql_ready" and not guarded_sql:
+            raise AnalystGenerationError(
+                f"SQL generation returned no executable SQL for step {step.id}.",
+                detail={
+                    "errorType": "AnalystEmptySqlAfterGuard",
+                    "generationType": generation_type,
+                    "providerPayload": analyst_payload,
+                },
+            )
+        assumptions = _clean_assumptions(assumptions, clarification_question=clarification_question)
 
         return GeneratedStep(
             index=-1,
@@ -135,6 +313,7 @@ class SqlStepGenerator:
             assumptions=assumptions,
             clarification_question=clarification_question,
             not_relevant_reason=not_relevant_reason,
+            clarification_kind=clarification_kind,
             attempted_sql=attempted_sql or None,
             rows=payload_rows,
         )
@@ -154,6 +333,7 @@ class SqlStepGenerator:
         rationale = ""
         clarification_question = ""
         not_relevant_reason = ""
+        clarification_kind: ClarificationKind = "none"
         assumptions: list[str] = []
         generation_type: Literal["sql_ready", "clarification", "not_relevant"] = "sql_ready"
         attempted_sql: str | None = None
@@ -194,13 +374,18 @@ class SqlStepGenerator:
             candidate_sql = str(payload.get("sql", "")).strip()
             attempted_sql = candidate_sql or attempted_sql
             assumptions.extend(as_string_list(payload.get("assumptions"), max_items=4))
+            clarification_kind = _infer_clarification_kind(
+                status=generation_type,
+                raw_kind=payload.get("clarificationKind"),
+                clarification_question=clarification_question,
+                attempted_sql=attempted_sql,
+            )
 
             if generation_type == "clarification":
-                clarification_question = (
-                    clarification_question
-                    or rationale
-                    or f"SQL generation requires clarification for step {step.id}."
-                )
+                if not clarification_question:
+                    raise RuntimeError(
+                        f"SQL generation returned clarification without clarificationQuestion for step {step.id}."
+                    )
                 candidate_sql = ""
             elif generation_type == "not_relevant":
                 candidate_sql = ""
@@ -216,17 +401,32 @@ class SqlStepGenerator:
                 },
             )
             generation_type = "clarification"
-            clarification_question = str(error).strip() or f"SQL generation failed for step {step.id}."
+            clarification_kind = "technical_failure"
+            clarification_question = str(error).strip()
             assumptions.append(f"SQL generation failed: {error}")
 
-        guarded_sql = guard_sql(sql_text, self._model) if generation_type == "sql_ready" else None
+        guarded_sql = None
+        if generation_type == "sql_ready":
+            try:
+                guarded_sql = guard_sql(sql_text, self._model)
+            except Exception as error:  # noqa: BLE001
+                generation_type = "clarification"
+                clarification_kind = "technical_failure"
+                assumptions.append(f"SQL generation guardrail check failed: {error}")
+                clarification_question = (
+                    clarification_question
+                    or rationale
+                    or str(error).strip()
+                )
         if generation_type == "sql_ready" and not guarded_sql:
             generation_type = "clarification"
+            clarification_kind = "technical_failure"
             clarification_question = (
                 clarification_question
                 or rationale
-                or f"Generated SQL violated guardrails for step {step.id}."
+                or ""
             )
+        assumptions = _clean_assumptions(assumptions, clarification_question=clarification_question)
 
         return GeneratedStep(
             index=-1,
@@ -238,6 +438,7 @@ class SqlStepGenerator:
             assumptions=assumptions,
             clarification_question=clarification_question,
             not_relevant_reason=not_relevant_reason,
+            clarification_kind=clarification_kind,
             attempted_sql=attempted_sql,
             rows=None,
         )
@@ -259,45 +460,53 @@ class SqlStepGenerator:
         if self._analyst_fn is not None:
             try:
                 generated = await self._generate_with_analyst(
+                    message=message,
+                    route=route,
                     step=step,
                     history=history,
+                    prior_sql=prior_sql,
                     conversation_id=conversation_id,
                     attempt_number=attempt_number,
                     retry_feedback=retry_feedback,
                 )
             except Exception as error:
                 logger.exception(
-                    "Analyst SQL generation failed; falling back to LLM",
+                    "Analyst SQL generation failed",
                     extra={
-                        "event": "sql.generation.analyst_fallback",
+                        "event": "sql.generation.analyst_failed",
                         "stepId": step.id,
                         "attempt": attempt_number,
                     },
                 )
-                if settings.provider_mode in {"sandbox", "prod"}:
-                    generated = GeneratedStep(
-                        index=index,
-                        step=step,
-                        provider="analyst",
-                        status="clarification",
-                        sql=None,
-                        rationale="",
-                        assumptions=[f"Analyst generation failed: {error}"],
-                        clarification_question=str(error).strip() or f"Cortex analyst failed for {step.id}.",
-                        not_relevant_reason="",
-                        attempted_sql=None,
-                        rows=None,
-                    )
-                else:
-                    generated = await self._generate_with_llm(
-                        message=message,
-                        route=route,
-                        step=step,
-                        history=history,
-                        prior_sql=prior_sql,
-                        attempt_number=attempt_number,
-                        retry_feedback=retry_feedback,
-                    )
+                error_detail = (
+                    dict(error.detail)
+                    if isinstance(error, AnalystGenerationError) and isinstance(error.detail, dict)
+                    else _provider_error_detail(error)
+                )
+                provider_detail = error_detail.get("providerDetail")
+                provider_code = ""
+                if isinstance(provider_detail, dict):
+                    provider_code = str(provider_detail.get("code", "")).strip()
+                error_code = provider_code or str(error_detail.get("errorType", "")).strip() or "generation_provider_error"
+                clarification_message = f"SQL generation failed ({error_code})."
+                generated = GeneratedStep(
+                    index=index,
+                    step=step,
+                    provider="analyst",
+                    status="clarification",
+                    sql=None,
+                    rationale="",
+                    assumptions=_clean_assumptions(
+                        [f"SQL generation provider error type: {error_code}"],
+                        clarification_question=clarification_message,
+                    ),
+                    clarification_question=clarification_message,
+                    not_relevant_reason="",
+                    clarification_kind="technical_failure",
+                    attempted_sql=None,
+                    rows=None,
+                    generation_error_detail=error_detail,
+                )
         else:
             generated = await self._generate_with_llm(
                 message=message,
@@ -319,6 +528,8 @@ class SqlStepGenerator:
             assumptions=generated.assumptions,
             clarification_question=generated.clarification_question,
             not_relevant_reason=generated.not_relevant_reason,
+            clarification_kind=generated.clarification_kind,
             attempted_sql=generated.attempted_sql,
             rows=generated.rows,
+            generation_error_detail=generated.generation_error_detail,
         )

@@ -7,7 +7,8 @@ from app.providers.anthropic_llm import chat_completion as anthropic_chat_comple
 from app.providers.azure_openai import chat_completion
 from app.providers.protocols import AnalystFn, LlmFn, SqlFn
 from app.providers.sandbox_cortex import analyze_message, execute_sandbox_sql
-from app.providers.snowflake_cortex import execute_cortex_sql
+from app.providers.snowflake_analyst import analyze_message as analyze_snowflake_analyst_message
+from app.providers.snowflake_connector_sql import execute_snowflake_sql
 
 
 @dataclass(frozen=True)
@@ -20,8 +21,8 @@ class ProviderBundle:
 def build_live_provider_bundle() -> ProviderBundle:
     return ProviderBundle(
         llm_fn=chat_completion,
-        sql_fn=execute_cortex_sql,
-        analyst_fn=None,
+        sql_fn=execute_snowflake_sql,
+        analyst_fn=analyze_snowflake_analyst_message,
     )
 
 

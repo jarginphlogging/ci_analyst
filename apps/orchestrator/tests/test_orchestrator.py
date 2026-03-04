@@ -199,7 +199,7 @@ async def test_trace_exposes_retry_feedback_and_warehouse_errors() -> None:
 
 
 @pytest.mark.asyncio
-async def test_trace_exposes_generation_errors_in_warehouse_errors() -> None:
+async def test_trace_excludes_generation_errors_from_warehouse_errors() -> None:
     orchestrator = ConversationalOrchestrator(GenerationRetryFeedbackDependencies())
     result = await orchestrator.run_turn(
         ChatTurnRequest(sessionId=uuid4(), message="Why did sales change month over month?")
@@ -210,6 +210,4 @@ async def test_trace_exposes_generation_errors_in_warehouse_errors() -> None:
     assert sql_trace.stageOutput is not None
     warehouse_errors = sql_trace.stageOutput.get("warehouseErrors")
     assert isinstance(warehouse_errors, list)
-    assert warehouse_errors
-    assert warehouse_errors[0].get("phase") == "sql_generation"
-    assert "without executable SQL" in str(warehouse_errors[0].get("error", ""))
+    assert warehouse_errors == []

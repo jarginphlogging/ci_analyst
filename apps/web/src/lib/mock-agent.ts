@@ -237,6 +237,7 @@ function storeRows(): Array<Record<string, string | number>> {
 
 function buildTrace(query: string, sql: string): TraceStep[] {
   const queryPreview = query.trim().slice(0, 160);
+  const primaryPlanStepId = "step_primary";
   return [
     {
       id: "t1",
@@ -249,7 +250,7 @@ function buildTrace(query: string, sql: string): TraceStep[] {
         historyDepth: 0,
       },
       stageOutput: {
-        route: "standard",
+        route: "single_step",
         domainScope: "customer_insights",
       },
     },
@@ -261,8 +262,8 @@ function buildTrace(query: string, sql: string): TraceStep[] {
       sql,
       qualityChecks: ["Allowlist guard passed", "Read-only SQL guard passed"],
       stageInput: {
-        route: "standard",
-        planStepIds: ["step_1"],
+        route: "single_step",
+        planStepIds: [primaryPlanStepId],
       },
       stageOutput: {
         queryCount: 1,

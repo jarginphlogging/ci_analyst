@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
-import re
 from time import perf_counter
 from typing import Any, Awaitable, Callable, Optional
 
@@ -14,9 +13,16 @@ from app.services.stages.sql_stage_generation import SqlStepGenerator
 from app.services.stages.sql_stage_models import (
     MAX_SQL_ATTEMPTS,
     OUT_OF_DOMAIN_MESSAGE,
-    TOO_COMPLEX_MESSAGE,
     GeneratedStep,
     SqlGenerationBlockedError,
+)
+from app.services.stages.sql_state_machine import (
+    SqlFailureCode,
+    build_retry_event,
+    error_category,
+    failure_code_for_generated,
+    informed_clarification_message,
+    normalize_retry_feedback,
 )
 from app.services.stages.sql_stage_topology import dependency_levels, execution_dispatch
 from app.services.table_analysis import normalize_rows
@@ -26,7 +32,10 @@ SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
 AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
 ProgressFn = Callable[[str], Optional[Awaitable[None]]]
 logger = logging.getLogger(__name__)
-_ASSUMPTION_ATTEMPT_PATTERN = re.compile(r"attempt\s+(\d+)", re.IGNORECASE)
+
+
+class _AllNullRowsError(RuntimeError):
+    pass
 
 
 async def _emit_progress(progress_callback: ProgressFn | None, message: str) -> None:
@@ -62,17 +71,12 @@ class SqlExecutionStage:
     @staticmethod
     def _flatten_retry_feedback(retry_feedback_by_step: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
         flattened: list[dict[str, Any]] = []
-        seen: set[str] = set()
         for step_id, entries in retry_feedback_by_step.items():
             for entry in entries[-6:]:
                 payload = dict(entry)
                 payload.setdefault("stepId", step_id)
-                key = str(payload)
-                if key in seen:
-                    continue
-                seen.add(key)
                 flattened.append(payload)
-        return flattened[:12]
+        return normalize_retry_feedback(flattened, max_items=12)
 
     async def _execute_sql(self, sql: str) -> SqlExecutionResult:
         started_at = perf_counter()
@@ -115,70 +119,20 @@ class SqlExecutionStage:
         )
 
     @staticmethod
-    def _derived_retry_feedback_from_assumptions(
+    def _informed_clarification_message(
         generated: GeneratedStep,
         *,
-        attempt: int,
-    ) -> list[dict[str, Any]]:
-        entries: list[dict[str, Any]] = []
-        default_failed_sql = generated.attempted_sql or generated.sql
-        for item in generated.assumptions:
-            text = str(item).strip()
-            if not text:
-                continue
-            lowered = text.lower()
-            if "attempt" not in lowered or "failed" not in lowered:
-                continue
-            phase = "sql_generation"
-            if "sql execution attempt" in lowered:
-                phase = "sql_execution"
-            elif "sql generation attempt" not in lowered:
-                continue
-
-            error_text = text
-            if "failed:" in text:
-                error_text = text.split("failed:", 1)[1].strip() or text
-            attempt_match = _ASSUMPTION_ATTEMPT_PATTERN.search(text)
-            entry_attempt = int(attempt_match.group(1)) if attempt_match else attempt
-            entries.append(
-                {
-                    "phase": phase,
-                    "stepId": generated.step.id,
-                    "attempt": entry_attempt,
-                    "provider": generated.provider,
-                    "error": error_text,
-                    "failedSql": default_failed_sql,
-                }
-            )
-
-        if entries:
-            return entries[:6]
-
-        question = (generated.clarification_question or "").strip()
-        lowered_question = question.lower()
-        technical_markers = (
-            "unbalanced json",
-            "timeout",
-            "timed out",
-            "readtimeout",
-            "connection",
-            "transport",
-            "parse",
-            "validation error",
-            "failed",
+        retry_feedback: list[dict[str, Any]],
+        fallback_error: str = "",
+    ) -> str:
+        return informed_clarification_message(
+            step_goal=generated.step.goal,
+            clarification_question=generated.clarification_question,
+            clarification_kind=generated.clarification_kind,
+            retry_feedback=retry_feedback,
+            max_attempts=MAX_SQL_ATTEMPTS,
+            fallback_error=fallback_error,
         )
-        if question and any(marker in lowered_question for marker in technical_markers):
-            return [
-                {
-                    "phase": "sql_generation",
-                    "stepId": generated.step.id,
-                    "attempt": attempt,
-                    "provider": generated.provider,
-                    "error": question,
-                    "failedSql": default_failed_sql,
-                }
-            ]
-        return []
 
     @staticmethod
     def _blocked_from_generated(
@@ -188,39 +142,35 @@ class SqlExecutionStage:
         retry_feedback: list[dict[str, Any]] | None = None,
     ) -> SqlGenerationBlockedError:
         failed_sql = generated.attempted_sql or generated.sql
-        retry_tail = (retry_feedback or [])[-4:]
-        derived_retry_feedback = SqlExecutionStage._derived_retry_feedback_from_assumptions(
-            generated,
-            attempt=attempt,
-        )
-        combined_retry_feedback: list[dict[str, Any]] = []
-        seen_feedback: set[str] = set()
-        for item in [*retry_tail, *derived_retry_feedback]:
-            if not isinstance(item, dict):
-                continue
-            key = str(item)
-            if key in seen_feedback:
-                continue
-            seen_feedback.add(key)
-            combined_retry_feedback.append(item)
-        retry_payload = combined_retry_feedback[:6]
-        if generated.status == "not_relevant":
+        retry_tail = normalize_retry_feedback((retry_feedback or [])[-6:], max_items=6)
+        code = failure_code_for_generated(generated)
+        if generated.status == "not_relevant" or code == SqlFailureCode.NOT_RELEVANT:
             return SqlGenerationBlockedError(
                 stop_reason="not_relevant",
-                user_message=OUT_OF_DOMAIN_MESSAGE,
+                user_message=generated.not_relevant_reason or OUT_OF_DOMAIN_MESSAGE,
                 detail={
                     "phase": "sql_generation",
                     "stepId": generated.step.id,
                     "attempt": attempt,
                     "provider": generated.provider,
+                    "errorCode": SqlFailureCode.NOT_RELEVANT.value,
+                    "errorCategory": error_category(SqlFailureCode.NOT_RELEVANT),
                     "reason": generated.not_relevant_reason,
                     "assumptions": generated.assumptions,
                     "failedSql": failed_sql,
-                    "retryFeedback": retry_payload,
+                    "retryFeedback": retry_tail,
                 },
             )
 
-        message = generated.clarification_question or generated.rationale or f"SQL generation blocked for {generated.step.id}."
+        generation_detail = generated.generation_error_detail or {}
+        if code == SqlFailureCode.USER_INPUT_REQUIRED:
+            message = SqlExecutionStage._informed_clarification_message(
+                generated,
+                retry_feedback=retry_tail,
+                fallback_error="",
+            )
+        else:
+            message = f"SQL generation failed ({code.value})."
         return SqlGenerationBlockedError(
             stop_reason="clarification",
             user_message=message,
@@ -231,9 +181,13 @@ class SqlExecutionStage:
                 "provider": generated.provider,
                 "rationale": generated.rationale,
                 "error": generated.clarification_question or generated.rationale,
+                "errorCode": code.value,
+                "errorCategory": error_category(code),
+                "clarificationKind": generated.clarification_kind,
                 "assumptions": generated.assumptions,
                 "failedSql": failed_sql,
-                "retryFeedback": retry_payload,
+                "retryFeedback": retry_tail,
+                "generationErrorDetail": generated.generation_error_detail or {},
             },
         )
 
@@ -265,70 +219,12 @@ class SqlExecutionStage:
                 raise RuntimeError("SQL generation produced no executable SQL.")
             result = await self._execute_sql(generated.sql)
         if _rows_all_null(result.rows):
-            raise RuntimeError("SQL returned only null values; retrying with regenerated SQL.")
+            raise _AllNullRowsError("SQL returned only null values.")
         await _emit_progress(
             progress_callback,
             f"Completed SQL step {generated.index + 1}/{total_steps} ({result.rowCount} rows)",
         )
         return generated.index, result
-
-    @staticmethod
-    def _should_retry_blocked_generation(generated: GeneratedStep) -> bool:
-        if generated.status != "clarification":
-            return False
-        if any("retry limit reached" in item.lower() for item in generated.assumptions):
-            return False
-        if generated.attempted_sql and generated.attempted_sql.strip():
-            return True
-        if any("sql execution attempt" in item.lower() and "failed" in item.lower() for item in generated.assumptions):
-            return True
-        if any("sql generation attempt" in item.lower() and "failed" in item.lower() for item in generated.assumptions):
-            return True
-        if any("sql generation failed" in item.lower() for item in generated.assumptions):
-            return True
-        lowered_question = generated.clarification_question.lower()
-        return any(
-            token in lowered_question
-            for token in (
-                "timeout",
-                "timed out",
-                "readtimeout",
-                "connection",
-                "transport",
-                "unbalanced json",
-                "parse",
-                "validation error",
-                "failed",
-                "no executable sql",
-            )
-        )
-
-    @staticmethod
-    def _generation_feedback_entry(generated: GeneratedStep, *, attempt: int) -> dict[str, Any]:
-        return {
-            "phase": "sql_generation_blocked",
-            "stepId": generated.step.id,
-            "attempt": attempt,
-            "provider": generated.provider,
-            "error": generated.clarification_question or generated.not_relevant_reason or "SQL generation did not return executable SQL.",
-            "failedSql": generated.attempted_sql or generated.sql,
-            "clarificationQuestion": generated.clarification_question,
-            "notRelevantReason": generated.not_relevant_reason,
-        }
-
-    @staticmethod
-    def _generation_retry_history(
-        *,
-        history: list[str],
-        generated: GeneratedStep,
-    ) -> list[str]:
-        error_text = generated.clarification_question or generated.not_relevant_reason
-        return [
-            *history,
-            f"Previous SQL generation was blocked for {generated.step.id}.",
-            f"Previous generator feedback: {error_text or generated.status}",
-            f"Previous failed SQL:\n{generated.attempted_sql or generated.sql or ''}",
-        ]
 
     async def _generate_ready_step(
         self,
@@ -346,84 +242,47 @@ class SqlExecutionStage:
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
         start_attempt: int = 1,
-        execution_recovery: bool = False,
     ) -> tuple[GeneratedStep, int]:
-        # This helper centralizes generation retries so policy stays simple:
-        # retry only when generator reports a technical/repairable failure.
         step_retry_feedback = retry_feedback_by_step.setdefault(step.id, [])
-        attempt_history = list(history)
-
-        for attempt in range(start_attempt, MAX_SQL_ATTEMPTS + 1):
-            if attempt == 1:
-                await _emit_progress(progress_callback, f"Preparing SQL step {index + 1}/{total_steps}: {step.goal}")
-                if self._analyst_fn is not None:
-                    await _emit_progress(
-                        progress_callback,
-                        f"Generating SQL with Snowflake Cortex Analyst for step {index + 1}/{total_steps}",
-                    )
-                else:
-                    await _emit_progress(progress_callback, f"Drafting governed SQL for step {index + 1}/{total_steps}")
-            else:
+        attempt = max(1, start_attempt)
+        if attempt == 1:
+            await _emit_progress(progress_callback, f"Preparing SQL step {index + 1}/{total_steps}: {step.goal}")
+            if self._analyst_fn is not None:
                 await _emit_progress(
                     progress_callback,
-                    f"Retrying SQL generation for step {index + 1}/{total_steps} (attempt {attempt}/{MAX_SQL_ATTEMPTS})",
+                    f"Generating SQL for step {index + 1}/{total_steps}",
                 )
-
-            generated = await self._generator.generate(
-                index=index,
-                message=message,
-                route=route,
-                step=step,
-                history=attempt_history,
-                prior_sql=prior_sql,
-                conversation_id=conversation_id,
-                attempt_number=attempt,
-                retry_feedback=step_retry_feedback,
+            else:
+                await _emit_progress(progress_callback, f"Drafting governed SQL for step {index + 1}/{total_steps}")
+        else:
+            await _emit_progress(
+                progress_callback,
+                f"Regenerating SQL for step {index + 1}/{total_steps} (attempt {attempt}/{MAX_SQL_ATTEMPTS})",
             )
-            assumptions.extend(generated.assumptions[:4])
-            if generated.rationale:
-                assumptions.append(f"{generated.step.id} rationale: {generated.rationale}")
 
-            if generated.status == "sql_ready" and generated.sql:
-                return generated, attempt
+        generated = await self._generator.generate(
+            index=index,
+            message=message,
+            route=route,
+            step=step,
+            history=history,
+            prior_sql=prior_sql,
+            conversation_id=conversation_id,
+            attempt_number=attempt,
+            retry_feedback=step_retry_feedback,
+        )
+        assumptions.extend(generated.assumptions[:4])
+        if generated.rationale:
+            assumptions.append(f"{generated.step.id} rationale: {generated.rationale}")
 
-            # If the status is non-retryable or budget is exhausted, stop early
-            # and return a precise blocked error instead of adding more branches.
-            can_retry = self._should_retry_blocked_generation(generated) and attempt < MAX_SQL_ATTEMPTS
-            if execution_recovery and generated.status == "clarification" and attempt < MAX_SQL_ATTEMPTS:
-                # Execution-origin failures should continue retrying technical
-                # recovery even if generator replies with a clarification.
-                can_retry = True
-            if not can_retry:
-                sync_retry_feedback()
-                raise self._blocked_from_generated(
-                    generated,
-                    attempt=attempt,
-                    retry_feedback=step_retry_feedback,
-                )
-
-            step_retry_feedback.append(self._generation_feedback_entry(generated, attempt=attempt))
-            sync_retry_feedback()
-            assumptions.append(
-                f"SQL generation retry {attempt} triggered for {generated.step.id} after blocked attempt."
-            )
-            attempt_history = self._generation_retry_history(history=attempt_history, generated=generated)
+        if generated.status == "sql_ready" and generated.sql:
+            return generated, attempt
 
         sync_retry_feedback()
         raise self._blocked_from_generated(
-            GeneratedStep(
-                index=index,
-                step=step,
-                provider="llm",
-                status="clarification",
-                sql=None,
-                rationale="",
-                assumptions=[],
-                clarification_question="SQL generation retry limit reached.",
-                not_relevant_reason="",
-            ),
-            attempt=MAX_SQL_ATTEMPTS,
-            retry_feedback=retry_feedback_by_step.get(step.id, []),
+            generated,
+            attempt=attempt,
+            retry_feedback=step_retry_feedback,
         )
 
     async def _execute_with_retries(
@@ -465,15 +324,23 @@ class SqlExecutionStage:
                         "sqlPreview": " ".join((current_generated.sql or "").split())[:260],
                     },
                 )
+                error_text = str(error).strip()
+                failure_code = (
+                    SqlFailureCode.EXECUTION_ALL_NULL_ROWS
+                    if isinstance(error, _AllNullRowsError)
+                    else SqlFailureCode.EXECUTION_WAREHOUSE_ERROR
+                )
                 step_retry_feedback.append(
-                    {
-                        "phase": "sql_execution",
-                        "stepId": current_generated.step.id,
-                        "attempt": attempt_cursor,
-                        "provider": current_generated.provider,
-                        "error": str(error),
-                        "failedSql": current_generated.sql,
-                    }
+                    build_retry_event(
+                        code=failure_code,
+                        step_id=current_generated.step.id,
+                        attempt=attempt_cursor,
+                        provider=current_generated.provider,
+                        error=error_text,
+                        failed_sql=current_generated.sql,
+                        clarification_question=current_generated.clarification_question,
+                        clarification_kind=current_generated.clarification_kind,
+                    )
                 )
                 sync_retry_feedback()
                 assumptions.append(
@@ -481,11 +348,14 @@ class SqlExecutionStage:
                 )
 
                 if attempt_cursor >= MAX_SQL_ATTEMPTS:
-                    retry_feedback_tail = step_retry_feedback[-6:]
-                    user_message = (
-                        str(error).strip()
-                        or current_generated.clarification_question
-                        or "SQL execution failed after retry limit."
+                    retry_feedback_tail = normalize_retry_feedback(step_retry_feedback[-8:], max_items=6)
+                    user_message = informed_clarification_message(
+                        step_goal=current_generated.step.goal,
+                        clarification_question=current_generated.clarification_question,
+                        clarification_kind=current_generated.clarification_kind,
+                        retry_feedback=retry_feedback_tail,
+                        max_attempts=MAX_SQL_ATTEMPTS,
+                        fallback_error=error_text,
                     )
                     raise SqlGenerationBlockedError(
                         stop_reason="clarification",
@@ -495,7 +365,9 @@ class SqlExecutionStage:
                             "stepId": current_generated.step.id,
                             "attempt": attempt_cursor,
                             "maxAttempts": MAX_SQL_ATTEMPTS,
-                            "error": str(error),
+                            "error": error_text,
+                            "errorCode": SqlFailureCode.RETRY_LIMIT_EXHAUSTED.value,
+                            "errorCategory": error_category(failure_code),
                             "failedSql": current_generated.sql,
                             "retryFeedback": retry_feedback_tail,
                         },
@@ -528,28 +400,19 @@ class SqlExecutionStage:
                         progress_callback=progress_callback,
                         sync_retry_feedback=sync_retry_feedback,
                         start_attempt=attempt_cursor + 1,
-                        execution_recovery=True,
                     )
                 except SqlGenerationBlockedError as blocked:
-                    # This branch started from warehouse execution failure, so
-                    # surface the terminal condition as an execution failure.
-                    retry_feedback_tail = step_retry_feedback[-6:]
+                    retry_feedback_tail = normalize_retry_feedback(step_retry_feedback[-8:], max_items=6)
+                    blocked_detail = blocked.detail if isinstance(blocked.detail, dict) else {}
+                    merged_feedback = normalize_retry_feedback(
+                        [*retry_feedback_tail, *(blocked_detail.get("retryFeedback") or [])], max_items=6
+                    )
+                    merged_detail = dict(blocked_detail)
+                    merged_detail["retryFeedback"] = merged_feedback
                     raise SqlGenerationBlockedError(
-                        stop_reason="clarification",
-                        user_message=blocked.user_message or str(error),
-                        detail={
-                            "phase": "sql_execution",
-                            "stepId": current_generated.step.id,
-                            "attempt": min(MAX_SQL_ATTEMPTS, attempt_cursor + 1),
-                            "maxAttempts": MAX_SQL_ATTEMPTS,
-                            # Preserve the triggering warehouse error for
-                            # operator debugging, even if generation produced
-                            # additional clarification/technical notes.
-                            "error": str(error) or blocked.detail.get("error"),
-                            "failedSql": current_generated.sql,
-                            "retryFeedback": retry_feedback_tail,
-                            "generationFailure": blocked.detail,
-                        },
+                        stop_reason=blocked.stop_reason,
+                        user_message=blocked.user_message,
+                        detail=merged_detail,
                     ) from blocked
 
     async def run_sql(
@@ -577,10 +440,22 @@ class SqlExecutionStage:
         try:
             if total_steps == 0:
                 return [], []
-            if total_steps > 5:
+            plan_limit = max(1, settings.plan_max_steps)
+            if total_steps > plan_limit:
+                detail = (
+                    f"The request expanded to {total_steps} SQL steps, "
+                    f"which exceeds the governed limit of {plan_limit} steps per turn."
+                )
                 raise SqlGenerationBlockedError(
                     stop_reason="clarification",
-                    user_message=TOO_COMPLEX_MESSAGE,
+                    user_message=detail,
+                    detail={
+                        "phase": "sql_generation",
+                        "errorCode": SqlFailureCode.TOO_COMPLEX.value,
+                        "errorCategory": error_category(SqlFailureCode.TOO_COMPLEX),
+                        "error": detail,
+                        "retryFeedback": [],
+                    },
                 )
 
             dispatch = execution_dispatch(self._analyst_fn)

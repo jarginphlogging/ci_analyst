@@ -217,7 +217,7 @@ _execute_pipeline() → (context, results, validation, stage_timings_ms)
 |-------|--------|---------|
 | `user_message` | The raw user query | `"What were my sales in each state in descending order?"` |
 | `history` | Last 6 conversation turns | `["Show me Q4 revenue", "Revenue in Q4 was $12.3M..."]` |
-| `planner_scope_context` | Semantic model metadata | Tables, dimensions, metrics available |
+| `semantic_model_summary` | Rendered model schema | Tables, columns, joins, policy |
 | `max_steps` | Config (default 5) | `5` |
 
 #### LLM System Prompt (planner_system.md)
@@ -253,7 +253,7 @@ Conversation history:
 - Show me Q4 revenue
 - Revenue in Q4 was $12.3M across all regions.
 
-Planning scope:
+Semantic model summary:
 [Tables: customer_facts, transaction_summary, store_dimension ...]
 [Metrics: revenue, transaction_count, avg_sale_amount ...]
 [Dimensions: state, region, store_name, customer_segment ...]

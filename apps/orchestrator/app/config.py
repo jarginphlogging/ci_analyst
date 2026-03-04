@@ -83,9 +83,30 @@ class Settings:
 
     snowflake_cortex_base_url: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_BASE_URL")
     snowflake_cortex_api_key: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_API_KEY")
-    snowflake_cortex_warehouse: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_WAREHOUSE")
-    snowflake_cortex_database: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_DATABASE")
-    snowflake_cortex_schema: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_SCHEMA")
+    snowflake_cortex_auth_token_type: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_CORTEX_AUTH_TOKEN_TYPE"))
+    snowflake_cortex_semantic_model_file: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_CORTEX_SEMANTIC_MODEL_FILE"))
+    snowflake_cortex_semantic_model: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_CORTEX_SEMANTIC_MODEL"))
+    snowflake_cortex_semantic_view: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_CORTEX_SEMANTIC_VIEW"))
+    snowflake_cortex_semantic_models_json: Optional[str] = _as_optional(
+        os.getenv("SNOWFLAKE_CORTEX_SEMANTIC_MODELS_JSON")
+    )
+
+    snowflake_account: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_ACCOUNT"))
+    snowflake_user: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_USER"))
+    snowflake_password: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_PASSWORD"))
+    snowflake_private_key_file: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE"))
+    snowflake_private_key_file_pwd: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_PRIVATE_KEY_FILE_PWD"))
+    snowflake_role: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_ROLE"))
+    snowflake_authenticator: Optional[str] = _as_optional(os.getenv("SNOWFLAKE_AUTHENTICATOR"))
+    snowflake_warehouse: Optional[str] = _as_optional(
+        os.getenv("SNOWFLAKE_WAREHOUSE") or os.getenv("SNOWFLAKE_CORTEX_WAREHOUSE")
+    )
+    snowflake_database: Optional[str] = _as_optional(
+        os.getenv("SNOWFLAKE_DATABASE") or os.getenv("SNOWFLAKE_CORTEX_DATABASE")
+    )
+    snowflake_schema: Optional[str] = _as_optional(
+        os.getenv("SNOWFLAKE_SCHEMA") or os.getenv("SNOWFLAKE_CORTEX_SCHEMA")
+    )
     sandbox_cortex_base_url: str = _as_nonempty(
         os.getenv("SANDBOX_CORTEX_BASE_URL"),
         "http://127.0.0.1:8788/api/v2/cortex/analyst",
@@ -99,6 +120,7 @@ class Settings:
     semantic_model_path: Optional[str] = os.getenv("SEMANTIC_MODEL_PATH")
     real_fast_plan_steps: int = _as_int(os.getenv("REAL_FAST_PLAN_STEPS"), 2)
     real_deep_plan_steps: int = _as_int(os.getenv("REAL_DEEP_PLAN_STEPS"), 4)
+    plan_max_steps: int = max(1, _as_int(os.getenv("PLAN_MAX_STEPS"), 5))
     real_max_parallel_queries: int = _as_int(os.getenv("REAL_MAX_PARALLEL_QUERIES"), 3)
     sql_max_attempts: int = max(1, _as_int(os.getenv("SQL_MAX_ATTEMPTS"), 3))
     real_llm_temperature: float = _as_float(os.getenv("REAL_LLM_TEMPERATURE"), 0.1)
@@ -126,6 +148,19 @@ class Settings:
 
     def has_snowflake_credentials(self) -> bool:
         return bool(self.snowflake_cortex_base_url and self.snowflake_cortex_api_key)
+
+    def has_snowflake_analyst_credentials(self) -> bool:
+        has_model_ref = bool(
+            self.snowflake_cortex_semantic_model_file
+            or self.snowflake_cortex_semantic_model
+            or self.snowflake_cortex_semantic_view
+            or self.snowflake_cortex_semantic_models_json
+        )
+        return bool(self.snowflake_cortex_base_url and self.snowflake_cortex_api_key and has_model_ref)
+
+    def has_snowflake_connector_credentials(self) -> bool:
+        has_auth = bool(self.snowflake_password or self.snowflake_private_key_file)
+        return bool(self.snowflake_account and self.snowflake_user and has_auth)
 
 
 settings = Settings()
