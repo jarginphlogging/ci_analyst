@@ -228,24 +228,31 @@ function responseContent(response: LlmResponseEntry): string {
   return JSON.stringify(response.parsedResponse ?? {}, null, 2);
 }
 
-function structuredSqlFromResponse(response?: LlmResponseEntry): string {
-  if (!response) return "";
+interface ExchangeSqlDetail {
+  sql: string;
+  failed: boolean;
+}
+
+function exchangeSqlFromResponse(response?: LlmResponseEntry): ExchangeSqlDetail | null {
+  if (!response) return null;
 
   const parsed = asRecord(response.parsedResponse);
-  const fromParsedSql = asStringValue(parsed?.sql);
-  if (fromParsedSql) return fromParsedSql;
   const fromParsedFailedSql = asStringValue(parsed?.failedSql);
-  if (fromParsedFailedSql) return fromParsedFailedSql;
+  if (fromParsedFailedSql) return { sql: fromParsedFailedSql, failed: true };
+  const fromParsedSql = asStringValue(parsed?.sql);
+  if (fromParsedSql) return { sql: fromParsedSql, failed: false };
 
   const raw = asStringValue(response.rawResponse);
-  if (!raw) return "";
+  if (!raw) return null;
   try {
     const parsedRaw = asRecord(JSON.parse(raw));
+    const fromRawFailedSql = asStringValue(parsedRaw?.failedSql);
+    if (fromRawFailedSql) return { sql: fromRawFailedSql, failed: true };
     const fromRawSql = asStringValue(parsedRaw?.sql);
-    if (fromRawSql) return fromRawSql;
-    return asStringValue(parsedRaw?.failedSql) ?? "";
+    if (fromRawSql) return { sql: fromRawSql, failed: false };
+    return null;
   } catch {
-    return "";
+    return null;
   }
 }
 
@@ -274,12 +281,21 @@ function failedSqlForStep(step: TraceStep): string {
   return "";
 }
 
-function LlmExchangeCard({ exchange, exchangeLabel }: { exchange: LlmExchange; exchangeLabel: string }) {
+function LlmExchangeCard({
+  exchange,
+  exchangeLabel,
+  stageFailed,
+}: {
+  exchange: LlmExchange;
+  exchangeLabel: string;
+  stageFailed: boolean;
+}) {
   const prompt = exchange.prompt;
   const response = exchange.response;
   const sections = prompt ? promptSections(prompt) : [];
   const providerLabel = providerBadgeLabel(prompt ?? response);
-  const structuredSql = structuredSqlFromResponse(response);
+  const exchangeSql = exchangeSqlFromResponse(response);
+  const sqlLabel = exchangeSql ? (exchangeSql.failed || stageFailed ? "Failed SQL" : "Executed SQL") : "";
 
   return (
     <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-[0_2px_10px_rgba(14,44,68,0.04)]">
@@ -321,11 +337,11 @@ function LlmExchangeCard({ exchange, exchangeLabel }: { exchange: LlmExchange; e
           {response.error ? <p className="mt-2 text-xs font-medium text-rose-700">Error: {response.error}</p> : null}
         </>
       ) : null}
-      {structuredSql ? (
+      {exchangeSql ? (
         <>
-          <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Structured SQL</p>
+          <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">{sqlLabel}</p>
           <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
-            <code>{structuredSql}</code>
+            <code>{exchangeSql.sql}</code>
           </pre>
         </>
       ) : null}
@@ -360,6 +376,7 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                 const exchanges = llmExchangesForStep(step);
                 const groupedSqlExchanges = sqlExchangeGroups(step, exchanges);
                 const failedSql = failedSqlForStep(step);
+                const hasExchangeSql = exchanges.some((exchange) => Boolean(exchangeSqlFromResponse(exchange.response)));
                 return (
                   <>
               <div className="flex items-center justify-between gap-2">
@@ -394,6 +411,7 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                               key={`${group.key}-exchange-${exchange.index}`}
                               exchange={exchange}
                               exchangeLabel={group.exchanges.length > 1 ? `LLM Exchange ${exchangeIndex + 1}` : "LLM Exchange"}
+                              stageFailed={step.status === "blocked"}
                             />
                           ))}
                         </div>
@@ -407,28 +425,21 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                         key={`llm-entry-${exchange.index}`}
                         exchange={exchange}
                         exchangeLabel={exchanges.length > 1 ? `LLM Exchange ${index + 1}` : "LLM Exchange"}
+                        stageFailed={step.status === "blocked"}
                       />
                     ))}
                   </div>
                 )
               ) : null}
-              {failedSql ? (
+              {failedSql && !hasExchangeSql ? (
                 <div className="mt-3 rounded-lg border border-rose-200 bg-rose-50 p-3">
                   <p className="text-[11px] font-semibold uppercase tracking-wide text-rose-700">Failed SQL</p>
                   <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
                     <code>{failedSql}</code>
                   </pre>
                 </div>
-              ) : step.status === "blocked" ? (
+              ) : step.status === "blocked" && !hasExchangeSql ? (
                 <p className="mt-3 text-xs text-slate-600">No SQL was attempted in this blocked path.</p>
-              ) : null}
-              {step.sql ? (
-                <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-                  <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">Executed SQL</p>
-                  <pre className="mt-2 max-h-56 overflow-auto rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
-                    <code>{step.sql}</code>
-                  </pre>
-                </div>
               ) : null}
               {step.stageInput || step.stageOutput ? (
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
