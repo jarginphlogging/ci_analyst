@@ -104,14 +104,14 @@ function sqlPlanSteps(step: TraceStep): SqlPlanStepMeta[] {
   const ids = step.stageInput?.planStepIds;
   const goals = step.stageInput?.planGoals;
   if (!Array.isArray(ids)) return [];
-  return ids
-    .map((id, index) => {
-      const resolvedId = asStringValue(id);
-      if (!resolvedId) return null;
-      const goalCandidate = Array.isArray(goals) ? goals[index] : undefined;
-      return { id: resolvedId, goal: asStringValue(goalCandidate) };
-    })
-    .filter((item): item is SqlPlanStepMeta => item !== null);
+  const steps: SqlPlanStepMeta[] = [];
+  ids.forEach((id, index) => {
+    const resolvedId = asStringValue(id);
+    if (!resolvedId) return;
+    const goalCandidate = Array.isArray(goals) ? goals[index] : undefined;
+    steps.push({ id: resolvedId, goal: asStringValue(goalCandidate) });
+  });
+  return steps;
 }
 
 function llmExchangesForStep(step: TraceStep): LlmExchange[] {

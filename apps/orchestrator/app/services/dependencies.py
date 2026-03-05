@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 import json
 from time import perf_counter
-from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
 from pydantic import BaseModel
@@ -16,12 +15,6 @@ from app.models import (
     ValidationResult,
 )
 from app.providers.factory import build_provider_bundle
-from app.providers.mock_provider import (
-    mock_build_response,
-    mock_create_plan,
-    mock_run_sql,
-    mock_validate_results,
-)
 from app.providers.protocols import AnalystFn, LlmFn, SqlFn
 from app.services.llm_json import parse_json_object
 from app.services.llm_schemas import (
@@ -44,47 +37,6 @@ ProgressCallback = Optional[Callable[[str], Optional[Awaitable[None]]]]
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class MockDependencies:
-    async def create_plan(
-        self,
-        request: ChatTurnRequest,
-        history: list[str],  # noqa: ARG002
-    ) -> TurnExecutionContext:
-        plan = await mock_create_plan(request)
-        return TurnExecutionContext(plan=plan)
-
-    async def run_sql(
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        history: list[str],  # noqa: ARG002
-        progress_callback: ProgressCallback = None,  # noqa: ARG002
-    ) -> list[SqlExecutionResult]:
-        return await mock_run_sql(request, context.plan)
-
-    async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult:
-        return await mock_validate_results(results)
-
-    async def build_response(
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,  # noqa: ARG002
-        results: list[SqlExecutionResult],
-        history: list[str],  # noqa: ARG002
-    ) -> AgentResponse:
-        return await mock_build_response(request, results)
-
-    async def build_fast_response(
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,  # noqa: ARG002
-        results: list[SqlExecutionResult],
-        history: list[str],  # noqa: ARG002
-    ) -> AgentResponse:
-        return await mock_build_response(request, results)
-
-
 class RealDependencies:
     def __init__(
         self,
@@ -96,10 +48,7 @@ class RealDependencies:
     ) -> None:
         provider_bundle = None
         if llm_fn is None or sql_fn is None or analyst_fn is None:
-            mode = settings.provider_mode
-            if mode == "mock":
-                mode = "prod"
-            provider_bundle = build_provider_bundle(mode)
+            provider_bundle = build_provider_bundle(settings.provider_mode)
         self._llm_fn = llm_fn or (provider_bundle.llm_fn if provider_bundle else None)
         self._sql_fn = sql_fn or (provider_bundle.sql_fn if provider_bundle else None)
         self._analyst_fn = analyst_fn if analyst_fn is not None else (
@@ -125,8 +74,6 @@ class RealDependencies:
             return "azure_openai"
         if "anthropic" in module_name:
             return "anthropic"
-        if "mock_provider" in module_name:
-            return "mock"
         mode = settings.provider_mode.strip().lower()
         if mode == "prod":
             return "azure_openai"
@@ -173,7 +120,7 @@ class RealDependencies:
         schema_name: str,
     ) -> dict[str, Any]:
         raw_response: str | None = None
-        structured_mode = settings.provider_mode in {"sandbox", "prod"}
+        structured_mode = True
         started_at = perf_counter()
         stage_name = "unknown_stage"
         stage_metadata: dict[str, Any] = {}
@@ -220,23 +167,8 @@ class RealDependencies:
             else:
                 raise RuntimeError("LLM provider returned unsupported response type.")
 
-            try:
-                parsed_model = output_model.model_validate(payload)
-                parsed_response = parsed_model.model_dump(mode="json", exclude_none=True)
-            except Exception as validation_error:
-                if structured_mode:
-                    raise
-                logger.warning(
-                    "Mock-mode LLM payload failed schema validation; accepting best-effort payload",
-                    extra={
-                        "event": "llm.call.mock_schema_relaxed",
-                        "provider": settings.provider_mode,
-                        "stage": stage_name,
-                        "schemaName": schema_name,
-                        "error": str(validation_error),
-                    },
-                )
-                parsed_response = payload
+            parsed_model = output_model.model_validate(payload)
+            parsed_response = parsed_model.model_dump(mode="json", exclude_none=True)
             record_llm_trace(
                 provider=self._llm_provider_label,
                 system_prompt=system_prompt,
@@ -443,8 +375,6 @@ class RealDependencies:
 
 
 def create_dependencies() -> OrchestratorDependencies:
-    if settings.provider_mode == "mock":
-        return MockDependencies()
     provider_bundle = build_provider_bundle(settings.provider_mode)
     return RealDependencies(
         llm_fn=provider_bundle.llm_fn,

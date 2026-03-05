@@ -37,10 +37,7 @@ def _run_async(coro):
 
 @lru_cache(maxsize=1)
 def _sql_executor():
-    mode = settings.provider_mode
-    if mode == "mock":
-        mode = "sandbox"
-    bundle = build_provider_bundle(mode)
+    bundle = build_provider_bundle(settings.provider_mode)
     return bundle.sql_fn
 
 

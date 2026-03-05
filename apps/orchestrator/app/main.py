@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from time import perf_counter
@@ -31,18 +30,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="CI Analyst Orchestrator", version="0.1.0")
 orchestrator = ConversationalOrchestrator(create_dependencies())
-
-
-def _event_delay_seconds(event_type: str) -> float:
-    if settings.provider_mode != "mock":
-        return 0.0
-    if event_type == "status":
-        return max(settings.mock_stream_status_delay_ms, 0) / 1000
-    if event_type == "answer_delta":
-        return max(settings.mock_stream_token_delay_ms, 0) / 1000
-    if event_type == "response":
-        return max(settings.mock_stream_response_delay_ms, 0) / 1000
-    return 0.0
 
 
 @app.middleware("http")
@@ -165,9 +152,6 @@ async def chat_stream(request: ChatTurnRequest):
                         DoneEvent(**event)
 
                     yield f"{json.dumps(event)}\n"
-                    delay_seconds = _event_delay_seconds(event_type or "")
-                    if delay_seconds > 0:
-                        await asyncio.sleep(delay_seconds)
             except Exception as error:  # noqa: BLE001
                 logger.exception(
                     "Chat stream failed",

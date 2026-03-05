@@ -61,7 +61,6 @@ class Settings:
     port: int = int(os.getenv("PORT", "8787"))
     log_level: str = _as_nonempty(os.getenv("LOG_LEVEL"), "INFO").upper()
     provider_mode_raw: Optional[str] = os.getenv("PROVIDER_MODE")
-    use_mock_providers: bool = _as_bool(os.getenv("USE_MOCK_PROVIDERS"), True)
 
     azure_openai_endpoint: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
     azure_openai_api_key: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")
@@ -127,16 +126,15 @@ class Settings:
     sql_max_attempts: int = max(1, _as_int(os.getenv("SQL_MAX_ATTEMPTS"), 3))
     real_llm_temperature: float = _as_float(os.getenv("REAL_LLM_TEMPERATURE"), 0.1)
     real_llm_max_tokens: int = _as_int(os.getenv("REAL_LLM_MAX_TOKENS"), 1400)
-    mock_stream_status_delay_ms: int = _as_int(os.getenv("MOCK_STREAM_STATUS_DELAY_MS"), 700)
-    mock_stream_token_delay_ms: int = _as_int(os.getenv("MOCK_STREAM_TOKEN_DELAY_MS"), 120)
-    mock_stream_response_delay_ms: int = _as_int(os.getenv("MOCK_STREAM_RESPONSE_DELAY_MS"), 450)
 
     @property
     def provider_mode(self) -> str:
         raw = (self.provider_mode_raw or "").strip().lower()
-        if raw in {"mock", "sandbox", "prod"}:
+        if raw in {"sandbox", "prod"}:
             return raw
-        return "mock" if self.use_mock_providers else "prod"
+        if raw == "production":
+            return "prod"
+        return "sandbox"
 
     def has_azure_credentials(self) -> bool:
         if not self.azure_openai_endpoint or not self.azure_openai_deployment:

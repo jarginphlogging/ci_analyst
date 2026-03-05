@@ -19,6 +19,6 @@ def test_build_provider_bundle_for_sandbox() -> None:
     assert bundle.analyst_fn
 
 
-def test_build_provider_bundle_rejects_mock_mode() -> None:
+def test_build_provider_bundle_rejects_unknown_mode() -> None:
     with pytest.raises(RuntimeError):
-        build_provider_bundle("mock")
+        build_provider_bundle("invalid")

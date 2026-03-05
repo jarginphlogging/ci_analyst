@@ -59,10 +59,8 @@ async def test_parallel_sql_execution_preserves_plan_order() -> None:
 
     original_parallel_limit = settings.real_max_parallel_queries
     original_provider_mode_raw = settings.provider_mode_raw
-    original_use_mock_providers = settings.use_mock_providers
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
-        object.__setattr__(settings, "use_mock_providers", False)
         object.__setattr__(settings, "real_max_parallel_queries", 2)
         results, assumptions = await stage.run_sql(
             message="run parallel query steps",
@@ -72,7 +70,6 @@ async def test_parallel_sql_execution_preserves_plan_order() -> None:
     finally:
         object.__setattr__(settings, "real_max_parallel_queries", original_parallel_limit)
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
-        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
 
     assert peak_active_calls > 1
     assert [row.rows[0]["segment"] for row in results] == ["step-a", "step-b", "step-c"]
@@ -422,10 +419,8 @@ async def test_sql_stage_respects_serial_dependencies() -> None:
     ]
 
     original_provider_mode_raw = settings.provider_mode_raw
-    original_use_mock_providers = settings.use_mock_providers
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
-        object.__setattr__(settings, "use_mock_providers", False)
         await stage.run_sql(
             message="Top stores and then repeat/new mix",
             plan=plan,
@@ -433,7 +428,6 @@ async def test_sql_stage_respects_serial_dependencies() -> None:
         )
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
-        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
 
     assert execution_order[:2] == ["step-1", "step-2"]
 
@@ -610,10 +604,8 @@ async def test_sql_stage_resolves_textual_depends_on_references() -> None:
     ]
 
     original_provider_mode_raw = settings.provider_mode_raw
-    original_use_mock_providers = settings.use_mock_providers
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
-        object.__setattr__(settings, "use_mock_providers", False)
         await stage.run_sql(
             message="top and bottom stores with new vs repeat mix and last year comparison",
             plan=plan,
@@ -621,7 +613,6 @@ async def test_sql_stage_resolves_textual_depends_on_references() -> None:
         )
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
-        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
 
     assert execution_order[:3] == ["step-1", "step-2", "step-3"]
 
@@ -667,10 +658,8 @@ async def test_sql_stage_parallel_dispatch_on_prod_target() -> None:
     ]
 
     original_provider_mode_raw = settings.provider_mode_raw
-    original_use_mock_providers = settings.use_mock_providers
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
-        object.__setattr__(settings, "use_mock_providers", False)
         results, _ = await stage.run_sql(
             message="run independent query steps",
             plan=plan,
@@ -678,7 +667,6 @@ async def test_sql_stage_parallel_dispatch_on_prod_target() -> None:
         )
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
-        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
 
     assert peak_active_calls > 1
     assert [row.rows[0]["segment"] for row in results] == ["step-a", "step-b", "step-c"]

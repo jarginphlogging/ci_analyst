@@ -126,7 +126,7 @@ def _build_household_rows() -> list[tuple[Any, ...]]:
                     5200 + state_index * 130 + td_suffix * 17,
                 )
             )
-    # Keep semantic-model sample value represented in the mock dataset.
+    # Keep semantic-model sample value represented in the seeded sandbox dataset.
     rows.append(
         (
             "6182655",

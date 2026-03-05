@@ -383,7 +383,7 @@ function isFailureResponse(response: AgentResponse): boolean {
   return (response.trace ?? []).some((step) => step.status === "blocked");
 }
 
-type EnvironmentLabel = "Mock" | "Sandbox" | "Production";
+type EnvironmentLabel = "Sandbox" | "Production";
 
 interface AgentWorkspaceProps {
   initialEnvironment: EnvironmentLabel;
@@ -392,7 +392,7 @@ interface AgentWorkspaceProps {
 type ResponseFeedback = "up" | "down";
 
 function isEnvironmentLabel(value: unknown): value is EnvironmentLabel {
-  return value === "Mock" || value === "Sandbox" || value === "Production";
+  return value === "Sandbox" || value === "Production";
 }
 
 export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {

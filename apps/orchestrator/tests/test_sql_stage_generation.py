@@ -28,10 +28,8 @@ async def test_sql_step_generator_falls_back_to_llm_when_sandbox_analyst_fails()
     step = QueryPlanStep(id="step-1", goal="Show spend by state")
 
     original_provider_mode_raw = settings.provider_mode_raw
-    original_use_mock_providers = settings.use_mock_providers
     try:
         object.__setattr__(settings, "provider_mode_raw", "sandbox")
-        object.__setattr__(settings, "use_mock_providers", False)
         generated = await generator.generate(
             index=0,
             message="Show spend by state",
@@ -43,7 +41,6 @@ async def test_sql_step_generator_falls_back_to_llm_when_sandbox_analyst_fails()
         )
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
-        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)
 
     assert generated.provider == "llm"
     assert generated.status == "sql_ready"

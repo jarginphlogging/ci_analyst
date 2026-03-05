@@ -60,12 +60,9 @@ def test_guard_sql_does_not_rewrite_qualified_table_names_in_prod_mode() -> None
     )
 
     original_provider_mode_raw = settings.provider_mode_raw
-    original_use_mock_providers = settings.use_mock_providers
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
-        object.__setattr__(settings, "use_mock_providers", False)
         with pytest.raises(ValueError):
             guard_sql(sql, model)
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
-        object.__setattr__(settings, "use_mock_providers", original_use_mock_providers)

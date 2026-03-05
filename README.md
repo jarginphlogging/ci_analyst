@@ -10,12 +10,11 @@ Production-oriented monorepo for a fast, explainable conversational analytics ag
 This repo supports:
 - Streamed responses
 - Deterministic workflow + bounded agentic reasoning
-- Three interchangeable provider modes (`mock`, `sandbox`, `prod`) switched by env only
+- Two provider modes (`sandbox`, `prod`) switched by env only
 - In-UI tabular data explorer with CSV/JSON export
 
 ## Current Backend Status
 
-- Mock mode is fully implemented for local UX/demo/testing.
 - Sandbox mode is implemented for realistic local e2e testing:
   - Anthropic API as LLM
   - local pseudo-Cortex Analyst REST shim (`message -> sql -> light response`)
@@ -79,11 +78,11 @@ This runs in the orchestrator workspace to ensure installs and runtime use the s
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
 - `/Users/joe/Code/ci_analyst/apps/web/.env.local`
 
-For quick local mock startup, set:
-- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `PROVIDER_MODE=mock`
-- `/Users/joe/Code/ci_analyst/apps/web/.env.local`: `WEB_BACKEND_MODE=web_mock`
+For local end-to-end startup, set:
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `PROVIDER_MODE=sandbox`
+- `/Users/joe/Code/ci_analyst/apps/web/.env.local`: `WEB_BACKEND_MODE=orchestrator`
 
-5. Run orchestrator in mock mode (Python FastAPI):
+5. Run orchestrator (Python FastAPI):
 ```bash
 npm run dev:orchestrator
 ```
@@ -94,7 +93,7 @@ cd /Users/joe/Code/ci_analyst/apps/orchestrator
 python -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
-6. In another shell, run frontend in mock mode:
+6. In another shell, run frontend:
 ```bash
 npm run dev:web
 ```
@@ -111,9 +110,6 @@ Frontend env file:
 - `/Users/joe/Code/ci_analyst/apps/web/.env.local`
 
 Optional reference templates:
-- Mock:
-  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.mock`
-  - `/Users/joe/Code/ci_analyst/apps/web/.env.web-mock`
 - Sandbox:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox`
   - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator`
@@ -184,10 +180,6 @@ The frontend uses `POST /api/chat/stream` and incrementally renders:
 - final structured response payload
 
 Protocol: `application/x-ndjson`
-
-To slow mock streaming for demos, tune:
-- `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`: `MOCK_STREAM_STATUS_DELAY_MS`, `MOCK_STREAM_TOKEN_DELAY_MS`, `MOCK_STREAM_RESPONSE_DELAY_MS`
-- `/Users/joe/Code/ci_analyst/apps/web/.env.local`: `WEB_MOCK_STATUS_DELAY_MS`, `WEB_MOCK_TOKEN_DELAY_MS`, `WEB_MOCK_RESPONSE_DELAY_MS`
 
 ## Switching to Real Providers (Work Machine)
 

@@ -18,7 +18,6 @@ FastAPI orchestration service for conversational analytics.
 6. carry forward bounded prior-turn context into plan/sql/response prompts
 
 Provider modes:
-- `mock`: static deterministic demo responses
 - `sandbox`: Anthropic LLM + local Cortex-compatible REST + local SQLite data
 - `prod`: Azure OpenAI + Snowflake Cortex Analyst + Snowflake Python Connector
 
@@ -62,7 +61,6 @@ python -m pip install -r requirements.txt
 ```
 
 Environment templates:
-- `.env.mock`
 - `.env.sandbox`
 - `.env.prod`
 
@@ -120,14 +118,6 @@ npm --workspace @ci/orchestrator run test
 - SQL policy checks: `app/services/sql_guardrails.py`
 - semantic model loader: `app/services/semantic_model.py`
 
-## Mock Streaming Controls
-
-Set these in `.env` to slow down and visualize the live run:
-
-- `MOCK_STREAM_STATUS_DELAY_MS` (default `700`)
-- `MOCK_STREAM_TOKEN_DELAY_MS` (default `120`)
-- `MOCK_STREAM_RESPONSE_DELAY_MS` (default `450`)
-
 ## SQL Execution Concurrency
 
 Execution behavior:
@@ -151,9 +141,5 @@ SQL retry/tracing contract:
 
 Set in `.env`:
 
-- `PROVIDER_MODE=mock` (default)
 - `PROVIDER_MODE=sandbox` (local end-to-end testing without enterprise services)
 - `PROVIDER_MODE=prod` (Azure/Snowflake/Cortex)
-
-Backward-compat note:
-- if `PROVIDER_MODE` is omitted, `USE_MOCK_PROVIDERS=true` maps to `mock`, `false` maps to `prod`.

@@ -71,7 +71,7 @@ Response:
 {
   "status": "ok",
   "timestamp": "...",
-  "providerMode": "mock|sandbox|prod"
+  "providerMode": "sandbox|prod"
 }
 ```
 
@@ -123,9 +123,7 @@ Raw SQL execution endpoint used by the sandbox SQL adapter.
 
 ## Frontend API Routes
 
-- `/api/chat` -> turn route (proxy/fallback)
-- `/api/chat/stream` -> stream route (proxy/fallback)
+- `/api/chat` -> turn route proxy
+- `/api/chat/stream` -> stream route proxy
 
-Both routes support:
-- web mock mode (`WEB_BACKEND_MODE=web_mock`)
-- orchestrator proxy mode (`WEB_BACKEND_MODE=orchestrator`, `ORCHESTRATOR_URL` set)
+Both routes use orchestrator proxy mode (`WEB_BACKEND_MODE=orchestrator`, `ORCHESTRATOR_URL` set).

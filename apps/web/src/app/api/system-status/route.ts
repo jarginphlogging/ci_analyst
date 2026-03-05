@@ -1,18 +1,17 @@
 import { serverEnv } from "@/lib/server-env";
 
-type EnvironmentLabel = "Mock" | "Sandbox" | "Production";
+type EnvironmentLabel = "Sandbox" | "Production";
 
 function mapProviderModeToEnvironment(providerMode: unknown): EnvironmentLabel | null {
   if (typeof providerMode !== "string") return null;
   const normalized = providerMode.trim().toLowerCase();
-  if (normalized === "mock") return "Mock";
   if (normalized === "sandbox") return "Sandbox";
   if (normalized === "prod" || normalized === "production") return "Production";
   return null;
 }
 
 function fallbackEnvironment(): EnvironmentLabel {
-  return serverEnv.WEB_BACKEND_MODE === "web_mock" ? "Mock" : "Sandbox";
+  return "Sandbox";
 }
 
 export async function GET() {
