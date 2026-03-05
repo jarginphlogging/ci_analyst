@@ -174,6 +174,7 @@ async def test_planner_prompt_includes_general_step_minimization_policy() -> Non
     assert decision.stop_reason == "none"
     assert "Output exactly one task when the question targets a single result set" in captured_system_prompt
     assert "Split when any of these apply" in captured_system_prompt
+    assert "Counterexample: when the same metric set is requested at the same grain across two periods" in captured_system_prompt
 
 
 @pytest.mark.asyncio
@@ -238,3 +239,25 @@ async def test_planner_normalizes_depends_on_to_prior_step_ids() -> None:
     assert decision.steps[0].dependsOn == []
     assert decision.steps[1].dependsOn == ["step_1"]
     assert decision.steps[2].dependsOn == ["step_1", "step_2"]
+
+
+@pytest.mark.asyncio
+async def test_planner_infers_temporal_scope_for_last_n_months() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "relevance": "in_domain",
+            "relevanceReason": "In scope trend request.",
+            "presentationIntent": {"displayType": "chart", "chartType": "line"},
+            "tooComplex": False,
+            "tasks": [{"task": "Show new vs repeat customers by month for the last 6 months."}],
+        }
+
+    stage = PlannerStage(model=load_semantic_model(), ask_llm_json=fake_ask_llm_json)
+    decision = await stage.create_plan("Show me new vs repeat customers by month for the last 6 months.", [])
+
+    assert decision.stop_reason == "none"
+    assert decision.temporal_scope is not None
+    assert decision.temporal_scope.unit == "month"
+    assert decision.temporal_scope.count == 6
+    assert decision.temporal_scope.granularity == "month"

@@ -1,0 +1,19 @@
+{
+  "status": "ok",
+  "query": "Show me new vs repeat customers by month for the last 6 months.",
+  "requestFailedVisible": false,
+  "hasMay2025Label": false,
+  "hasJun2025Label": false,
+  "monthsFromDataTables": [
+    "2025-07",
+    "2025-08",
+    "2025-09",
+    "2025-10",
+    "2025-11",
+    "2025-12"
+  ],
+  "monthCount": 6,
+  "firstMonth": "2025-07",
+  "lastMonth": "2025-12",
+  "answerSnippet": "Over the last six months (July–December 2025), repeat customers consistently outnumbered new customers each month, with repeat customers ranging from 1.53M to 1.63M and new customers ranging from 1.16M to 1.24M. Both seg"
+}

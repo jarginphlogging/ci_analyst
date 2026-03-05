@@ -13,7 +13,9 @@ def _extract_context_payload(prompt_text: str) -> dict[str, object]:
     prefix = "Synthesis context package:\n"
     suffix = "\n\nPopulate these structured fields:"
     start = prompt_text.index(prefix) + len(prefix)
-    end = prompt_text.index(suffix, start)
+    end = prompt_text.find(suffix, start)
+    if end == -1:
+        return json.loads(prompt_text[start:].strip())
     return json.loads(prompt_text[start:end].strip())
 
 
@@ -211,6 +213,76 @@ async def test_synthesis_stage_formats_comparison_period_labels_and_deltas() -> 
 
 
 @pytest.mark.asyncio
+async def test_synthesis_stage_includes_ranking_evidence_in_context_payload() -> None:
+    captured_prompts: dict[str, str] = {}
+
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        captured_prompts["user"] = str(kwargs.get("user_prompt", ""))
+        return {
+            "answer": "State ranking is available in descending order.",
+            "whyItMatters": "Concentration can be reviewed from the ranked evidence.",
+            "confidence": "high",
+            "confidenceReason": "Ranking rows are complete for all returned states.",
+            "summaryCards": [{"label": "States", "value": "8"}],
+            "chartConfig": None,
+            "tableConfig": {
+                "style": "ranked",
+                "columns": [
+                    {"key": "transaction_state", "label": "State", "format": "string", "align": "left"},
+                    {"key": "total_sales", "label": "Total Sales", "format": "currency", "align": "right"},
+                ],
+                "sortBy": "total_sales",
+                "sortDir": "desc",
+                "showRank": True,
+            },
+            "insights": [{"title": "Ranking ready", "detail": "Top and bottom rows are available.", "importance": "medium"}],
+            "suggestedQuestions": ["Q1", "Q2", "Q3"],
+            "assumptions": [],
+        }
+
+    stage = SynthesisStage(ask_llm_json=fake_ask_llm_json)
+    results = [
+        SqlExecutionResult(
+            sql="SELECT transaction_state, total_sales FROM ranked_state_sales",
+            rows=[
+                {"transaction_state": "UT", "total_sales": 950.0},
+                {"transaction_state": "CT", "total_sales": 900.0},
+                {"transaction_state": "OK", "total_sales": 850.0},
+                {"transaction_state": "OR", "total_sales": 800.0},
+                {"transaction_state": "AL", "total_sales": 750.0},
+                {"transaction_state": "TX", "total_sales": 700.0},
+                {"transaction_state": "NY", "total_sales": 650.0},
+                {"transaction_state": "CA", "total_sales": 600.0},
+            ],
+            rowCount=8,
+        )
+    ]
+
+    _ = await stage.build_response(
+        message="Show me sales by state in descending order.",
+        plan=[],
+        presentation_intent=PresentationIntent(displayType="table", tableStyle="ranked"),
+        results=results,
+        prior_assumptions=[],
+        history=[],
+    )
+
+    context = _extract_context_payload(captured_prompts["user"])
+    ranking_evidence = context.get("rankingEvidence")
+    assert isinstance(ranking_evidence, dict)
+    assert ranking_evidence["dimensionKey"] == "transaction_state"
+    assert ranking_evidence["valueKey"] == "total_sales"
+    assert ranking_evidence["sortDir"] == "desc"
+    assert ranking_evidence["entityCount"] == 8
+    assert ranking_evidence["topRows"][0]["rank"] == 1
+    assert ranking_evidence["topRows"][0]["transaction_state"] == "UT"
+    assert ranking_evidence["topRows"][1]["rank"] == 2
+    assert ranking_evidence["topRows"][1]["transaction_state"] == "CT"
+    assert ranking_evidence["bottomRows"][-1]["rank"] == 8
+    assert ranking_evidence["bottomRows"][-1]["transaction_state"] == "CA"
+
+
+@pytest.mark.asyncio
 async def test_synthesis_stage_accepts_stacked_area_chart_config() -> None:
     async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
         _ = kwargs
@@ -379,3 +451,65 @@ async def test_synthesis_stage_infers_comparison_keys_when_llm_config_is_invalid
     assert response.tableConfig.style == "comparison"
     assert len(response.tableConfig.comparisonKeys) >= 2
     assert response.tableConfig.baselineKey in response.tableConfig.comparisonKeys
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stage_rejects_mixed_metric_family_comparison_keys() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "answer": "Q4 performance improved.",
+            "whyItMatters": "Comparison highlights movement.",
+            "confidence": "high",
+            "chartConfig": None,
+            "tableConfig": {
+                "style": "comparison",
+                "columns": [
+                    {"key": "sales_2024", "label": "Sales 2024", "format": "number", "align": "right"},
+                    {"key": "sales_2025", "label": "Sales 2025", "format": "number", "align": "right"},
+                    {"key": "transactions_2024", "label": "Transactions 2024", "format": "number", "align": "right"},
+                    {"key": "transactions_2025", "label": "Transactions 2025", "format": "number", "align": "right"},
+                ],
+                "comparisonMode": "baseline",
+                "comparisonKeys": ["sales_2024", "sales_2025", "transactions_2024", "transactions_2025"],
+                "baselineKey": "sales_2024",
+                "deltaPolicy": "both",
+            },
+            "insights": [{"title": "Largest move", "detail": "Sales and transactions are both up.", "importance": "high"}],
+            "suggestedQuestions": ["Q1", "Q2", "Q3"],
+            "assumptions": [],
+        }
+
+    stage = SynthesisStage(ask_llm_json=fake_ask_llm_json)
+    results = [
+        SqlExecutionResult(
+            sql=(
+                "SELECT sales_2024, sales_2025, transactions_2024, transactions_2025, "
+                "avg_sale_amount_2024, avg_sale_amount_2025"
+            ),
+            rows=[
+                {
+                    "sales_2024": 259073236.5,
+                    "sales_2025": 301732926.9,
+                    "transactions_2024": 7435140,
+                    "transactions_2025": 8428740,
+                    "avg_sale_amount_2024": 34.84,
+                    "avg_sale_amount_2025": 35.8,
+                }
+            ],
+            rowCount=1,
+        )
+    ]
+
+    response = await stage.build_response(
+        message="What were my sales, transactions, and average sale amount for Q4 2025 compared to the same period last year?",
+        plan=[],
+        presentation_intent=PresentationIntent(displayType="table", tableStyle="comparison"),
+        results=results,
+        prior_assumptions=[],
+        history=[],
+    )
+
+    assert response.tableConfig is not None
+    assert response.tableConfig.style != "comparison"
+    assert response.tableConfig.comparisonKeys == []

@@ -77,6 +77,63 @@ def _metric_unit(column_name: str) -> Literal["currency", "number", "percent"]:
     return "number"
 
 
+def _normalized_tokens(text: str) -> list[str]:
+    return [token for token in re.split(r"[^a-z0-9]+", text.lower()) if token]
+
+
+def _periodized_metric_signature(column_name: str) -> tuple[str, str] | None:
+    tokens = _normalized_tokens(column_name)
+    if len(tokens) < 2:
+        return None
+
+    year_indexes = [
+        index
+        for index, token in enumerate(tokens)
+        if re.fullmatch(r"(?:19|20)\d{2}", token) or re.fullmatch(r"y(?:19|20)\d{2}", token)
+    ]
+    if not year_indexes:
+        return None
+
+    quarter_indexes = [index for index, token in enumerate(tokens) if re.fullmatch(r"q[1-4]", token)]
+    year_index = year_indexes[-1]
+    year_token = tokens[year_index][-4:]
+    quarter_index = next((index for index in quarter_indexes if abs(index - year_index) == 1), None)
+
+    remove_indexes = {year_index}
+    if quarter_index is not None:
+        remove_indexes.add(quarter_index)
+        period_token = f"{tokens[quarter_index]}_{year_token}"
+    else:
+        period_token = year_token
+
+    metric_tokens = [token for index, token in enumerate(tokens) if index not in remove_indexes]
+    if not metric_tokens:
+        return None
+    return "_".join(metric_tokens), period_token
+
+
+def _period_token_sort_key(token: str) -> tuple[int, int, str]:
+    lowered = token.lower().strip()
+    quarter_match = re.fullmatch(r"q([1-4])_((?:19|20)\d{2})", lowered)
+    if quarter_match:
+        return (int(quarter_match.group(2)), int(quarter_match.group(1)), lowered)
+    year_match = re.fullmatch(r"(?:19|20)\d{2}", lowered)
+    if year_match:
+        return (int(year_match.group(0)), 5, lowered)
+    return (0, 0, lowered)
+
+
+def _period_token_label(token: str) -> str:
+    lowered = token.lower().strip()
+    quarter_match = re.fullmatch(r"q([1-4])_((?:19|20)\d{2})", lowered)
+    if quarter_match:
+        return f"Q{quarter_match.group(1)} {quarter_match.group(2)}"
+    year_match = re.fullmatch(r"(?:19|20)\d{2}", lowered)
+    if year_match:
+        return year_match.group(0)
+    return token.replace("_", " ").strip() or token
+
+
 def _find_column(columns: list[str], candidates: list[str]) -> Optional[str]:
     lowered = {column.lower(): column for column in columns}
     for candidate in candidates:
@@ -866,6 +923,7 @@ def build_fact_comparison_signals(
                 or "prior period"
             )
             metrics_for_step: dict[str, float] = {}
+            periodized_metrics: dict[str, list[tuple[str, float, str]]] = {}
             for column in profile.metric_columns[:8]:
                 lowered_column = column.strip().lower()
                 if lowered_column.startswith(("comparison_", "prior_", "previous_")):
@@ -874,6 +932,10 @@ def build_fact_comparison_signals(
                 if value is None:
                     continue
                 metrics_for_step[column] = float(value)
+                signature = _periodized_metric_signature(column)
+                if signature is not None:
+                    metric_root, period_token = signature
+                    periodized_metrics.setdefault(metric_root, []).append((period_token, float(value), column))
                 raw_facts.append(
                     {
                         "id": f"fact_s{step_index}_{column}",
@@ -921,6 +983,42 @@ def build_fact_comparison_signals(
                                 columnRefs=[column, prior_column] if prior_column else [column],
                                 timeWindow=f"{prior_period} -> {current_period}",
                                 aggregationType="single_row_paired_columns",
+                            )
+                        ],
+                    }
+                )
+
+            for metric_root, entries in periodized_metrics.items():
+                if len(entries) < 2:
+                    continue
+                ordered_entries = sorted(entries, key=lambda item: _period_token_sort_key(item[0]))
+                prior_period_token, prior_value, prior_column = ordered_entries[-2]
+                current_period_token, current_value, current_column = ordered_entries[-1]
+                if prior_period_token == current_period_token:
+                    continue
+                abs_delta = current_value - prior_value
+                pct_delta = (abs_delta / prior_value * 100.0) if prior_value != 0 else None
+                raw_comparisons.append(
+                    {
+                        "id": f"cmp_s{step_index}_{metric_root}_{prior_period_token}_{current_period_token}",
+                        "metric": metric_root,
+                        "priorPeriod": _period_token_label(prior_period_token),
+                        "currentPeriod": _period_token_label(current_period_token),
+                        "priorValue": prior_value,
+                        "currentValue": current_value,
+                        "absDelta": abs_delta,
+                        "pctDelta": pct_delta,
+                        "compatibilityReason": "Paired metric-family columns with explicit period tokens in one-row output.",
+                        "intent": _intent_alignment_score(metric_root, message),
+                        "completeness": 1.0,
+                        "reliability": 0.9,
+                        "period_compatibility": 1.0,
+                        "provenance": [
+                            EvidenceProvenance(
+                                stepIndex=step_index,
+                                columnRefs=[prior_column, current_column],
+                                timeWindow=f"{_period_token_label(prior_period_token)} -> {_period_token_label(current_period_token)}",
+                                aggregationType="single_row_periodized_columns",
                             )
                         ],
                     }

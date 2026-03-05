@@ -131,14 +131,19 @@ class SqlStepGenerator:
         conversation_id: str,
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None,
+        temporal_scope: dict[str, Any] | None,
     ) -> GeneratedStep:
         if self._analyst_fn is None:
             raise RuntimeError("Analyst provider is not configured.")
 
+        analyst_history = list(history)
+        if temporal_scope:
+            analyst_history.append(f"Planner temporal scope contract: {json.dumps(temporal_scope, ensure_ascii=True)}")
+
         analyst_request = {
             "conversation_id": f"{conversation_id}::sub::{step.id}",
             "message": step.goal,
-            "history": history,
+            "history": analyst_history,
             "step_id": step.id,
             "retry_feedback": retry_feedback or [],
         }
@@ -150,6 +155,7 @@ class SqlStepGenerator:
             prior_sql,
             history,
             retry_feedback=retry_feedback,
+            temporal_scope=temporal_scope,
         )
 
         with llm_trace_stage(
@@ -173,7 +179,7 @@ class SqlStepGenerator:
                 analyst_payload_raw = await self._analyst_fn(
                     conversation_id=str(analyst_request["conversation_id"]),
                     message=str(analyst_request["message"]),
-                    history=history,
+                    history=analyst_history,
                     step_id=step.id,
                     retry_feedback=retry_feedback or [],
                 )
@@ -325,6 +331,7 @@ class SqlStepGenerator:
         prior_sql: list[str],
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None,
+        temporal_scope: dict[str, Any] | None,
     ) -> GeneratedStep:
         sql_text = ""
         rationale = ""
@@ -344,6 +351,7 @@ class SqlStepGenerator:
                 prior_sql,
                 history,
                 retry_feedback=retry_feedback,
+                temporal_scope=temporal_scope,
             )
             with llm_trace_stage(
                 "sql_generation",
@@ -450,6 +458,7 @@ class SqlStepGenerator:
         conversation_id: str,
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None = None,
+        temporal_scope: dict[str, Any] | None = None,
     ) -> GeneratedStep:
         generated: GeneratedStep
         if self._analyst_fn is not None:
@@ -462,6 +471,7 @@ class SqlStepGenerator:
                     conversation_id=conversation_id,
                     attempt_number=attempt_number,
                     retry_feedback=retry_feedback,
+                    temporal_scope=temporal_scope,
                 )
             except Exception as error:
                 logger.exception(
@@ -509,6 +519,7 @@ class SqlStepGenerator:
                 prior_sql=prior_sql,
                 attempt_number=attempt_number,
                 retry_feedback=retry_feedback,
+                temporal_scope=temporal_scope,
             )
 
         return GeneratedStep(

@@ -6,7 +6,7 @@ import re
 import pytest
 
 from app.config import settings
-from app.models import QueryPlanStep
+from app.models import QueryPlanStep, TemporalScope
 from app.services.semantic_model import load_semantic_model
 from app.services.stages.sql_stage import SqlExecutionStage, SqlGenerationBlockedError
 
@@ -236,6 +236,62 @@ async def test_sql_stage_surfaces_execution_timeout_without_generation_retry() -
     retry_feedback = blocked.value.detail.get("retryFeedback") or []
     assert retry_feedback
     assert retry_feedback[-1].get("errorCode") == "execution_timeout"
+
+
+@pytest.mark.asyncio
+async def test_sql_stage_retries_on_temporal_scope_mismatch_for_last_6_months() -> None:
+    model = load_semantic_model()
+    ask_calls = 0
+
+    async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
+        nonlocal ask_calls
+        _ = kwargs
+        ask_calls += 1
+        if ask_calls == 1:
+            return {
+                "generationType": "sql_ready",
+                "sql": "SELECT 'bad' AS version, RESP_DATE AS month_start FROM cia_sales_insights_cortex LIMIT 7",
+                "assumptions": [],
+            }
+        return {
+            "generationType": "sql_ready",
+            "sql": "SELECT 'good' AS version, RESP_DATE AS month_start FROM cia_sales_insights_cortex LIMIT 6",
+            "assumptions": [],
+        }
+
+    async def fake_sql(sql: str) -> list[dict[str, object]]:
+        if "'bad'" in sql:
+            return [
+                {"month_start": "2025-06-01", "customer_type": "new", "customers": 10},
+                {"month_start": "2025-07-01", "customer_type": "new", "customers": 11},
+                {"month_start": "2025-08-01", "customer_type": "new", "customers": 12},
+                {"month_start": "2025-09-01", "customer_type": "new", "customers": 13},
+                {"month_start": "2025-10-01", "customer_type": "new", "customers": 14},
+                {"month_start": "2025-11-01", "customer_type": "new", "customers": 15},
+                {"month_start": "2025-12-01", "customer_type": "new", "customers": 16},
+            ]
+        return [
+            {"month_start": "2025-07-01", "customer_type": "new", "customers": 11},
+            {"month_start": "2025-08-01", "customer_type": "new", "customers": 12},
+            {"month_start": "2025-09-01", "customer_type": "new", "customers": 13},
+            {"month_start": "2025-10-01", "customer_type": "new", "customers": 14},
+            {"month_start": "2025-11-01", "customer_type": "new", "customers": 15},
+            {"month_start": "2025-12-01", "customer_type": "new", "customers": 16},
+        ]
+
+    stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
+    plan = [QueryPlanStep(id="step-1", goal="Show new vs repeat customers by month for the last 6 months.")]
+    temporal_scope = TemporalScope(unit="month", count=6, granularity="month")
+
+    results, _ = await stage.run_sql(
+        message="Show new vs repeat customers by month for the last 6 months.",
+        plan=plan,
+        history=[],
+        temporal_scope=temporal_scope,
+    )
+
+    assert ask_calls == 2
+    assert results[0].rowCount == 6
 
 
 @pytest.mark.asyncio

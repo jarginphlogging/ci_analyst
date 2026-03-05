@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from functools import lru_cache
 from pathlib import Path
@@ -95,6 +96,7 @@ def sql_prompt(
     prior_sql: list[str],
     history: list[str],
     retry_feedback: list[dict[str, Any]] | None = None,
+    temporal_scope: dict[str, Any] | None = None,
 ) -> tuple[str, str]:
     prior_text = "\n".join(f"- {sql}" for sql in prior_sql[-3:]) or "- none"
     retry_text = _retry_feedback_text(retry_feedback)
@@ -131,6 +133,7 @@ def sql_prompt(
             "step_id": step_id,
             "step_goal": step_goal,
             "execution_target": execution_target,
+            "temporal_scope": json.dumps(temporal_scope, ensure_ascii=True) if temporal_scope else "null",
             "dialect_rules": dialect_rules,
             "prior_sql": prior_text,
             "retry_feedback": retry_text,

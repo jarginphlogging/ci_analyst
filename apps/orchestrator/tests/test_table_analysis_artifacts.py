@@ -226,3 +226,38 @@ def test_build_fact_comparison_signals_supports_single_row_paired_comparison_col
     assert "avg_sale_amount" in by_metric
     assert by_metric["sales"].priorPeriod == "Q4 2024"
     assert by_metric["sales"].currentPeriod == "Q4 2025"
+
+
+def test_build_fact_comparison_signals_supports_single_row_periodized_metric_columns() -> None:
+    results = [
+        SqlExecutionResult(
+            sql=(
+                "SELECT sales_2024, sales_2025, transactions_2024, transactions_2025, "
+                "avg_sale_amount_2024, avg_sale_amount_2025"
+            ),
+            rows=[
+                {
+                    "sales_2024": 259073236.5,
+                    "sales_2025": 301732926.9,
+                    "transactions_2024": 7435140,
+                    "transactions_2025": 8428740,
+                    "avg_sale_amount_2024": 34.84,
+                    "avg_sale_amount_2025": 35.8,
+                }
+            ],
+            rowCount=1,
+        )
+    ]
+
+    _facts, comparisons = build_fact_comparison_signals(
+        results,
+        message="What were my sales, transactions, and average sale amount for Q4 2025 compared to the same period last year?",
+    )
+
+    assert comparisons
+    by_metric = {item.metric: item for item in comparisons}
+    assert "sales" in by_metric
+    assert "transactions" in by_metric
+    assert "avg_sale_amount" in by_metric
+    assert by_metric["sales"].priorPeriod == "2024"
+    assert by_metric["sales"].currentPeriod == "2025"

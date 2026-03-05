@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional, Protocol
 
-from app.models import AgentResponse, ChatTurnRequest, PresentationIntent, QueryPlanStep, SqlExecutionResult, ValidationResult
+from app.models import AgentResponse, ChatTurnRequest, PresentationIntent, QueryPlanStep, SqlExecutionResult, TemporalScope, ValidationResult
 
 
 @dataclass
@@ -12,6 +12,7 @@ class TurnExecutionContext:
     presentation_intent: PresentationIntent = field(
         default_factory=lambda: PresentationIntent(displayType="table", tableStyle="simple")
     )
+    temporal_scope: TemporalScope | None = None
     sql_assumptions: list[str] = field(default_factory=list)
     sql_retry_feedback: list[dict[str, Any]] = field(default_factory=list)
 

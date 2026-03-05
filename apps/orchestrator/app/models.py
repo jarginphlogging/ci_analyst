@@ -21,6 +21,7 @@ TableStyle = Literal["simple", "ranked", "comparison"]
 SalienceDriver = Literal["intent", "magnitude", "completeness", "reliability", "period_compatibility"]
 SupportStatus = Literal["strong", "moderate", "weak"]
 EvidenceStatus = Literal["sufficient", "limited", "insufficient"]
+TimeUnit = Literal["day", "week", "month", "quarter", "year"]
 
 
 class ChatTurnRequest(BaseModel):
@@ -167,6 +168,14 @@ class PresentationIntent(BaseModel):
     chartType: Optional[ChartType] = None
     tableStyle: Optional[TableStyle] = None
     rationale: str = ""
+
+
+class TemporalScope(BaseModel):
+    kind: Literal["relative_last_n"] = "relative_last_n"
+    unit: TimeUnit
+    count: int = Field(default=1, ge=1, le=120)
+    anchor: Literal["latest_available"] = "latest_available"
+    granularity: Optional[TimeUnit] = None
 
 
 class ChartConfig(BaseModel):

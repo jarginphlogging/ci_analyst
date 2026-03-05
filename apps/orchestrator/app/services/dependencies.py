@@ -351,6 +351,7 @@ class RealDependencies:
         return TurnExecutionContext(
             plan=decision.steps,
             presentation_intent=decision.presentation_intent,
+            temporal_scope=decision.temporal_scope,
         )
 
     async def run_sql(
@@ -373,6 +374,7 @@ class RealDependencies:
                 plan=context.plan,
                 history=history,
                 conversation_id=str(request.sessionId or "anonymous"),
+                temporal_scope=context.temporal_scope,
                 progress_callback=progress_callback,
             )
             context.sql_assumptions = accumulated_assumptions

@@ -6,7 +6,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.models import ChartConfig, PresentationIntent, TableConfig
+from app.models import ChartConfig, PresentationIntent, TableConfig, TemporalScope
 
 
 class PlannerTaskPayload(BaseModel):
@@ -24,6 +24,7 @@ class PlannerResponsePayload(BaseModel):
     relevanceReason: str
     presentationIntent: PresentationIntent
     tooComplex: bool
+    temporalScope: Optional[TemporalScope] = None
     tasks: list[PlannerTaskPayload] = Field(default_factory=list)
 
 

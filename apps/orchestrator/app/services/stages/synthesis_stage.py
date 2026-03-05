@@ -134,6 +134,32 @@ def _is_comparison_like_column(column: str) -> bool:
     )
 
 
+def _comparison_metric_family(column: str) -> str | None:
+    tokens = [token for token in re.split(r"[^a-z0-9]+", column.lower()) if token]
+    if len(tokens) < 2:
+        return None
+
+    removable_indexes = {
+        index
+        for index, token in enumerate(tokens)
+        if re.fullmatch(r"(?:19|20)\d{2}", token)
+        or re.fullmatch(r"y(?:19|20)\d{2}", token)
+        or re.fullmatch(r"q[1-4]", token)
+        or token in {"prior", "previous", "prev", "last", "baseline", "current", "latest", "this", "year", "index"}
+    }
+    family_tokens = [token for index, token in enumerate(tokens) if index not in removable_indexes]
+    if not family_tokens:
+        return None
+    return "_".join(family_tokens)
+
+
+def _comparison_keys_family_compatible(columns: list[str]) -> bool:
+    families = [family for family in (_comparison_metric_family(column) for column in columns) if family is not None]
+    if not families:
+        return True
+    return len(set(families)) == 1
+
+
 def _infer_comparison_keys(table: DataTable, preferred: list[str] | None = None) -> list[str]:
     candidates = preferred or table.columns
     numeric = [
@@ -144,7 +170,10 @@ def _infer_comparison_keys(table: DataTable, preferred: list[str] | None = None)
     if len(numeric) < 2:
         return []
     scored = sorted(numeric, key=_comparison_sort_key)
-    return list(dict.fromkeys(scored))
+    deduped = list(dict.fromkeys(scored))
+    if not _comparison_keys_family_compatible(deduped):
+        return []
+    return deduped
 
 
 def _sanitize_insights(raw: Any) -> list[Insight]:
@@ -409,6 +438,8 @@ def _sanitize_table_config(raw: Any, table: DataTable) -> TableConfig | None:
             if key and key in table.columns and _column_kind(table, key) == "number" and _is_comparison_like_column(key):
                 comparison_keys.append(key)
     comparison_keys = list(dict.fromkeys(comparison_keys))
+    if len(comparison_keys) >= 2 and not _comparison_keys_family_compatible(comparison_keys):
+        comparison_keys = []
     if len(comparison_keys) < 2:
         comparison_keys = _infer_comparison_keys(table, [column.key for column in columns])
     if len(comparison_keys) < 2:
@@ -511,6 +542,74 @@ def _bounded_sample_rows(raw: Any) -> list[dict[str, Any]]:
         if isinstance(item, dict):
             bounded.append(_truncate_row(item))
     return bounded
+
+
+def _json_safe(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return str(value)
+
+
+def _ranking_evidence_payload(
+    *,
+    context: SynthesisContextPackage,
+    artifacts: list[AnalysisArtifact],
+) -> dict[str, Any] | None:
+    ranking = next(
+        (
+            artifact
+            for artifact in artifacts
+            if artifact.kind == "ranking_breakdown"
+            and artifact.rows
+            and artifact.dimensionKey
+            and artifact.valueKey
+        ),
+        None,
+    )
+    if ranking is None:
+        return None
+
+    dimension_key = ranking.dimensionKey or ""
+    value_key = ranking.valueKey or ""
+    rows = [row for row in ranking.rows if isinstance(row, dict)]
+    if not rows or not dimension_key or not value_key:
+        return None
+
+    def _compact_rank_row(row: dict[str, Any]) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            dimension_key: _json_safe(row.get(dimension_key)),
+            value_key: _json_safe(row.get(value_key)),
+        }
+        rank_value = row.get("rank")
+        if isinstance(rank_value, (int, float)) and not isinstance(rank_value, bool):
+            payload["rank"] = int(rank_value)
+        elif isinstance(rank_value, str):
+            trimmed = rank_value.strip()
+            if trimmed.isdigit():
+                payload["rank"] = int(trimmed)
+        return payload
+
+    top_rows = [_compact_rank_row(row) for row in rows[:5]]
+    bottom_rows = [_compact_rank_row(row) for row in rows[-3:]] if len(rows) > 5 else []
+
+    entity_count = len(rows)
+    for step in context.executedSteps:
+        table_summary = step.tableSummary if isinstance(step.tableSummary, dict) else {}
+        columns = table_summary.get("columns")
+        if isinstance(columns, list) and dimension_key in columns and value_key in columns and step.rowCount > 0:
+            entity_count = step.rowCount
+            break
+
+    return {
+        "dimensionKey": dimension_key,
+        "valueKey": value_key,
+        "sortDir": "desc",
+        "entityCount": entity_count,
+        "topRows": top_rows,
+        "bottomRows": bottom_rows,
+    }
 
 
 def _subtask_statuses(
@@ -669,7 +768,11 @@ def _attach_artifact_evidence(
     return enriched
 
 
-def _context_payload_for_prompt(context: SynthesisContextPackage) -> str:
+def _context_payload_for_prompt(
+    context: SynthesisContextPackage,
+    *,
+    artifacts: list[AnalysisArtifact] | None = None,
+) -> str:
     def _compact_date_stats(raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             return {}
@@ -804,6 +907,9 @@ def _context_payload_for_prompt(context: SynthesisContextPackage) -> str:
         "headline": context.headline,
         "headlineEvidenceRefs": [item.model_dump() for item in context.headlineEvidenceRefs],
     }
+    ranking_evidence = _ranking_evidence_payload(context=context, artifacts=artifacts or [])
+    if ranking_evidence is not None:
+        payload["rankingEvidence"] = ranking_evidence
 
     for item in comparison_entries:
         unit = _metric_unit(item.metric, fallback=fact_units.get(item.metric, "number"))
@@ -991,7 +1097,7 @@ class SynthesisStage:
             headline=headline,
             headline_refs=headline_refs,
         )
-        result_summary = _context_payload_for_prompt(synthesis_context)
+        result_summary = _context_payload_for_prompt(synthesis_context, artifacts=artifacts)
 
         llm_payload: dict[str, Any] = {}
         if with_llm:

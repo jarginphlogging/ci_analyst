@@ -1,7 +1,7 @@
 Conversation history:
 {{history}}
 
-Semantic model (full semantic_model.yaml):
+Semantic model:
 {{semantic_model_yaml}}
 
 Question: {{user_message}}
@@ -12,18 +12,8 @@ Execution target: {{execution_target}}
 Dialect constraints:
 {{dialect_rules}}
 
-Prior SQL in this turn:
+Prior step SQL in this turn:
 {{prior_sql}}
 
-Retry feedback from prior SQL execution attempts:
+Retry feedback (this step only):
 {{retry_feedback}}
-
-Populate these structured fields:
-
-- `generationType`: `sql_ready|clarification|not_relevant`
-- `sql`: string (required when `generationType=sql_ready`)
-- `rationale`: short string
-- `clarificationQuestion`: string (required when `generationType=clarification`)
-- `clarificationKind`: `user_input_required|technical_failure` (required when `generationType=clarification`)
-- `notRelevantReason`: string (required when `generationType=not_relevant`)
-- `assumptions`: array of strings

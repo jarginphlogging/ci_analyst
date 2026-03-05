@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
 from app.config import settings
-from app.models import PresentationIntent, QueryPlanStep
+from app.models import PresentationIntent, QueryPlanStep, TemporalScope
 from app.prompts.templates import plan_prompt
 from app.services.llm_trace import llm_trace_stage
 from app.services.semantic_model import SemanticModel, semantic_model_summary
@@ -25,6 +25,7 @@ class PlannerDecision:
     relevance: Literal["in_domain", "out_of_domain", "unclear"]
     relevance_reason: str
     presentation_intent: PresentationIntent
+    temporal_scope: TemporalScope | None
     steps: list[QueryPlanStep]
     stop_reason: Literal["none", "out_of_domain", "too_complex"]
     stop_message: str | None = None
@@ -73,6 +74,74 @@ def _normalize_table_style(value: Any) -> Literal["simple", "ranked", "compariso
     if raw in {"simple", "ranked", "comparison"}:
         return raw
     return None
+
+
+def _normalize_time_unit(raw: str) -> Literal["day", "week", "month", "quarter", "year"] | None:
+    token = raw.strip().lower()
+    aliases = {
+        "day": "day",
+        "days": "day",
+        "week": "week",
+        "weeks": "week",
+        "month": "month",
+        "months": "month",
+        "quarter": "quarter",
+        "quarters": "quarter",
+        "year": "year",
+        "years": "year",
+    }
+    return aliases.get(token)
+
+
+def _infer_granularity(message: str) -> Literal["day", "week", "month", "quarter", "year"] | None:
+    text = message.lower()
+    patterns: list[tuple[re.Pattern[str], Literal["day", "week", "month", "quarter", "year"]]] = [
+        (re.compile(r"\b(by|per)\s+day\b"), "day"),
+        (re.compile(r"\bdaily\b"), "day"),
+        (re.compile(r"\b(by|per)\s+week\b"), "week"),
+        (re.compile(r"\bweekly\b"), "week"),
+        (re.compile(r"\b(by|per)\s+month\b"), "month"),
+        (re.compile(r"\bmonthly\b"), "month"),
+        (re.compile(r"\b(by|per)\s+quarter\b"), "quarter"),
+        (re.compile(r"\bquarterly\b"), "quarter"),
+        (re.compile(r"\b(by|per)\s+year\b"), "year"),
+        (re.compile(r"\byearly\b"), "year"),
+    ]
+    for pattern, unit in patterns:
+        if pattern.search(text):
+            return unit
+    return None
+
+
+def _infer_temporal_scope_from_message(message: str) -> TemporalScope | None:
+    text = " ".join(message.lower().split())
+    last_month = re.search(r"\blast\s+month\b", text)
+    if last_month:
+        return TemporalScope(unit="month", count=1, granularity=_infer_granularity(message))
+
+    pattern = re.search(r"\blast\s+(\d{1,3})\s+(day|days|week|weeks|month|months|quarter|quarters|year|years)\b", text)
+    if not pattern:
+        return None
+    count = int(pattern.group(1))
+    unit = _normalize_time_unit(pattern.group(2))
+    if unit is None:
+        return None
+    return TemporalScope(unit=unit, count=max(1, count), granularity=_infer_granularity(message) or unit)
+
+
+def _coerce_temporal_scope(raw: Any, message: str) -> TemporalScope | None:
+    inferred = _infer_temporal_scope_from_message(message)
+    if not isinstance(raw, dict):
+        return inferred
+
+    try:
+        scope = TemporalScope.model_validate(raw)
+    except Exception:
+        return inferred
+
+    if scope.granularity is None and inferred is not None and inferred.granularity is not None:
+        return scope.model_copy(update={"granularity": inferred.granularity})
+    return scope
 
 
 def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
@@ -228,6 +297,7 @@ class PlannerStage:
                     relevance="out_of_domain",
                     relevance_reason=relevance_reason or "Question is outside semantic_model.yaml scope.",
                     presentation_intent=presentation_intent,
+                    temporal_scope=None,
                     steps=[],
                     stop_reason="out_of_domain",
                     stop_message=OUT_OF_DOMAIN_MESSAGE,
@@ -238,6 +308,7 @@ class PlannerStage:
                     relevance=relevance,
                     relevance_reason=relevance_reason or "Minimum independent decomposition exceeds step limit.",
                     presentation_intent=presentation_intent,
+                    temporal_scope=None,
                     steps=[],
                     stop_reason="too_complex",
                     stop_message=TOO_COMPLEX_MESSAGE,
@@ -250,6 +321,7 @@ class PlannerStage:
                 relevance=relevance,
                 relevance_reason=relevance_reason or "Planner produced independent decomposition.",
                 presentation_intent=presentation_intent,
+                temporal_scope=_coerce_temporal_scope(payload.get("temporalScope"), message),
                 steps=steps,
                 stop_reason="none",
             )

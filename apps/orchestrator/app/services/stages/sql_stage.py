@@ -3,11 +3,13 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
+from datetime import date, datetime, timedelta
 from time import perf_counter
 from typing import Any, Awaitable, Callable, Optional
 
 from app.config import settings
-from app.models import QueryPlanStep, SqlExecutionResult
+from app.models import QueryPlanStep, SqlExecutionResult, TemporalScope
 from app.services.semantic_model import SemanticModel
 from app.services.stages.sql_stage_generation import SqlStepGenerator
 from app.services.stages.sql_stage_models import (
@@ -36,6 +38,119 @@ logger = logging.getLogger(__name__)
 
 class _AllNullRowsError(RuntimeError):
     pass
+
+
+class _TemporalScopeMismatchError(RuntimeError):
+    pass
+
+
+_ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+
+
+def _parse_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if not raw:
+        return None
+    if _ISO_DATE_PATTERN.match(raw):
+        try:
+            return datetime.fromisoformat(raw).date()
+        except ValueError:
+            return None
+    if len(raw) >= 10 and _ISO_DATE_PATTERN.match(raw[:10]):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _period_start(value: date, unit: str) -> date:
+    if unit == "day":
+        return value
+    if unit == "week":
+        return value - timedelta(days=value.weekday())
+    if unit == "month":
+        return value.replace(day=1)
+    if unit == "quarter":
+        month = ((value.month - 1) // 3) * 3 + 1
+        return value.replace(month=month, day=1)
+    if unit == "year":
+        return value.replace(month=1, day=1)
+    return value
+
+
+def _add_period(start: date, unit: str) -> date:
+    if unit == "day":
+        return start + timedelta(days=1)
+    if unit == "week":
+        return start + timedelta(weeks=1)
+    if unit == "month":
+        year = start.year + (start.month // 12)
+        month = (start.month % 12) + 1
+        return date(year, month, 1)
+    if unit == "quarter":
+        month_index = (start.month - 1) + 3
+        year = start.year + (month_index // 12)
+        month = (month_index % 12) + 1
+        return date(year, month, 1)
+    if unit == "year":
+        return date(start.year + 1, 1, 1)
+    return start
+
+
+def _best_date_column(rows: list[dict[str, Any]]) -> str | None:
+    if not rows:
+        return None
+    best_column: str | None = None
+    best_count = 0
+    for column in rows[0].keys():
+        count = 0
+        for row in rows:
+            if _parse_date(row.get(column)) is not None:
+                count += 1
+        if count > best_count:
+            best_count = count
+            best_column = str(column)
+    return best_column if best_count > 0 else None
+
+
+def _validate_temporal_scope_result(result: SqlExecutionResult, temporal_scope: TemporalScope) -> str | None:
+    if temporal_scope.granularity is None:
+        return None
+    date_column = _best_date_column(result.rows)
+    if date_column is None:
+        return None
+
+    period_starts: set[date] = set()
+    for row in result.rows:
+        parsed = _parse_date(row.get(date_column))
+        if parsed is None:
+            continue
+        period_starts.add(_period_start(parsed, temporal_scope.granularity))
+    if not period_starts:
+        return None
+
+    ordered = sorted(period_starts)
+    expected_count = temporal_scope.count
+    if len(ordered) != expected_count:
+        return (
+            f"Temporal scope mismatch: expected {expected_count} {temporal_scope.granularity} period(s), "
+            f"but found {len(ordered)} distinct period(s) in column '{date_column}'."
+        )
+
+    for index in range(1, len(ordered)):
+        if ordered[index] != _add_period(ordered[index - 1], temporal_scope.granularity):
+            return (
+                f"Temporal scope mismatch: expected contiguous {temporal_scope.granularity} periods "
+                f"but found gaps in column '{date_column}'."
+            )
+    return None
 
 
 async def _emit_progress(progress_callback: ProgressFn | None, message: str) -> None:
@@ -240,6 +355,7 @@ class SqlExecutionStage:
         assumptions: list[str],
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
+        temporal_scope: TemporalScope | None,
         start_attempt: int = 1,
     ) -> tuple[GeneratedStep, int]:
         step_retry_feedback = retry_feedback_by_step.setdefault(step.id, [])
@@ -270,6 +386,7 @@ class SqlExecutionStage:
                 conversation_id=conversation_id,
                 attempt_number=attempt,
                 retry_feedback=step_retry_feedback,
+                temporal_scope=temporal_scope.model_dump(mode="json", exclude_none=True) if temporal_scope else None,
             )
             assumptions.extend(generated.assumptions[:4])
             if generated.rationale:
@@ -330,6 +447,7 @@ class SqlExecutionStage:
         assumptions: list[str],
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
+        temporal_scope: TemporalScope | None,
     ) -> tuple[int, SqlExecutionResult]:
         def _is_timeout_error(error: Exception) -> bool:
             if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
@@ -379,11 +497,16 @@ class SqlExecutionStage:
 
         while True:
             try:
-                return await self._execute_generated_step(
+                index, result = await self._execute_generated_step(
                     generated=current_generated,
                     total_steps=total_steps,
                     progress_callback=progress_callback,
                 )
+                if temporal_scope is not None:
+                    mismatch_reason = _validate_temporal_scope_result(result, temporal_scope)
+                    if mismatch_reason:
+                        raise _TemporalScopeMismatchError(mismatch_reason)
+                return index, result
             except Exception as error:
                 logger.exception(
                     "SQL step execution attempt failed",
@@ -401,9 +524,13 @@ class SqlExecutionStage:
                     SqlFailureCode.EXECUTION_ALL_NULL_ROWS
                     if isinstance(error, _AllNullRowsError)
                     else (
+                        SqlFailureCode.EXECUTION_TEMPORAL_MISMATCH
+                        if isinstance(error, _TemporalScopeMismatchError)
+                        else (
                         SqlFailureCode.EXECUTION_TIMEOUT
                         if _is_timeout_error(error)
                         else SqlFailureCode.EXECUTION_WAREHOUSE_ERROR
+                        )
                     )
                 )
                 step_retry_feedback.append(
@@ -486,6 +613,7 @@ class SqlExecutionStage:
                         assumptions=assumptions,
                         progress_callback=progress_callback,
                         sync_retry_feedback=sync_retry_feedback,
+                        temporal_scope=temporal_scope,
                         start_attempt=attempt_cursor + 1,
                     )
                 except SqlGenerationBlockedError as blocked:
@@ -509,6 +637,7 @@ class SqlExecutionStage:
         plan: list[QueryPlanStep],
         history: list[str],
         conversation_id: str = "anonymous",
+        temporal_scope: TemporalScope | None = None,
         progress_callback: ProgressFn | None = None,
     ) -> tuple[list[SqlExecutionResult], list[str]]:
         started_at = perf_counter()
@@ -579,10 +708,11 @@ class SqlExecutionStage:
                             prior_sql=snapshot_prior_sql,
                             conversation_id=conversation_id,
                             retry_feedback_by_step=retry_feedback_by_step,
-                            assumptions=assumptions,
-                            progress_callback=progress_callback,
-                            sync_retry_feedback=_sync_retry_feedback,
-                        )
+                        assumptions=assumptions,
+                        progress_callback=progress_callback,
+                        sync_retry_feedback=_sync_retry_feedback,
+                        temporal_scope=temporal_scope,
+                    )
 
                 generated_level = (
                     await asyncio.gather(*(_generate(index) for index in level))
@@ -627,6 +757,7 @@ class SqlExecutionStage:
                             assumptions=assumptions,
                             progress_callback=progress_callback,
                             sync_retry_feedback=_sync_retry_feedback,
+                            temporal_scope=temporal_scope,
                         )
 
                 level_results = (
