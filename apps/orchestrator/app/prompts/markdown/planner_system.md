@@ -55,14 +55,16 @@ Evaluate top-to-bottom. Stop at the first match.
 | # | Signal | Intent |
 |---|---|---|
 | 1 | Answer is a single scalar (one number, name, date, or yes/no) | `displayType = "inline"` |
-| 2 | One or more measures plotted over a time dimension (day/week/month/quarter/year) | `displayType = "chart"`, `chartType = "line"` or `"stacked_area"` when comparing category composition over time |
+| 2 | One or more measures plotted over a time dimension (day/week/month/quarter/year), including period comparisons that are primarily trend-over-time | `displayType = "chart"`, `chartType = "line"` or `"stacked_area"` when comparing category composition over time |
 | 3 | Breakdown across ≤ 8 categories (composition, share, distribution) | `displayType = "chart"`, `chartType = "bar"` or `"stacked_bar"` |
 | 4 | Breakdown across > 8 categories or open-ended category list | `displayType = "table"`, `tableStyle = "simple"` |
 | 5 | Ranking, top-N, or bottom-N | `displayType = "table"`, `tableStyle = "ranked"` |
-| 6 | Named-entity comparison (e.g., Region A vs Region B) | `displayType = "table"`, `tableStyle = "comparison"` |
+| 6 | Explicit comparison across 2+ periods, cohorts, entities, channels, or segments where the expected output is a snapshot comparison table (not a trend chart) | `displayType = "table"`, `tableStyle = "comparison"` |
 | 7 | None of the above | `displayType = "table"`, `tableStyle = "simple"` |
 
 When the expected category count is unknowable, default to table.
+
+When the user asks for a comparison and trend-over-time is not the primary expectation, prefer `tableStyle = "comparison"` even if the compared item count is large or unknown.
 
 When a multi-task plan produces results at mixed display types, choose the presentation intent that best fits the *synthesized final answer* the user expects — not any single task in isolation.
 

@@ -143,7 +143,6 @@ def response_prompt(
     user_message: str,
     presentation_intent: str,
     result_summary: str,
-    evidence_summary: str,
     history: list[str],
 ) -> tuple[str, str]:
     system = _render_prompt_template("synthesis_system", values={})
@@ -154,7 +153,6 @@ def response_prompt(
             "user_message": user_message,
             "presentation_intent": presentation_intent,
             "result_summary": result_summary,
-            "evidence_summary": evidence_summary,
         },
     )
     return system, user

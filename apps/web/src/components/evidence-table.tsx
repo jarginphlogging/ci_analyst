@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { ChartConfig, DataCell, DataTable, PrimaryVisual, TableConfig } from "@/lib/types";
+import type { ChartConfig, ComparisonSignal, DataCell, DataTable, PrimaryVisual, TableConfig } from "@/lib/types";
 
 interface ChartPoint {
   x: string;
@@ -18,6 +18,20 @@ interface ChartReadiness {
   reason: string;
 }
 
+type ComparisonMode = NonNullable<TableConfig["comparisonMode"]>;
+type DeltaPolicy = NonNullable<TableConfig["deltaPolicy"]>;
+
+interface ResolvedComparisonConfig {
+  labelKey: string;
+  comparisonKeys: string[];
+  baselineKey: string;
+  mode: ComparisonMode;
+  deltaPolicy: DeltaPolicy;
+  threshold: number;
+  overflow: boolean;
+  columnByKey: Map<string, TableConfig["columns"][number]>;
+}
+
 const CHART_COLORS = ["#0284c7", "#ea580c", "#059669", "#dc2626", "#4338ca", "#0f766e"];
 
 function asNumber(value: DataCell | undefined): number | null {
@@ -29,6 +43,15 @@ function asNumber(value: DataCell | undefined): number | null {
 
 function prettify(name: string): string {
   return name.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function isComparisonLikeKey(column: string): boolean {
+  const lowered = column.toLowerCase();
+  if (/(19|20)\d{2}/.test(lowered)) return true;
+  if (/\bq[1-4]\b/.test(lowered)) return true;
+  return ["prior", "previous", "last_year", "last year", "current", "latest", "baseline", "index"].some((token) =>
+    lowered.includes(token),
+  );
 }
 
 function isTimeLike(value: DataCell | undefined): boolean {
@@ -513,6 +536,341 @@ function ChartPanel({ table, config }: { table: DataTable; config: ChartConfig }
   );
 }
 
+function defaultColumnConfig(table: DataTable, column: string): TableConfig["columns"][number] {
+  const kind = _columnKindForFormatting(table, column);
+  return {
+    key: column,
+    label: prettify(column),
+    format: kind,
+    align: kind === "string" || kind === "date" ? "left" : "right",
+  };
+}
+
+function _columnKindForFormatting(table: DataTable, column: string): TableConfig["columns"][number]["format"] {
+  const values = table.rows.map((row) => row[column]).filter((value) => value !== null).slice(0, 200);
+  if (!values.length) return "string";
+  const numeric = values.filter((value) => asNumber(value) !== null).length;
+  const dates = values.filter((value) => isTimeLike(value)).length;
+  if (numeric / values.length >= 0.7) return "number";
+  if (dates / values.length >= 0.7) return "date";
+  return "string";
+}
+
+function effectiveColumns(table: DataTable, tableConfig: TableConfig | null | undefined): TableConfig["columns"] {
+  if (tableConfig?.columns?.length) return tableConfig.columns;
+  return table.columns.map((column) => defaultColumnConfig(table, column));
+}
+
+function resolveComparisonConfig(table: DataTable, tableConfig: TableConfig | null | undefined): ResolvedComparisonConfig | null {
+  if (tableConfig?.style !== "comparison") return null;
+  const columns = effectiveColumns(table, tableConfig);
+  const columnByKey = new Map(columns.map((column) => [column.key, column]));
+  const preferredLabel = columns.find((column) => column.format === "string" || column.format === "date");
+  const fallbackLabel = table.columns.find((column) => columnByKey.get(column)?.format !== "number");
+  const labelKey = preferredLabel?.key ?? fallbackLabel ?? table.columns[0];
+  if (!labelKey) return null;
+
+  const configKeys = (tableConfig.comparisonKeys ?? []).filter(
+    (key, idx, arr) =>
+      arr.indexOf(key) === idx &&
+      table.columns.includes(key) &&
+      isComparisonLikeKey(key) &&
+      _columnKindForFormatting(table, key) !== "string" &&
+      _columnKindForFormatting(table, key) !== "date",
+  );
+  const inferred = columns
+    .filter(
+      (column) =>
+        column.key !== labelKey &&
+        column.format !== "string" &&
+        column.format !== "date" &&
+        isComparisonLikeKey(column.key),
+    )
+    .map((column) => column.key);
+  const comparisonKeys = (configKeys.length >= 2 ? configKeys : inferred).filter((key) => key !== labelKey);
+  if (comparisonKeys.length < 2) return null;
+
+  const mode: ComparisonMode = tableConfig.comparisonMode ?? "baseline";
+  const baselineKey = comparisonKeys.includes(tableConfig.baselineKey ?? "") ? (tableConfig.baselineKey as string) : comparisonKeys[0];
+  const deltaPolicy: DeltaPolicy = tableConfig.deltaPolicy ?? "both";
+  const threshold = tableConfig.maxComparandsBeforeChartSwitch && tableConfig.maxComparandsBeforeChartSwitch > 0
+    ? tableConfig.maxComparandsBeforeChartSwitch
+    : 6;
+  return {
+    labelKey,
+    comparisonKeys,
+    baselineKey,
+    mode,
+    deltaPolicy,
+    threshold,
+    overflow: comparisonKeys.length > threshold,
+    columnByKey,
+  };
+}
+
+function ComparisonTablePanel({
+  table,
+  tableConfig,
+  notice,
+}: {
+  table: DataTable;
+  tableConfig: TableConfig | null | undefined;
+  notice?: string;
+}) {
+  const config = resolveComparisonConfig(table, tableConfig);
+  if (!config) {
+    return (
+      <TablePanel
+        table={table}
+        tableConfig={{
+          ...(tableConfig ?? { style: "simple", columns: [] }),
+          style: "simple",
+        }}
+        notice={notice ?? "Comparison config could not be validated. Showing raw table."}
+      />
+    );
+  }
+
+  const nonBaselineKeys = config.comparisonKeys.filter((key) => key !== config.baselineKey);
+  const targetKey =
+    config.mode === "pairwise"
+      ? config.comparisonKeys[config.comparisonKeys.length - 1]
+      : nonBaselineKeys[nonBaselineKeys.length - 1] ?? config.comparisonKeys[config.comparisonKeys.length - 1];
+  const comparisonKey =
+    config.mode === "pairwise"
+      ? config.comparisonKeys[config.comparisonKeys.length - 2]
+      : config.baselineKey;
+  const topRows = table.rows
+    .map((row, rowIdx) => {
+      const label = String(row[config.labelKey] ?? `Row ${rowIdx + 1}`);
+      const values = Object.fromEntries(config.comparisonKeys.map((key) => [key, asNumber(row[key])])) as Record<string, number | null>;
+      const target = values[targetKey] ?? null;
+      const baseline = values[comparisonKey] ?? null;
+      const absDelta = target !== null && baseline !== null ? target - baseline : null;
+      const pctDelta = absDelta !== null && baseline !== null && Math.abs(baseline) > Number.EPSILON ? (absDelta / baseline) * 100 : null;
+      return {
+        label,
+        values,
+        absDelta,
+        pctDelta,
+        impact: Math.abs(absDelta ?? 0),
+      };
+    })
+    .sort((left, right) => right.impact - left.impact);
+  const rows = config.overflow ? topRows.slice(0, 12) : topRows;
+  const absLabel = `\u0394 ${prettify(targetKey)} vs ${prettify(comparisonKey)}`;
+  const pctLabel = `%\u0394 ${prettify(targetKey)} vs ${prettify(comparisonKey)}`;
+  const showAbs = config.deltaPolicy === "abs" || config.deltaPolicy === "both";
+  const showPct = config.deltaPolicy === "pct" || config.deltaPolicy === "both";
+
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold tracking-wide text-slate-900">Comparison Table</h3>
+        <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+          {config.mode}
+        </span>
+      </div>
+      {notice ? <p className="mt-2 text-xs font-medium text-amber-700">{notice}</p> : null}
+      {config.overflow ? (
+        <p className="mt-2 text-xs text-slate-600">
+          Showing top movers only ({rows.length} rows). Full N-way raw output remains in Data Explorer.
+        </p>
+      ) : null}
+      <div className="mt-3 overflow-x-auto">
+        <table className="w-full min-w-[860px] border-separate border-spacing-y-1.5 text-left text-sm">
+          <thead>
+            <tr className="text-[11px] uppercase tracking-[0.14em] text-slate-500">
+              <th className="px-2 py-1 text-left">{config.columnByKey.get(config.labelKey)?.label ?? prettify(config.labelKey)}</th>
+              {config.comparisonKeys.map((key) => (
+                <th key={key} className="px-2 py-1 text-right">
+                  {config.columnByKey.get(key)?.label ?? prettify(key)}
+                </th>
+              ))}
+              {showAbs ? <th className="px-2 py-1 text-right">{absLabel}</th> : null}
+              {showPct ? <th className="px-2 py-1 text-right">{pctLabel}</th> : null}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, rowIdx) => (
+              <tr key={`${row.label}-${rowIdx}`} className="rounded-xl bg-slate-50 text-slate-800">
+                <td className="rounded-l-xl px-2 py-2 text-left text-sm font-semibold text-slate-700">{row.label}</td>
+                {config.comparisonKeys.map((key, colIdx) => (
+                  <td
+                    key={`${rowIdx}-${key}`}
+                    className={`px-2 py-2 text-right text-sm ${
+                      !showAbs && !showPct && colIdx === config.comparisonKeys.length - 1 ? "rounded-r-xl" : ""
+                    }`}
+                  >
+                    {formatCell(row.values[key] ?? null, config.columnByKey.get(key)?.format ?? "number")}
+                  </td>
+                ))}
+                {showAbs ? (
+                  <td
+                    className={`px-2 py-2 text-right text-sm font-semibold ${
+                      row.absDelta !== null && row.absDelta >= 0 ? "text-emerald-700" : "text-rose-700"
+                    } ${!showPct ? "rounded-r-xl" : ""}`}
+                  >
+                    {row.absDelta === null ? "-" : formatCell(row.absDelta, config.columnByKey.get(targetKey)?.format ?? "number")}
+                  </td>
+                ) : null}
+                {showPct ? (
+                  <td
+                    className={`rounded-r-xl px-2 py-2 text-right text-sm font-semibold ${
+                      row.pctDelta !== null && row.pctDelta >= 0 ? "text-emerald-700" : "text-rose-700"
+                    }`}
+                  >
+                    {row.pctDelta === null ? "-" : formatValue(row.pctDelta, "percent")}
+                  </td>
+                ) : null}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function metricFormat(metric: string): TableConfig["columns"][number]["format"] {
+  const lowered = metric.toLowerCase();
+  if (/(share|rate|ratio|pct|percent)/.test(lowered)) return "percent";
+  if (/(sales|revenue|spend|cost|amount|avg|average|ticket)/.test(lowered)) return "currency";
+  return "number";
+}
+
+function monthShort(month: number): string {
+  return ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][month] ?? "";
+}
+
+function compactPeriodLabel(value: string): string {
+  const rangeMatch = value.match(/^(\d{4})-(\d{2})-(\d{2})\s+to\s+(\d{4})-(\d{2})-(\d{2})$/);
+  if (!rangeMatch) return value;
+  const startYear = Number(rangeMatch[1]);
+  const startMonth = Number(rangeMatch[2]);
+  const startDay = Number(rangeMatch[3]);
+  const endYear = Number(rangeMatch[4]);
+  const endMonth = Number(rangeMatch[5]);
+  const endDay = Number(rangeMatch[6]);
+  const quarterRanges: Record<number, [number, number, number, number]> = {
+    1: [1, 1, 3, 31],
+    2: [4, 1, 6, 30],
+    3: [7, 1, 9, 30],
+    4: [10, 1, 12, 31],
+  };
+  for (const [quarterText, [sMonth, sDay, eMonth, eDay]] of Object.entries(quarterRanges)) {
+    if (startYear === endYear && startMonth === sMonth && startDay === sDay && endMonth === eMonth && endDay === eDay) {
+      return `Q${quarterText} ${startYear}`;
+    }
+  }
+  if (startYear === endYear) return `${monthShort(startMonth)}-${monthShort(endMonth)} ${startYear}`;
+  return `${monthShort(startMonth)} ${startYear} - ${monthShort(endMonth)} ${endYear}`;
+}
+
+function formatSignedDelta(value: number, kind: TableConfig["columns"][number]["format"]): string {
+  const sign = value >= 0 ? "+" : "-";
+  const absolute = Math.abs(value);
+  if (kind === "currency") {
+    if (absolute >= 1_000_000_000) return `${sign}$${(absolute / 1_000_000_000).toFixed(1)}B`;
+    if (absolute >= 1_000_000) return `${sign}$${(absolute / 1_000_000).toFixed(1)}M`;
+    if (absolute >= 1_000) return `${sign}$${(absolute / 1_000).toFixed(1)}K`;
+    return `${sign}${formatCell(absolute, "currency")}`;
+  }
+  if (kind === "number") {
+    if (absolute >= 1_000_000_000) return `${sign}${(absolute / 1_000_000_000).toFixed(1)}B`;
+    if (absolute >= 1_000_000) return `${sign}${(absolute / 1_000_000).toFixed(1)}M`;
+    if (absolute >= 1_000) return `${sign}${(absolute / 1_000).toFixed(1)}K`;
+    return `${sign}${formatCell(absolute, "number")}`;
+  }
+  return `${sign}${formatCell(absolute, kind)}`;
+}
+
+function metricOrderScore(metric: string): number {
+  const lowered = metric.toLowerCase();
+  if (/(sales|revenue|spend)/.test(lowered)) return 0;
+  if (/transaction/.test(lowered)) return 1;
+  if (/(avg|average|ticket|amount)/.test(lowered)) return 2;
+  return 3;
+}
+
+function ComparisonSignalsPanel({
+  comparisons,
+}: {
+  comparisons: ComparisonSignal[];
+}) {
+  const rows = [...comparisons]
+    .sort((left, right) => {
+      const leftMetricOrder = metricOrderScore(left.metric);
+      const rightMetricOrder = metricOrderScore(right.metric);
+      if (leftMetricOrder !== rightMetricOrder) return leftMetricOrder - rightMetricOrder;
+      const leftRank = left.salienceRank ?? Number.MAX_SAFE_INTEGER;
+      const rightRank = right.salienceRank ?? Number.MAX_SAFE_INTEGER;
+      if (leftRank !== rightRank) return leftRank - rightRank;
+      return Math.abs(right.absDelta) - Math.abs(left.absDelta);
+    })
+    .slice(0, 18);
+  const primaryPrior = rows[0]?.priorPeriod?.trim();
+  const primaryCurrent = rows[0]?.currentPeriod?.trim();
+  const sameWindow = rows.every((row) => row.priorPeriod === primaryPrior && row.currentPeriod === primaryCurrent);
+  const compactPrior = primaryPrior ? compactPeriodLabel(primaryPrior) : "";
+  const compactCurrent = primaryCurrent ? compactPeriodLabel(primaryCurrent) : "";
+  const title = sameWindow && compactPrior && compactCurrent ? `${compactCurrent} vs ${compactPrior}` : "Comparison Table";
+  const priorValueHeader = sameWindow && compactPrior ? compactPrior : "Prior Value";
+  const currentValueHeader = sameWindow && compactCurrent ? compactCurrent : "Current Value";
+  const tableMinWidth = sameWindow ? "min-w-[760px]" : "min-w-[980px]";
+  return (
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold tracking-wide text-slate-900">{title}</h3>
+        {sameWindow && primaryPrior && primaryCurrent ? (
+          <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
+            comparison
+          </span>
+        ) : null}
+      </div>
+      <div className="mt-3 overflow-x-auto">
+        <table className={`w-full border-separate border-spacing-y-1.5 text-left text-sm ${tableMinWidth}`}>
+          <thead>
+            <tr className="text-[11px] uppercase tracking-[0.14em] text-slate-500">
+              <th className="px-2 py-1 text-left">Metric</th>
+              {!sameWindow ? <th className="px-2 py-1 text-left">Prior Period</th> : null}
+              <th className="px-2 py-1 text-right">{priorValueHeader}</th>
+              {!sameWindow ? <th className="px-2 py-1 text-left">Current Period</th> : null}
+              <th className="px-2 py-1 text-right">{currentValueHeader}</th>
+              <th className="px-2 py-1 text-right">Delta</th>
+              <th className="px-2 py-1 text-right">% Delta</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((row, idx) => {
+              const valueFormat = metricFormat(row.metric);
+              return (
+                <tr key={`${row.id}-${idx}`} className="rounded-xl bg-slate-50 text-slate-800">
+                  <td className="rounded-l-xl px-2 py-2 text-left text-sm font-semibold text-slate-700">{prettify(row.metric)}</td>
+                  {!sameWindow ? <td className="px-2 py-2 text-left text-sm">{row.priorPeriod}</td> : null}
+                  <td className="px-2 py-2 text-right text-sm">{formatCell(row.priorValue, valueFormat)}</td>
+                  {!sameWindow ? <td className="px-2 py-2 text-left text-sm">{row.currentPeriod}</td> : null}
+                  <td className="px-2 py-2 text-right text-sm">{formatCell(row.currentValue, valueFormat)}</td>
+                  <td className={`px-2 py-2 text-right text-sm font-semibold ${row.absDelta >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                    {formatSignedDelta(row.absDelta, valueFormat)}
+                  </td>
+                  <td
+                    className={`rounded-r-xl px-2 py-2 text-right text-sm font-semibold ${
+                      (row.pctDelta ?? 0) >= 0 ? "text-emerald-700" : "text-rose-700"
+                    }`}
+                  >
+                    {row.pctDelta === null || row.pctDelta === undefined ? "-" : formatValue(row.pctDelta, "percent")}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 function sortedRows(table: DataTable, tableConfig: TableConfig | null | undefined): Array<Record<string, DataCell>> {
   if (!tableConfig?.sortBy) return table.rows;
   const direction = tableConfig.sortDir === "asc" ? 1 : -1;
@@ -528,14 +886,7 @@ function TablePanel({
   tableConfig: TableConfig | null | undefined;
   notice?: string;
 }) {
-  const columns = tableConfig?.columns?.length
-    ? tableConfig.columns
-    : table.columns.map((column) => ({
-        key: column,
-        label: prettify(column),
-        format: "string" as const,
-        align: "left" as const,
-      }));
+  const columns = effectiveColumns(table, tableConfig);
   const rows = useMemo(() => sortedRows(table, tableConfig), [table, tableConfig]);
   const showRank = Boolean(tableConfig?.showRank || tableConfig?.style === "ranked");
   return (
@@ -595,11 +946,13 @@ export function EvidenceTable({
   tableConfig,
   primaryVisual,
   dataTables,
+  comparisons,
 }: {
   chartConfig?: ChartConfig | null;
   tableConfig?: TableConfig | null;
   primaryVisual?: PrimaryVisual;
   dataTables?: DataTable[];
+  comparisons?: ComparisonSignal[];
 }) {
   const table = dataTables?.[0];
   if (!table) {
@@ -612,8 +965,31 @@ export function EvidenceTable({
   }
 
   const readiness = chartConfig ? evaluateChartReadiness(table, chartConfig) : null;
-  if (chartConfig && readiness?.ok) {
+  const semanticComparisonReady =
+    (comparisons ?? []).length > 0 &&
+    (tableConfig?.style === "comparison" || primaryVisual?.visualType === "comparison" || !chartConfig);
+  if (semanticComparisonReady) {
+    return <ComparisonSignalsPanel comparisons={comparisons ?? []} />;
+  }
+  const comparisonConfig = resolveComparisonConfig(table, tableConfig);
+  const comparisonOverflow = Boolean(comparisonConfig?.overflow);
+  if (chartConfig && readiness?.ok && !comparisonOverflow) {
     return <ChartPanel table={table} config={chartConfig} />;
+  }
+  if (tableConfig?.style === "comparison") {
+    if ((comparisons ?? []).length > 0) {
+      return <ComparisonSignalsPanel comparisons={comparisons ?? []} />;
+    }
+    return (
+      <div className="space-y-3">
+        {chartConfig && readiness?.ok && comparisonOverflow ? <ChartPanel table={table} config={chartConfig} /> : null}
+        <ComparisonTablePanel
+          table={table}
+          tableConfig={tableConfig}
+          notice={readiness && !readiness.ok ? readiness.reason : undefined}
+        />
+      </div>
+    );
   }
   return <TablePanel table={table} tableConfig={tableConfig} notice={readiness && !readiness.ok ? readiness.reason : undefined} />;
 }

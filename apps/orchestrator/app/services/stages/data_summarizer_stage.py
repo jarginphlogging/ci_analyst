@@ -61,7 +61,31 @@ def _sample_rows(df: pd.DataFrame, max_rows: int = 3, max_columns: int = 8) -> l
     if df.empty:
         return []
     selected_columns = list(df.columns[:max_columns])
-    sample_df = df[selected_columns].head(max_rows)
+    working = df[selected_columns]
+    if len(working) <= max_rows:
+        sample_df = working
+    else:
+        chosen_indices: list[int] = [0]
+        null_density = working.isna().sum(axis=1)
+        quality_index = int(null_density.idxmax())
+        if quality_index not in chosen_indices:
+            chosen_indices.append(quality_index)
+
+        numeric_candidates = [
+            column for column in selected_columns if pd.api.types.is_numeric_dtype(working[column])
+        ]
+        if numeric_candidates:
+            numeric_col = numeric_candidates[0]
+            extreme_index = int(pd.to_numeric(working[numeric_col], errors="coerce").abs().fillna(-1).idxmax())
+            if extreme_index not in chosen_indices:
+                chosen_indices.append(extreme_index)
+
+        if len(chosen_indices) < max_rows:
+            tail_index = int(working.index[-1])
+            if tail_index not in chosen_indices:
+                chosen_indices.append(tail_index)
+        sample_df = working.loc[chosen_indices[:max_rows]]
+
     return [{column: _safe_json(value) for column, value in row.items()} for row in sample_df.to_dict(orient="records")]
 
 

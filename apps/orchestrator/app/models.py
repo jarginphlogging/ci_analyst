@@ -18,6 +18,9 @@ VisualType = Literal["trend", "ranking", "comparison", "distribution", "snapshot
 DisplayType = Literal["inline", "table", "chart"]
 ChartType = Literal["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"]
 TableStyle = Literal["simple", "ranked", "comparison"]
+SalienceDriver = Literal["intent", "magnitude", "completeness", "reliability", "period_compatibility"]
+SupportStatus = Literal["strong", "moderate", "weak"]
+EvidenceStatus = Literal["sufficient", "limited", "insufficient"]
 
 
 class ChatTurnRequest(BaseModel):
@@ -83,12 +86,73 @@ class AnalysisArtifact(BaseModel):
     timeKey: Optional[str] = None
     expectedGrain: Optional[str] = None
     detectedGrain: Optional[str] = None
+    evidenceRefs: list["EvidenceReference"] = Field(default_factory=list)
+    salienceRank: Optional[int] = None
+    salienceScore: Optional[float] = None
+    salienceDriver: Optional[SalienceDriver] = None
+    supportStatus: Optional[SupportStatus] = None
 
 
 class SummaryCard(BaseModel):
     label: str
     value: str
     detail: str = ""
+
+
+class EvidenceReference(BaseModel):
+    refType: Literal["fact", "comparison"]
+    refId: str
+
+
+class EvidenceProvenance(BaseModel):
+    stepIndex: int
+    columnRefs: list[str] = Field(default_factory=list)
+    timeWindow: str = ""
+    aggregationType: str = ""
+
+
+class FactSignal(BaseModel):
+    id: str
+    metric: str
+    period: str
+    value: float
+    unit: Literal["currency", "number", "percent"] = "number"
+    grain: str = ""
+    supportStatus: SupportStatus = "moderate"
+    salienceScore: float = 0.0
+    salienceRank: Optional[int] = None
+    salienceDriver: Optional[SalienceDriver] = None
+    provenance: EvidenceProvenance
+
+
+class ComparisonSignal(BaseModel):
+    id: str
+    metric: str
+    priorPeriod: str
+    currentPeriod: str
+    priorValue: float
+    currentValue: float
+    absDelta: float
+    pctDelta: Optional[float] = None
+    compatibilityReason: str = ""
+    supportStatus: SupportStatus = "moderate"
+    salienceScore: float = 0.0
+    salienceRank: Optional[int] = None
+    salienceDriver: Optional[SalienceDriver] = None
+    provenance: list[EvidenceProvenance] = Field(default_factory=list)
+
+
+class ClaimSupport(BaseModel):
+    claimId: str
+    claimType: Literal["fact", "comparison"]
+    supportStatus: SupportStatus
+    reason: str = ""
+
+
+class SubtaskStatus(BaseModel):
+    id: str
+    status: EvidenceStatus
+    reason: str = ""
 
 
 class PrimaryVisual(BaseModel):
@@ -128,6 +192,11 @@ class TableConfig(BaseModel):
     sortBy: Optional[str] = None
     sortDir: Optional[Literal["asc", "desc"]] = None
     showRank: bool = False
+    comparisonMode: Optional[Literal["baseline", "pairwise", "index"]] = None
+    comparisonKeys: list[str] = Field(default_factory=list)
+    baselineKey: Optional[str] = None
+    deltaPolicy: Optional[Literal["abs", "pct", "both"]] = None
+    maxComparandsBeforeChartSwitch: Optional[int] = None
 
 
 class AgentResponse(BaseModel):
@@ -148,6 +217,14 @@ class AgentResponse(BaseModel):
     primaryVisual: Optional[PrimaryVisual] = None
     dataTables: list[DataTable] = Field(default_factory=list)
     artifacts: list[AnalysisArtifact] = Field(default_factory=list)
+    facts: list[FactSignal] = Field(default_factory=list)
+    comparisons: list[ComparisonSignal] = Field(default_factory=list)
+    evidenceStatus: EvidenceStatus = "insufficient"
+    evidenceEmptyReason: str = ""
+    subtaskStatus: list[SubtaskStatus] = Field(default_factory=list)
+    claimSupport: list[ClaimSupport] = Field(default_factory=list)
+    headline: str = ""
+    headlineEvidenceRefs: list[EvidenceReference] = Field(default_factory=list)
 
 
 class TurnResult(BaseModel):
@@ -199,6 +276,13 @@ class SynthesisContextPackage(BaseModel):
     executedSteps: list[SynthesisExecutedStep] = Field(default_factory=list)
     availableVisualArtifacts: list[SynthesisVisualArtifact] = Field(default_factory=list)
     portfolioSummary: SynthesisPortfolioSummary
+    facts: list[FactSignal] = Field(default_factory=list)
+    comparisons: list[ComparisonSignal] = Field(default_factory=list)
+    evidenceStatus: EvidenceStatus = "insufficient"
+    evidenceEmptyReason: str = ""
+    subtaskStatus: list[SubtaskStatus] = Field(default_factory=list)
+    headline: str = ""
+    headlineEvidenceRefs: list[EvidenceReference] = Field(default_factory=list)
 
 
 class SqlExecutionResult(BaseModel):

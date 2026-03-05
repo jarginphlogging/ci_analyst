@@ -793,6 +793,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                           tableConfig={message.response.tableConfig}
                           primaryVisual={message.response.primaryVisual}
                           dataTables={message.response.dataTables}
+                          comparisons={message.response.comparisons}
                         />
 
                         <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">

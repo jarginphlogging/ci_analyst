@@ -85,12 +85,77 @@ export const tableConfigSchema = z.object({
   sortBy: z.string().nullable().optional(),
   sortDir: z.enum(["asc", "desc"]).nullable().optional(),
   showRank: z.boolean().optional(),
+  comparisonMode: z.enum(["baseline", "pairwise", "index"]).optional(),
+  comparisonKeys: z.array(z.string()).optional(),
+  baselineKey: z.string().nullable().optional(),
+  deltaPolicy: z.enum(["abs", "pct", "both"]).optional(),
+  maxComparandsBeforeChartSwitch: z.number().int().positive().optional(),
 });
 
 export const summaryCardSchema = z.object({
   label: z.string(),
   value: z.string(),
   detail: z.string().optional(),
+});
+
+export const salienceDriverSchema = z.enum(["intent", "magnitude", "completeness", "reliability", "period_compatibility"]);
+export const supportStatusSchema = z.enum(["strong", "moderate", "weak"]);
+export const evidenceStatusSchema = z.enum(["sufficient", "limited", "insufficient"]);
+
+export const evidenceReferenceSchema = z.object({
+  refType: z.enum(["fact", "comparison"]),
+  refId: z.string(),
+});
+
+export const evidenceProvenanceSchema = z.object({
+  stepIndex: z.number().int().positive(),
+  columnRefs: z.array(z.string()).default([]),
+  timeWindow: z.string().optional(),
+  aggregationType: z.string().optional(),
+});
+
+export const factSignalSchema = z.object({
+  id: z.string(),
+  metric: z.string(),
+  period: z.string(),
+  value: z.number(),
+  unit: z.enum(["currency", "number", "percent"]).optional(),
+  grain: z.string().optional(),
+  supportStatus: supportStatusSchema.optional(),
+  salienceScore: z.number().optional(),
+  salienceRank: z.number().int().positive().nullable().optional(),
+  salienceDriver: salienceDriverSchema.nullable().optional(),
+  provenance: evidenceProvenanceSchema,
+});
+
+export const comparisonSignalSchema = z.object({
+  id: z.string(),
+  metric: z.string(),
+  priorPeriod: z.string(),
+  currentPeriod: z.string(),
+  priorValue: z.number(),
+  currentValue: z.number(),
+  absDelta: z.number(),
+  pctDelta: z.number().nullable().optional(),
+  compatibilityReason: z.string().optional(),
+  supportStatus: supportStatusSchema.optional(),
+  salienceScore: z.number().optional(),
+  salienceRank: z.number().int().positive().nullable().optional(),
+  salienceDriver: salienceDriverSchema.nullable().optional(),
+  provenance: z.array(evidenceProvenanceSchema).default([]),
+});
+
+export const claimSupportSchema = z.object({
+  claimId: z.string(),
+  claimType: z.enum(["fact", "comparison"]),
+  supportStatus: supportStatusSchema,
+  reason: z.string().optional(),
+});
+
+export const subtaskStatusSchema = z.object({
+  id: z.string(),
+  status: evidenceStatusSchema,
+  reason: z.string().optional(),
 });
 
 export const analysisArtifactSchema = z.object({
@@ -105,6 +170,11 @@ export const analysisArtifactSchema = z.object({
   timeKey: z.string().optional(),
   expectedGrain: z.string().optional(),
   detectedGrain: z.string().optional(),
+  evidenceRefs: z.array(evidenceReferenceSchema).optional(),
+  salienceRank: z.number().int().positive().nullable().optional(),
+  salienceScore: z.number().nullable().optional(),
+  salienceDriver: salienceDriverSchema.nullable().optional(),
+  supportStatus: supportStatusSchema.nullable().optional(),
 });
 
 export const primaryVisualSchema = z.object({
@@ -132,6 +202,14 @@ export const agentResponseSchema = z.object({
   primaryVisual: primaryVisualSchema.nullable().optional(),
   dataTables: z.array(dataTableSchema).default([]),
   artifacts: z.array(analysisArtifactSchema).optional(),
+  facts: z.array(factSignalSchema).optional(),
+  comparisons: z.array(comparisonSignalSchema).optional(),
+  evidenceStatus: evidenceStatusSchema.optional(),
+  evidenceEmptyReason: z.string().optional(),
+  subtaskStatus: z.array(subtaskStatusSchema).optional(),
+  claimSupport: z.array(claimSupportSchema).optional(),
+  headline: z.string().optional(),
+  headlineEvidenceRefs: z.array(evidenceReferenceSchema).optional(),
 });
 
 export type AgentResponse = z.infer<typeof agentResponseSchema>;

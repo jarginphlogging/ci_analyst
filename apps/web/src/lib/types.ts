@@ -63,12 +63,77 @@ export interface AnalysisArtifact {
   timeKey?: string;
   expectedGrain?: string;
   detectedGrain?: string;
+  evidenceRefs?: EvidenceReference[];
+  salienceRank?: number | null;
+  salienceScore?: number | null;
+  salienceDriver?: SalienceDriver | null;
+  supportStatus?: SupportStatus | null;
 }
 
 export interface SummaryCard {
   label: string;
   value: string;
   detail?: string;
+}
+
+export type SalienceDriver = "intent" | "magnitude" | "completeness" | "reliability" | "period_compatibility";
+export type SupportStatus = "strong" | "moderate" | "weak";
+export type EvidenceStatus = "sufficient" | "limited" | "insufficient";
+
+export interface EvidenceReference {
+  refType: "fact" | "comparison";
+  refId: string;
+}
+
+export interface EvidenceProvenance {
+  stepIndex: number;
+  columnRefs?: string[];
+  timeWindow?: string;
+  aggregationType?: string;
+}
+
+export interface FactSignal {
+  id: string;
+  metric: string;
+  period: string;
+  value: number;
+  unit?: "currency" | "number" | "percent";
+  grain?: string;
+  supportStatus?: SupportStatus;
+  salienceScore?: number;
+  salienceRank?: number | null;
+  salienceDriver?: SalienceDriver | null;
+  provenance: EvidenceProvenance;
+}
+
+export interface ComparisonSignal {
+  id: string;
+  metric: string;
+  priorPeriod: string;
+  currentPeriod: string;
+  priorValue: number;
+  currentValue: number;
+  absDelta: number;
+  pctDelta?: number | null;
+  compatibilityReason?: string;
+  supportStatus?: SupportStatus;
+  salienceScore?: number;
+  salienceRank?: number | null;
+  salienceDriver?: SalienceDriver | null;
+  provenance: EvidenceProvenance[];
+}
+
+export interface ClaimSupport {
+  claimId: string;
+  claimType: "fact" | "comparison";
+  supportStatus: SupportStatus;
+  reason?: string;
+}
+
+export interface SubtaskStatus {
+  id: string;
+  status: EvidenceStatus;
+  reason?: string;
 }
 
 export interface PrimaryVisual {
@@ -108,6 +173,11 @@ export interface TableConfig {
   sortBy?: string | null;
   sortDir?: "asc" | "desc" | null;
   showRank?: boolean;
+  comparisonMode?: "baseline" | "pairwise" | "index";
+  comparisonKeys?: string[];
+  baselineKey?: string | null;
+  deltaPolicy?: "abs" | "pct" | "both";
+  maxComparandsBeforeChartSwitch?: number;
 }
 
 export interface AgentResponse {
@@ -128,6 +198,14 @@ export interface AgentResponse {
   primaryVisual?: PrimaryVisual;
   dataTables: DataTable[];
   artifacts?: AnalysisArtifact[];
+  facts?: FactSignal[];
+  comparisons?: ComparisonSignal[];
+  evidenceStatus?: EvidenceStatus;
+  evidenceEmptyReason?: string;
+  subtaskStatus?: SubtaskStatus[];
+  claimSupport?: ClaimSupport[];
+  headline?: string;
+  headlineEvidenceRefs?: EvidenceReference[];
 }
 
 export interface ChatMessage {
