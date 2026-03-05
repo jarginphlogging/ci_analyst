@@ -33,6 +33,7 @@ interface ResolvedComparisonConfig {
 }
 
 const CHART_COLORS = ["#0284c7", "#ea580c", "#059669", "#dc2626", "#4338ca", "#0f766e"];
+const ISO_DATE_ONLY_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 function asNumber(value: DataCell | undefined): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -60,6 +61,32 @@ function isTimeLike(value: DataCell | undefined): boolean {
   if (!raw) return false;
   if (raw.length >= 10 && raw[4] === "-" && raw[7] === "-") return true;
   return Number.isFinite(Date.parse(raw));
+}
+
+function parseDateValue(value: string): Date | null {
+  const raw = value.trim();
+  if (!raw) return null;
+
+  const dateOnlyMatch = raw.match(ISO_DATE_ONLY_PATTERN);
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]);
+    const day = Number(dateOnlyMatch[3]);
+    const localDate = new Date(year, month - 1, day);
+    if (
+      Number.isNaN(localDate.getTime()) ||
+      localDate.getFullYear() !== year ||
+      localDate.getMonth() !== month - 1 ||
+      localDate.getDate() !== day
+    ) {
+      return null;
+    }
+    return localDate;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
 }
 
 function compareCells(a: DataCell | undefined, b: DataCell | undefined): number {
@@ -112,8 +139,8 @@ function formatCell(value: DataCell, format: TableConfig["columns"][number]["for
   if (format === "string") return String(value);
   if (format === "date") {
     if (typeof value !== "string") return String(value);
-    const parsed = new Date(value);
-    if (Number.isNaN(parsed.getTime())) return value;
+    const parsed = parseDateValue(value);
+    if (!parsed) return value;
     return parsed.toLocaleDateString();
   }
   return formatValue(asNumber(value), format);
@@ -121,12 +148,14 @@ function formatCell(value: DataCell, format: TableConfig["columns"][number]["for
 
 function formatXLabel(value: string): string {
   if (!isTimeLike(value)) return value;
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
+  const parsed = parseDateValue(value);
+  if (!parsed) return value;
+  const dateOnlyMatch = value.trim().match(ISO_DATE_ONLY_PATTERN);
+  const day = dateOnlyMatch ? parsed.getDate() : parsed.getUTCDate();
   return parsed.toLocaleDateString(undefined, {
     month: "short",
-    year: parsed.getUTCDate() === 1 ? "numeric" : undefined,
-    day: parsed.getUTCDate() === 1 ? undefined : "numeric",
+    year: day === 1 ? "numeric" : undefined,
+    day: day === 1 ? undefined : "numeric",
   });
 }
 

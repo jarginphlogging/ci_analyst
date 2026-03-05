@@ -3,6 +3,71 @@ import { describe, expect, it } from "vitest";
 import { EvidenceTable } from "./evidence-table";
 
 describe("EvidenceTable comparison rendering", () => {
+  it("renders date-only values without timezone day-shift", () => {
+    const html = renderToStaticMarkup(
+      <EvidenceTable
+        tableConfig={{
+          style: "simple",
+          columns: [
+            { key: "data_from", label: "Data From", format: "date", align: "left" },
+            { key: "data_through", label: "Data Through", format: "date", align: "left" },
+            { key: "total_sales", label: "Total Sales", format: "number", align: "right" },
+          ],
+        }}
+        dataTables={[
+          {
+            id: "date_bounds",
+            name: "date_bounds",
+            columns: ["data_from", "data_through", "total_sales"],
+            rows: [{ data_from: "2025-11-01", data_through: "2025-11-30", total_sales: 98395723.5 }],
+            rowCount: 1,
+          },
+        ]}
+      />,
+    );
+
+    const expectedFrom = new Date(2025, 10, 1).toLocaleDateString();
+    const expectedThrough = new Date(2025, 10, 30).toLocaleDateString();
+    const utcShiftedFrom = new Date("2025-11-01").toLocaleDateString();
+    const utcShiftedThrough = new Date("2025-11-30").toLocaleDateString();
+
+    expect(html).toContain(expectedFrom);
+    expect(html).toContain(expectedThrough);
+    if (utcShiftedFrom !== expectedFrom) expect(html).not.toContain(utcShiftedFrom);
+    if (utcShiftedThrough !== expectedThrough) expect(html).not.toContain(utcShiftedThrough);
+  });
+
+  it("renders date-only month labels without timezone month drift", () => {
+    const html = renderToStaticMarkup(
+      <EvidenceTable
+        chartConfig={{
+          type: "line",
+          x: "month_start",
+          y: "customers",
+          xLabel: "Month",
+          yLabel: "Customers",
+          yFormat: "number",
+        }}
+        dataTables={[
+          {
+            id: "monthly_mix",
+            name: "Monthly Mix",
+            columns: ["month_start", "customers"],
+            rows: [
+              { month_start: "2025-06-01", customers: 100 },
+              { month_start: "2025-07-01", customers: 110 },
+              { month_start: "2025-08-01", customers: 120 },
+            ],
+            rowCount: 3,
+          },
+        ]}
+      />,
+    );
+
+    expect(html).toContain("Jun 2025");
+    expect(html).not.toContain("May 2025");
+  });
+
   it("renders comparison table with configured comparison keys and delta columns", () => {
     const html = renderToStaticMarkup(
       <EvidenceTable
