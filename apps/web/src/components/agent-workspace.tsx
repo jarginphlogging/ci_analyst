@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { AnalysisTrace } from "@/components/analysis-trace";
 import { DataExplorer } from "@/components/data-explorer";
 import { EvidenceTable } from "@/components/evidence-table";
@@ -33,7 +33,7 @@ const starterPrompts: StarterPrompt[] = [
 ];
 
 const sessionItems = [
-  "State Sales Taxonomy",
+  "Demo",
   "Q4 YoY Performance",
   "Store Performance Monitor",
   "Channel Mix Deep Dive",
@@ -287,6 +287,13 @@ function periodFromMetricLabels(metrics: MetricPoint[]): string | null {
 }
 
 function deriveMetricPeriodLabel(response: AgentResponse, userQuery: string, responseCreatedAt: string): string {
+  const explicitLabel = (response.periodLabel ?? "").trim();
+  if (explicitLabel) return explicitLabel;
+
+  const explicitStart = parseDateValue(response.periodStart ?? "");
+  const explicitEnd = parseDateValue(response.periodEnd ?? "");
+  if (explicitStart && explicitEnd) return formatDateRange(explicitStart, explicitEnd);
+
   for (const table of response.dataTables ?? []) {
     const fromSql = periodFromSql(table.sourceSql);
     if (fromSql) return fromSql;
@@ -382,6 +389,8 @@ interface AgentWorkspaceProps {
   initialEnvironment: EnvironmentLabel;
 }
 
+type ResponseFeedback = "up" | "down";
+
 function isEnvironmentLabel(value: unknown): value is EnvironmentLabel {
   return value === "Mock" || value === "Sandbox" || value === "Production";
 }
@@ -393,6 +402,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   const [environment, setEnvironment] = useState<EnvironmentLabel>(initialEnvironment);
   const [isLeftPaneVisible, setIsLeftPaneVisible] = useState(true);
   const [isRightPaneVisible, setIsRightPaneVisible] = useState(true);
+  const [feedbackByMessageId, setFeedbackByMessageId] = useState<Record<string, ResponseFeedback | undefined>>({});
   const [sessionId] = useState(() => crypto.randomUUID());
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
@@ -402,6 +412,11 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
       createdAt: new Date().toISOString(),
     },
   ]);
+  const inFlightRequestRef = useRef<{
+    controller: AbortController;
+    assistantMessageId: string;
+    requestStartedAtMs: number;
+  } | null>(null);
 
   const latestResponseMessage = useMemo(
     () => [...messages].reverse().find((message) => message.role === "assistant" && message.response),
@@ -480,6 +495,13 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      inFlightRequestRef.current?.controller.abort();
+      inFlightRequestRef.current = null;
+    };
+  }, []);
+
   const updateAssistantMessage = (messageId: string, updater: (draft: ChatMessage) => ChatMessage): void => {
     setMessages((prev) =>
       prev.map((message) => {
@@ -487,6 +509,38 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         return updater(message);
       }),
     );
+  };
+
+  const setResponseFeedback = (messageId: string, next: ResponseFeedback): void => {
+    setFeedbackByMessageId((prev) => {
+      const current = prev[messageId];
+      return {
+        ...prev,
+        [messageId]: current === next ? undefined : next,
+      };
+    });
+  };
+
+  const stopCurrentRequest = (): void => {
+    const inFlight = inFlightRequestRef.current;
+    if (!inFlight) return;
+
+    inFlight.controller.abort();
+    updateAssistantMessage(inFlight.assistantMessageId, (draft) => {
+      if (!draft.isStreaming) return draft;
+      const statusUpdates = draft.statusUpdates ?? [];
+      const finalStatusUpdates = statusUpdates.at(-1) === "Stopped" ? statusUpdates : [...statusUpdates, "Stopped"];
+      return {
+        ...draft,
+        text: draft.text || "Analysis stopped.",
+        isStreaming: false,
+        statusUpdates: finalStatusUpdates,
+        requestDurationMs:
+          draft.requestDurationMs ?? Math.max(1, Math.round(performance.now() - inFlight.requestStartedAtMs)),
+      };
+    });
+    setIsLoading(false);
+    inFlightRequestRef.current = null;
   };
 
   async function submitQuery(query: string) {
@@ -519,10 +573,17 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     ]);
 
     try {
+      const controller = new AbortController();
+      inFlightRequestRef.current = {
+        controller,
+        assistantMessageId,
+        requestStartedAtMs,
+      };
       const response = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, message: clean }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -594,6 +655,9 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         }
       });
     } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return;
+      }
       const failureText =
         error instanceof Error && error.message.trim()
           ? error.message.trim()
@@ -606,6 +670,9 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
       }));
     } finally {
+      if (inFlightRequestRef.current?.assistantMessageId === assistantMessageId) {
+        inFlightRequestRef.current = null;
+      }
       setIsLoading(false);
     }
   }
@@ -871,6 +938,51 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                       </>
                     )
                   ) : null}
+
+                  {message.response && !responseIsFailure && !message.isStreaming ? (
+                    <footer className="mt-2 flex items-center justify-end border-t border-slate-200 pt-3">
+                      <div className="inline-flex items-center gap-2">
+                        <button
+                          type="button"
+                          aria-label="Thumbs up"
+                          aria-pressed={feedbackByMessageId[message.id] === "up"}
+                          title="Thumbs up"
+                          onClick={() => setResponseFeedback(message.id, "up")}
+                          className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                            feedbackByMessageId[message.id] === "up"
+                              ? "border-emerald-500 bg-emerald-100 text-emerald-800"
+                              : "border-slate-300 bg-white text-slate-600 hover:border-emerald-400 hover:text-emerald-700"
+                          }`}
+                        >
+                          <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
+                            <path
+                              d="M8.75 3.5A1.75 1.75 0 0 1 10.5 5.25v2.1h4.36a1.75 1.75 0 0 1 1.71 2.13l-1.2 5.3a1.75 1.75 0 0 1-1.71 1.37H8.5a1.75 1.75 0 0 1-1.75-1.75V8.33c0-.39.13-.76.37-1.06l1.2-1.5A1.75 1.75 0 0 0 8.75 4.67V3.5ZM4.5 8.75a1 1 0 0 1 1 1V15a1 1 0 0 1-1 1h-.25a1 1 0 0 1-1-1V9.75a1 1 0 0 1 1-1h.25Z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Thumbs down"
+                          aria-pressed={feedbackByMessageId[message.id] === "down"}
+                          title="Thumbs down"
+                          onClick={() => setResponseFeedback(message.id, "down")}
+                          className={`inline-flex h-8 w-8 items-center justify-center rounded-full border transition ${
+                            feedbackByMessageId[message.id] === "down"
+                              ? "border-rose-500 bg-rose-100 text-rose-800"
+                              : "border-slate-300 bg-white text-slate-600 hover:border-rose-400 hover:text-rose-700"
+                          }`}
+                        >
+                          <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
+                            <path
+                              d="M11.25 16.5a1.75 1.75 0 0 1-1.75-1.75v-2.1H5.14a1.75 1.75 0 0 1-1.71-2.13l1.2-5.3A1.75 1.75 0 0 1 6.34 3.85H11.5a1.75 1.75 0 0 1 1.75 1.75v6.07c0 .39-.13.76-.37 1.06l-1.2 1.5a1.75 1.75 0 0 0-.43 1.1v1.17ZM15.5 11.25a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h.25a1 1 0 0 1 1 1v5.25a1 1 0 0 1-1 1h-.25Z"
+                              fill="currentColor"
+                            />
+                          </svg>
+                        </button>
+                      </div>
+                    </footer>
+                  ) : null}
                 </article>
               );
             })}
@@ -949,11 +1061,17 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                 className="min-h-[63px] flex-1 resize-none rounded-2xl border border-slate-300 bg-[linear-gradient(180deg,#ffffff,#f6faff)] px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)] outline-none ring-cyan-500 placeholder:font-normal placeholder:text-slate-500 focus:ring-2"
               />
               <button
-                disabled={isLoading || !input.trim()}
-                className="min-h-[42px] rounded-2xl border border-slate-700 bg-[linear-gradient(145deg,#0f2438,#1f4c68)] px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition hover:-translate-y-0.5 hover:bg-[linear-gradient(145deg,#12314c,#246085)] disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400"
-                type="submit"
+                aria-label={isLoading ? "Stop analysis" : "Send message"}
+                disabled={!isLoading && !input.trim()}
+                className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
+                  isLoading
+                    ? "border-rose-700 bg-[linear-gradient(145deg,#7f1d1d,#b91c1c)] hover:bg-[linear-gradient(145deg,#991b1b,#dc2626)]"
+                    : "border-slate-700 bg-slate-900 hover:bg-slate-800"
+                }`}
+                onClick={isLoading ? stopCurrentRequest : undefined}
+                type={isLoading ? "button" : "submit"}
               >
-                {isLoading ? "Analyzing..." : "Send"}
+                {isLoading ? "Stop" : "Send"}
               </button>
             </form>
           </footer>

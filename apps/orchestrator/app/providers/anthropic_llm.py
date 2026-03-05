@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -10,6 +11,11 @@ import httpx
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+_ANTHROPIC_TIMEOUT_SECONDS = 45.0
+_ANTHROPIC_MAX_ATTEMPTS = 3
+_ANTHROPIC_BASE_RETRY_DELAY_SECONDS = 0.35
+_ANTHROPIC_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 
 def _messages_endpoint() -> str:
@@ -73,73 +79,123 @@ async def chat_completion(
             "userPromptChars": len(user_prompt),
         },
     )
-    try:
-        async with httpx.AsyncClient(timeout=45.0) as client:
-            response = await client.post(
-                endpoint,
-                headers={
-                    "Content-Type": "application/json",
-                    "x-api-key": str(settings.anthropic_api_key),
-                    "anthropic-version": settings.anthropic_api_version,
+    for attempt in range(1, _ANTHROPIC_MAX_ATTEMPTS + 1):
+        try:
+            async with httpx.AsyncClient(timeout=_ANTHROPIC_TIMEOUT_SECONDS) as client:
+                response = await client.post(
+                    endpoint,
+                    headers={
+                        "Content-Type": "application/json",
+                        "x-api-key": str(settings.anthropic_api_key),
+                        "anthropic-version": settings.anthropic_api_version,
+                    },
+                    json=payload,
+                )
+        except Exception:
+            if attempt < _ANTHROPIC_MAX_ATTEMPTS:
+                logger.warning(
+                    "Anthropic request transport failure; retrying",
+                    extra={
+                        "event": "provider.anthropic.request.retry_transport",
+                        "attempt": attempt,
+                        "maxAttempts": _ANTHROPIC_MAX_ATTEMPTS,
+                        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                    },
+                )
+                await asyncio.sleep(_ANTHROPIC_BASE_RETRY_DELAY_SECONDS * attempt)
+                continue
+            logger.exception(
+                "Anthropic request failed before response",
+                extra={
+                    "event": "provider.anthropic.request.failed_transport",
+                    "attempt": attempt,
+                    "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
                 },
-                json=payload,
             )
-    except Exception:
-        logger.exception(
-            "Anthropic request failed before response",
-            extra={
-                "event": "provider.anthropic.request.failed_transport",
-                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
-            },
-        )
-        raise
+            raise
 
-    if response.status_code >= 400:
-        logger.error(
-            "Anthropic request returned error",
-            extra={
-                "event": "provider.anthropic.request.failed_http",
-                "statusCode": response.status_code,
-                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
-                "responsePreview": response.text[:500],
-            },
-        )
-        raise RuntimeError(f"Anthropic request failed ({response.status_code}): {response.text}")
+        if response.status_code >= 400:
+            if response.status_code in _ANTHROPIC_RETRYABLE_STATUS_CODES and attempt < _ANTHROPIC_MAX_ATTEMPTS:
+                logger.warning(
+                    "Anthropic request returned transient HTTP error; retrying",
+                    extra={
+                        "event": "provider.anthropic.request.retry_http",
+                        "statusCode": response.status_code,
+                        "attempt": attempt,
+                        "maxAttempts": _ANTHROPIC_MAX_ATTEMPTS,
+                        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                        "responsePreview": response.text[:500],
+                    },
+                )
+                await asyncio.sleep(_ANTHROPIC_BASE_RETRY_DELAY_SECONDS * attempt)
+                continue
+            logger.error(
+                "Anthropic request returned error",
+                extra={
+                    "event": "provider.anthropic.request.failed_http",
+                    "statusCode": response.status_code,
+                    "attempt": attempt,
+                    "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                    "responsePreview": response.text[:500],
+                },
+            )
+            raise RuntimeError(f"Anthropic request failed ({response.status_code}): {response.text}")
 
-    body = response.json()
-    content = body.get("content", [])
-    if not isinstance(content, list):
-        logger.info(
-            "Anthropic request completed with non-list content",
-            extra={
-                "event": "provider.anthropic.request.completed",
-                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
-            },
-        )
-        return ""
-    if response_schema is not None:
-        for part in content:
-            if not isinstance(part, dict):
-                continue
-            if part.get("type") != "tool_use":
-                continue
-            if schema_tool_name and str(part.get("name", "")) != schema_tool_name:
-                continue
-            structured = part.get("input")
-            if isinstance(structured, dict):
-                return json.dumps(structured, ensure_ascii=True)
-            if isinstance(structured, str):
-                return structured
-            raise RuntimeError("Anthropic structured response did not include a valid tool input payload.")
-        raise RuntimeError("Anthropic structured response did not include the required tool output.")
+        try:
+            body = response.json()
+            content = body.get("content", [])
+            if not isinstance(content, list):
+                logger.info(
+                    "Anthropic request completed with non-list content",
+                    extra={
+                        "event": "provider.anthropic.request.completed",
+                        "attempt": attempt,
+                        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                    },
+                )
+                return ""
+            if response_schema is not None:
+                for part in content:
+                    if not isinstance(part, dict):
+                        continue
+                    if part.get("type") != "tool_use":
+                        continue
+                    if schema_tool_name and str(part.get("name", "")) != schema_tool_name:
+                        continue
+                    structured = part.get("input")
+                    if isinstance(structured, dict):
+                        return json.dumps(structured, ensure_ascii=True)
+                    if isinstance(structured, str):
+                        return structured
+                    raise RuntimeError("Anthropic structured response did not include a valid tool input payload.")
+                raise RuntimeError("Anthropic structured response did not include the required tool output.")
 
-    texts = [str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"]
-    logger.info(
-        "Anthropic request completed",
-        extra={
-            "event": "provider.anthropic.request.completed",
-            "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
-            "textParts": len(texts),
-        },
-    )
-    return "".join(texts)
+            texts = [str(part.get("text", "")) for part in content if isinstance(part, dict) and part.get("type") == "text"]
+            logger.info(
+                "Anthropic request completed",
+                extra={
+                    "event": "provider.anthropic.request.completed",
+                    "attempt": attempt,
+                    "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                    "textParts": len(texts),
+                },
+            )
+            return "".join(texts)
+        except Exception as error:
+            retryable_parse = response_schema is not None
+            if retryable_parse and attempt < _ANTHROPIC_MAX_ATTEMPTS:
+                logger.warning(
+                    "Anthropic structured response parse failed; retrying",
+                    extra={
+                        "event": "provider.anthropic.request.retry_parse",
+                        "attempt": attempt,
+                        "maxAttempts": _ANTHROPIC_MAX_ATTEMPTS,
+                        "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                        "error": str(error),
+                    },
+                )
+                await asyncio.sleep(_ANTHROPIC_BASE_RETRY_DELAY_SECONDS * attempt)
+                continue
+            raise
+
+    raise RuntimeError("Anthropic request exhausted retries without a valid response.")

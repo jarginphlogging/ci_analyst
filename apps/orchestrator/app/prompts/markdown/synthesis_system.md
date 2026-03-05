@@ -114,6 +114,10 @@ If any of these are true, set `chartConfig = null` and provide `tableConfig` ins
 
 **Ranked** (`style = "ranked"`): For top-N, bottom-N, or any result where ordinal position matters. Set `showRank = true`. Set `sortBy` to the metric that defines the ranking. Set `sortDir` to `desc` for top-N, `asc` for bottom-N. Include only columns that add context to the ranking — don't include every available column if it would dilute the table's focus.
 
+If planner `rankingObjectives` includes multiple objectives, provide multi-objective evidence instead of a single-sort ranking:
+- Either include objective-specific rank columns in one table (for example `rank_by_objective_a`, `rank_by_objective_b`), or
+- Return separate ranked views for each objective when one table would be ambiguous.
+
 **Comparison** (`style = "comparison"`): For period-over-period, entity-vs-entity, or any result where the user asked to compare named things. Prioritize the comparison table as the primary visual. A chart may be emitted alongside only when clearly additive.
 
 Choose the comparison fields based on the user's question:

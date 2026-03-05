@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import settings
-from app.sandbox.sandbox_sca_service import app
+from app.sandbox import sandbox_sca_service
+from app.sandbox.sandbox_sca_service import SandboxSqlGenerationError, app
 
 
 def test_sandbox_cortex_query_endpoint(tmp_path: Path) -> None:
@@ -100,3 +102,62 @@ def test_sandbox_cortex_message_total_sales_last_month_returns_provider_error_wh
         object.__setattr__(settings, "sandbox_sqlite_path", original_path)
         object.__setattr__(settings, "sandbox_cortex_api_key", original_key)
         object.__setattr__(settings, "anthropic_api_key", original_anthropic_key)
+
+
+@pytest.mark.asyncio
+async def test_sandbox_cortex_message_retries_schema_validation_generation_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = str(tmp_path / "cortex_sandbox.db")
+    calls = 0
+
+    async def _fake_generate_sql_from_message(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal calls
+        _ = kwargs
+        calls += 1
+        if calls == 1:
+            raise SandboxSqlGenerationError(
+                "Sandbox SQL generation payload failed schema validation.",
+                code="schema_validation_error",
+                detail={"errorType": "ValidationError"},
+            )
+        return {
+            "type": "sql_ready",
+            "sql": "SELECT 1",
+            "lightResponse": "",
+            "clarificationQuestion": "",
+            "clarificationKind": "none",
+            "notRelevantReason": "",
+            "assumptions": [],
+        }
+
+    async def _no_sleep(_: float) -> None:
+        return None
+
+    original_path = settings.sandbox_sqlite_path
+    original_key = settings.sandbox_cortex_api_key
+    try:
+        object.__setattr__(settings, "sandbox_sqlite_path", db_path)
+        object.__setattr__(settings, "sandbox_cortex_api_key", "test-key")
+        monkeypatch.setattr(sandbox_sca_service, "_generate_sql_from_message", _fake_generate_sql_from_message)
+        monkeypatch.setattr(sandbox_sca_service.asyncio, "sleep", _no_sleep)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v2/cortex/analyst/message",
+            headers={"Authorization": "Bearer test-key"},
+            json={
+                "conversationId": "conv-retry",
+                "message": "Show spend by state",
+            },
+        )
+    finally:
+        object.__setattr__(settings, "sandbox_sqlite_path", original_path)
+        object.__setattr__(settings, "sandbox_cortex_api_key", original_key)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload.get("type") == "sql_ready"
+    assert payload.get("sql") == "SELECT 1"
+    assert calls == 2

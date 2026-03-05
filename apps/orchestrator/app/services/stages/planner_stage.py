@@ -156,18 +156,35 @@ def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
     chart_type = _normalize_chart_type(raw.get("chartType"))
     table_style = _normalize_table_style(raw.get("tableStyle"))
     rationale = str(raw.get("rationale", "")).strip()
+    ranking_objectives_raw = raw.get("rankingObjectives", [])
+    ranking_objectives: list[str] = []
+    if isinstance(ranking_objectives_raw, list):
+        seen: set[str] = set()
+        for item in ranking_objectives_raw[:4]:
+            objective = str(item).strip()
+            if not objective:
+                continue
+            key = objective.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            ranking_objectives.append(objective)
     if display_type == "chart" and chart_type is None:
         chart_type = "line"
     if display_type == "table" and table_style is None:
         table_style = "simple"
+    if display_type != "table" or table_style != "ranked":
+        ranking_objectives = []
     if display_type == "inline":
         chart_type = None
         table_style = None
+        ranking_objectives = []
     return PresentationIntent(
         displayType=display_type,
         chartType=chart_type,
         tableStyle=table_style,
         rationale=rationale,
+        rankingObjectives=ranking_objectives,
     )
 
 

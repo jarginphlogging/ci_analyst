@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 import json
 import logging
@@ -39,6 +40,7 @@ class MessageRequest(BaseModel):
     history: list[str] = Field(default_factory=list)
     stepId: Optional[str] = None
     retryFeedback: list[dict[str, Any]] = Field(default_factory=list)
+    dependencyContext: list[dict[str, Any]] = Field(default_factory=list)
 
 
 _CONVERSATION_MEMORY: dict[str, list[str]] = {}
@@ -54,6 +56,9 @@ async def _lifespan(_: FastAPI):
 
 
 app = FastAPI(title="CI Analyst Sandbox Cortex Service", version="0.2.0", lifespan=_lifespan)
+
+_MESSAGE_SQL_GENERATION_MAX_ATTEMPTS = 2
+_MESSAGE_SQL_GENERATION_RETRY_DELAY_SECONDS = 0.25
 
 
 @app.middleware("http")
@@ -225,6 +230,7 @@ async def _generate_sql_from_message(
     step_id: str,
     conversation_history: list[str],
     retry_feedback: list[dict[str, Any]],
+    dependency_context: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     system_prompt, user_prompt = sql_prompt(
         user_message=message,
@@ -234,6 +240,7 @@ async def _generate_sql_from_message(
         prior_sql=[],
         history=conversation_history,
         retry_feedback=retry_feedback,
+        dependency_context=dependency_context,
     )
 
     llm_text = await anthropic_chat_completion(
@@ -329,47 +336,89 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
     retry_feedback_history = _retry_feedback_history(retry_feedback)
 
     generation_history = [*conversation_history, *retry_feedback_history]
-    try:
-        generated = await _generate_sql_from_message(
-            message=user_message,
-            step_id=(payload.stepId or "").strip(),
-            conversation_history=generation_history,
-            retry_feedback=retry_feedback,
-        )
-    except SandboxSqlGenerationError as error:
-        logger.exception(
-            "Sandbox SQL generation failed",
-            extra={
-                "event": "sandbox.message.sql_generation.failed",
-                "conversationId": payload.conversationId,
-                "errorCode": error.code,
-            },
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "code": error.code,
-                "message": str(error),
-                **error.detail,
-            },
-        ) from error
-    except Exception as error:  # noqa: BLE001
-        logger.exception(
-            "Sandbox SQL generation failed",
-            extra={
-                "event": "sandbox.message.sql_generation.failed",
-                "conversationId": payload.conversationId,
-            },
-        )
-        raise HTTPException(
-            status_code=502,
-            detail={
-                "code": "provider_error",
-                "message": "SQL generation provider error.",
-                "errorType": type(error).__name__,
-                "error": _preview_text(str(error), max_chars=1200),
-            },
-        ) from error
+    generated: dict[str, Any] | None = None
+    last_sandbox_error: SandboxSqlGenerationError | None = None
+    last_generic_error: Exception | None = None
+    for attempt in range(1, _MESSAGE_SQL_GENERATION_MAX_ATTEMPTS + 1):
+        try:
+            generated = await _generate_sql_from_message(
+                message=user_message,
+                step_id=(payload.stepId or "").strip(),
+                conversation_history=generation_history,
+                retry_feedback=retry_feedback,
+                dependency_context=payload.dependencyContext,
+            )
+            break
+        except SandboxSqlGenerationError as error:
+            last_sandbox_error = error
+            is_retryable = error.code in {"json_parse_error", "schema_validation_error"}
+            if is_retryable and attempt < _MESSAGE_SQL_GENERATION_MAX_ATTEMPTS:
+                logger.warning(
+                    "Sandbox SQL generation returned malformed payload; retrying",
+                    extra={
+                        "event": "sandbox.message.sql_generation.retry",
+                        "conversationId": payload.conversationId,
+                        "attempt": attempt,
+                        "maxAttempts": _MESSAGE_SQL_GENERATION_MAX_ATTEMPTS,
+                        "errorCode": error.code,
+                    },
+                )
+                await asyncio.sleep(_MESSAGE_SQL_GENERATION_RETRY_DELAY_SECONDS * attempt)
+                continue
+            break
+        except Exception as error:  # noqa: BLE001
+            last_generic_error = error
+            if attempt < _MESSAGE_SQL_GENERATION_MAX_ATTEMPTS:
+                logger.warning(
+                    "Sandbox SQL generation provider error; retrying",
+                    extra={
+                        "event": "sandbox.message.sql_generation.retry_provider",
+                        "conversationId": payload.conversationId,
+                        "attempt": attempt,
+                        "maxAttempts": _MESSAGE_SQL_GENERATION_MAX_ATTEMPTS,
+                        "errorType": type(error).__name__,
+                    },
+                )
+                await asyncio.sleep(_MESSAGE_SQL_GENERATION_RETRY_DELAY_SECONDS * attempt)
+                continue
+            break
+
+    if generated is None:
+        if last_sandbox_error is not None:
+            logger.exception(
+                "Sandbox SQL generation failed",
+                extra={
+                    "event": "sandbox.message.sql_generation.failed",
+                    "conversationId": payload.conversationId,
+                    "errorCode": last_sandbox_error.code,
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": last_sandbox_error.code,
+                    "message": str(last_sandbox_error),
+                    **last_sandbox_error.detail,
+                },
+            ) from last_sandbox_error
+        if last_generic_error is not None:
+            logger.exception(
+                "Sandbox SQL generation failed",
+                extra={
+                    "event": "sandbox.message.sql_generation.failed",
+                    "conversationId": payload.conversationId,
+                },
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "code": "provider_error",
+                    "message": "SQL generation provider error.",
+                    "errorType": type(last_generic_error).__name__,
+                    "error": _preview_text(str(last_generic_error), max_chars=1200),
+                },
+            ) from last_generic_error
+        raise HTTPException(status_code=502, detail={"code": "provider_error", "message": "SQL generation failed."})
 
     response_type = str(generated.get("type", "sql_ready")).strip().lower()
     sql_text = str(generated.get("sql", "")).strip()

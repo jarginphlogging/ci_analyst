@@ -20,3 +20,27 @@ def test_sql_prompt_includes_full_semantic_model_yaml() -> None:
 
     assert "Semantic model (full semantic_model.yaml):" in user_prompt
     assert full_yaml in user_prompt
+
+
+def test_sql_prompt_includes_dependency_context_block() -> None:
+    model = load_semantic_model()
+    _, user_prompt = sql_prompt(
+        user_message="Top and bottom stores with mix",
+        step_id="step_2",
+        step_goal="Show new vs repeat mix for those stores.",
+        model=model,
+        prior_sql=["SELECT td_id FROM cia_sales_insights_cortex LIMIT 10"],
+        history=[],
+        dependency_context=[
+            {
+                "stepId": "step_1",
+                "rowCount": 2,
+                "columns": ["td_id"],
+                "sampleRows": [{"td_id": "6182655"}],
+                "sampleTruncated": False,
+            }
+        ],
+    )
+
+    assert "Dependency context from completed prerequisite steps:" in user_prompt
+    assert "\"stepId\": \"step_1\"" in user_prompt

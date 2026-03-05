@@ -47,6 +47,7 @@ export async function POST(request: Request) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId, message }),
+        signal: request.signal,
       });
 
       if (!upstream.body) {
@@ -60,7 +61,13 @@ export async function POST(request: Request) {
         status: upstream.status,
         headers: ndjsonHeaders(),
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return new Response(null, {
+          status: 204,
+          headers: { "Cache-Control": "no-cache, no-transform" },
+        });
+      }
       return new Response(
         `${JSON.stringify({ type: "error", message: "failed to reach orchestrator" })}\n${JSON.stringify({ type: "done" })}\n`,
         {
@@ -76,12 +83,26 @@ export async function POST(request: Request) {
       const encoder = new TextEncoder();
       const write = (chunk: string) => controller.enqueue(encoder.encode(chunk));
 
-      await streamMockEvents(buildMockEvents(message), write, {
-        statusMs: serverEnv.WEB_MOCK_STATUS_DELAY_MS,
-        tokenMs: serverEnv.WEB_MOCK_TOKEN_DELAY_MS,
-        responseMs: serverEnv.WEB_MOCK_RESPONSE_DELAY_MS,
-      });
-      controller.close();
+      try {
+        await streamMockEvents(
+          buildMockEvents(message),
+          write,
+          {
+            statusMs: serverEnv.WEB_MOCK_STATUS_DELAY_MS,
+            tokenMs: serverEnv.WEB_MOCK_TOKEN_DELAY_MS,
+            responseMs: serverEnv.WEB_MOCK_RESPONSE_DELAY_MS,
+          },
+          request.signal,
+        );
+      } catch (error) {
+        if (!(error instanceof Error && error.name === "AbortError")) {
+          throw error;
+        }
+      } finally {
+        if (!request.signal.aborted) {
+          controller.close();
+        }
+      }
     },
   });
 

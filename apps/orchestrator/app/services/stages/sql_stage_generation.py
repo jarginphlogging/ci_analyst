@@ -132,6 +132,7 @@ class SqlStepGenerator:
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None,
         temporal_scope: dict[str, Any] | None,
+        dependency_context: list[dict[str, Any]] | None,
     ) -> GeneratedStep:
         if self._analyst_fn is None:
             raise RuntimeError("Analyst provider is not configured.")
@@ -139,6 +140,11 @@ class SqlStepGenerator:
         analyst_history = list(history)
         if temporal_scope:
             analyst_history.append(f"Planner temporal scope contract: {json.dumps(temporal_scope, ensure_ascii=True)}")
+        if dependency_context:
+            analyst_history.append(
+                "Dependency context from completed prerequisite steps: "
+                f"{json.dumps(dependency_context, ensure_ascii=True)}"
+            )
 
         analyst_request = {
             "conversation_id": f"{conversation_id}::sub::{step.id}",
@@ -146,6 +152,7 @@ class SqlStepGenerator:
             "history": analyst_history,
             "step_id": step.id,
             "retry_feedback": retry_feedback or [],
+            "dependency_context": dependency_context or [],
         }
         analyst_trace_system, analyst_trace_user = sql_prompt(
             message,
@@ -156,6 +163,7 @@ class SqlStepGenerator:
             history,
             retry_feedback=retry_feedback,
             temporal_scope=temporal_scope,
+            dependency_context=dependency_context,
         )
 
         with llm_trace_stage(
@@ -182,6 +190,7 @@ class SqlStepGenerator:
                     history=analyst_history,
                     step_id=step.id,
                     retry_feedback=retry_feedback or [],
+                    dependency_context=dependency_context,
                 )
             except Exception as error:  # noqa: BLE001
                 provider_error = _provider_error_detail(error)
@@ -332,6 +341,7 @@ class SqlStepGenerator:
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None,
         temporal_scope: dict[str, Any] | None,
+        dependency_context: list[dict[str, Any]] | None,
     ) -> GeneratedStep:
         sql_text = ""
         rationale = ""
@@ -352,6 +362,7 @@ class SqlStepGenerator:
                 history,
                 retry_feedback=retry_feedback,
                 temporal_scope=temporal_scope,
+                dependency_context=dependency_context,
             )
             with llm_trace_stage(
                 "sql_generation",
@@ -459,6 +470,7 @@ class SqlStepGenerator:
         attempt_number: int,
         retry_feedback: list[dict[str, Any]] | None = None,
         temporal_scope: dict[str, Any] | None = None,
+        dependency_context: list[dict[str, Any]] | None = None,
     ) -> GeneratedStep:
         generated: GeneratedStep
         if self._analyst_fn is not None:
@@ -472,6 +484,7 @@ class SqlStepGenerator:
                     attempt_number=attempt_number,
                     retry_feedback=retry_feedback,
                     temporal_scope=temporal_scope,
+                    dependency_context=dependency_context,
                 )
             except Exception as error:
                 logger.exception(
@@ -492,6 +505,68 @@ class SqlStepGenerator:
                 if isinstance(provider_detail, dict):
                     provider_code = str(provider_detail.get("code", "")).strip()
                 error_code = provider_code or str(error_detail.get("errorType", "")).strip() or "generation_provider_error"
+                error_type = str(error_detail.get("errorType", "")).strip()
+                should_fallback_to_llm = (
+                    settings.provider_mode == "sandbox" and error_type != "AnalystTechnicalFailure"
+                )
+
+                if should_fallback_to_llm:
+                    logger.warning(
+                        "Falling back to direct LLM SQL generation after sandbox analyst failure",
+                        extra={
+                            "event": "sql.generation.analyst_fallback_to_llm",
+                            "stepId": step.id,
+                            "attempt": attempt_number,
+                            "errorCode": error_code,
+                        },
+                    )
+                    try:
+                        fallback_generated = await self._generate_with_llm(
+                            message=message,
+                            step=step,
+                            history=history,
+                            prior_sql=prior_sql,
+                            attempt_number=attempt_number,
+                            retry_feedback=retry_feedback,
+                            temporal_scope=temporal_scope,
+                            dependency_context=dependency_context,
+                        )
+                        fallback_assumptions = _clean_assumptions(
+                            [
+                                (
+                                    "Sandbox analyst provider unavailable for this attempt; "
+                                    f"used direct LLM SQL generation fallback ({error_code})."
+                                ),
+                                *fallback_generated.assumptions,
+                            ],
+                            clarification_question=fallback_generated.clarification_question,
+                        )
+                        generated = GeneratedStep(
+                            index=index,
+                            step=fallback_generated.step,
+                            provider=fallback_generated.provider,
+                            status=fallback_generated.status,
+                            sql=fallback_generated.sql,
+                            rationale=fallback_generated.rationale,
+                            assumptions=fallback_assumptions,
+                            clarification_question=fallback_generated.clarification_question,
+                            not_relevant_reason=fallback_generated.not_relevant_reason,
+                            clarification_kind=fallback_generated.clarification_kind,
+                            attempted_sql=fallback_generated.attempted_sql,
+                            rows=fallback_generated.rows,
+                            generation_error_detail=error_detail,
+                        )
+                        return generated
+                    except Exception:
+                        logger.exception(
+                            "Sandbox analyst fallback to direct LLM generation failed",
+                            extra={
+                                "event": "sql.generation.analyst_fallback_to_llm_failed",
+                                "stepId": step.id,
+                                "attempt": attempt_number,
+                            },
+                        )
+
                 clarification_message = f"SQL generation failed ({error_code})."
                 generated = GeneratedStep(
                     index=index,
@@ -520,6 +595,7 @@ class SqlStepGenerator:
                 attempt_number=attempt_number,
                 retry_feedback=retry_feedback,
                 temporal_scope=temporal_scope,
+                dependency_context=dependency_context,
             )
 
         return GeneratedStep(

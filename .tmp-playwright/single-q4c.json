@@ -1,0 +1,14 @@
+{
+  "query": "What were my sales, transactions, and average sale amount for Q4 2025 compared to the same period last year?",
+  "completed": true,
+  "status": {
+    "hasWhyItMatters": true,
+    "hasRequestFailed": false,
+    "hasRunning": false,
+    "hasSqlGenerationFailed": false,
+    "length": 2217
+  },
+  "articleText": "AGENT RESPONSE\n\n02:07 PM\n\nhigh confidence\n\nQ4 2025 sales reached $301.7M, up $42.7M (+16.5%) from Q4 2024. Transactions grew to 8.4M, an increase of 994K (+13.4%) year-over-year. Average sale amount rose to $35.80, up $0.95 (+2.7%) compared to the prior year period.\n\nWHY IT MATTERS\n\nSales growth is outpacing transaction growth (16.5% vs 13.4%), indicating that rising average transaction value is contributing to overall revenue expansion.\n\nQ4 2025 SALES\n\n$301.7M\n\n+16.5% vs Q4 2024\n\nQ4 2025 TRANSACTIONS\n\n8.4M\n\n+13.4% vs Q4 2024\n\nAVG SALE AMOUNT\n\n$35.80\n\n+2.7% vs Q4 2024\n\nQ4 2025 vs Q4 2024\nCOMPARISON\nMETRIC\tQ4 2024\tQ4 2025\tDELTA\t% DELTA\nSales\t$259,073,236.50\t$301,732,926.90\t+$42.7M\t16.5%\nTransactions\t7,435,140\t8,428,740\t+993.6K\t13.4%\nAvg Sale Amount\t$34.84\t$35.80\t+$0.95\t2.74%\nPriority Insights\n\nhigh importance\n\nSales Growth Outpaces Transaction Growth\n\nSales increased 16.5% while transactions grew 13.4%, indicating that higher average transaction value contributed 3.1 percentage points to overall sales growth.\n\nmedium importance\n\nBroad-Based Positive Momentum\n\nAll three core metrics—sales, transactions, and average sale amount—showed positive year-over-year growth, suggesting healthy business expansion across both volume and value dimensions.\n\nmedium importance\n\nModest Average Sale Lift\n\nAverage sale amount increased just 2.7% despite the 16.5% sales jump, confirming that transaction volume growth is the primary driver of revenue expansion.\n\nRetrieved Data\n\nView and export raw tables used in the analysis.\n\n1 table\n1 rows\n14 columns\nExpand\nAnalysis Trace\n\nStructured reasoning summary for auditability and trust.\n\nShow trace\n\nASSUMPTIONS\n\nInterpretation constraints used for this answer.\n\n1\nSales figures are nominal and not adjusted for inflation across the comparison period.\n2\nAverage sale amount is computed as total sales divided by total transactions, not per-customer average.\n3\nQ4 is defined as October through December for both 2024 and 2025.\n4\nTransaction counts include all completed transactions regardless of payment method or channel.\n\nSUGGESTED NEXT QUESTIONS\n\nPick one to auto-fill the composer.\n\n1\nHow did monthly sales trend within Q4 2025 compared to Q4 2024?\n→\n2\nWhich product categories drove the highest sales growth in Q4 2025?\n→\n3\nWhat were the top 10 states by sales in Q4 2025?\n→",
+  "screenshotPath": "/Users/joe/Code/ci_analyst/.tmp-playwright/single-q4c.png",
+  "capturedAt": "2026-03-05T19:08:33.794Z"
+}

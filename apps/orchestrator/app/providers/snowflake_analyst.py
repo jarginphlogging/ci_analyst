@@ -128,9 +128,11 @@ async def analyze_message(
     history: list[str] | None = None,
     step_id: str | None = None,
     retry_feedback: list[dict[str, Any]] | None = None,
+    dependency_context: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     _ = step_id
     _ = retry_feedback
+    _ = dependency_context
     if not settings.has_snowflake_analyst_credentials():
         raise RuntimeError(_ANALYST_HELP)
 

@@ -214,6 +214,21 @@ def _query_intent_flags(message: str) -> dict[str, bool]:
     }
 
 
+def _is_categorical_time_bucket_column(column_name: str) -> bool:
+    lowered = column_name.lower()
+    return any(
+        token in lowered
+        for token in (
+            "day_of_week",
+            "weekday",
+            "dow",
+            "time_window",
+            "hour_bucket",
+            "hour_of_day",
+        )
+    )
+
+
 def _result_relevance_score(result: SqlExecutionResult, message: str) -> float:
     if not result.rows:
         return float("-inf")
@@ -318,7 +333,9 @@ def _profile_rows(rows: list[dict[str, JsonValue]], scan_limit: int = 200) -> Re
         time_ratio = time_count / ratio_denominator
 
         name_lower = column.lower()
-        if time_ratio >= 0.6 or any(token in name_lower for token in ["date", "month", "week", "quarter", "year"]):
+        if _is_categorical_time_bucket_column(name_lower):
+            pass
+        elif time_ratio >= 0.6 or any(token in name_lower for token in ["date", "month", "week", "quarter", "year"]):
             time_columns.append(column)
             continue
 
@@ -400,7 +417,9 @@ def _detect_result_grain(columns: list[str]) -> Optional[str]:
         return "state"
     if any(re.search(r"(channel|card_present|card_not_present)", column) for column in lowered):
         return "channel"
-    if any(re.search(r"(resp_date|date|month|week|quarter|year)", column) for column in lowered):
+    if any(re.search(r"(resp_date|date|month|week|quarter|year)", column) for column in lowered) and not any(
+        _is_categorical_time_bucket_column(column) for column in lowered
+    ):
         return "time"
     return None
 

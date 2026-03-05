@@ -148,6 +148,31 @@ def test_build_analysis_artifacts_does_not_fake_comparison_from_unrelated_metric
     assert artifacts == []
 
 
+def test_build_analysis_artifacts_treats_day_of_week_as_dimension_not_time_axis() -> None:
+    results = [
+        SqlExecutionResult(
+            sql=(
+                "SELECT day_of_week, transaction_time_window, AVG(spend) AS avg_ticket, "
+                "SUM(transactions) AS transaction_volume FROM t GROUP BY 1,2"
+            ),
+            rows=[
+                {"day_of_week": "Friday", "transaction_time_window": "18:00-21:00", "avg_ticket": 68.9, "transaction_volume": 1200},
+                {"day_of_week": "Saturday", "transaction_time_window": "12:00-15:00", "avg_ticket": 61.2, "transaction_volume": 2100},
+                {"day_of_week": "Monday", "transaction_time_window": "08:00-11:00", "avg_ticket": 44.5, "transaction_volume": 2600},
+            ],
+            rowCount=3,
+        )
+    ]
+
+    artifacts = build_analysis_artifacts(
+        results,
+        message="For the last 8 weeks, which day of week and transaction time window drive the highest average ticket and transaction volume?",
+    )
+
+    assert artifacts
+    assert all(artifact.kind != "trend_breakdown" for artifact in artifacts)
+
+
 def test_build_fact_comparison_signals_supports_cross_step_single_row_comparison() -> None:
     results = [
         SqlExecutionResult(

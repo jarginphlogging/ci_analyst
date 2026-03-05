@@ -97,6 +97,7 @@ def sql_prompt(
     history: list[str],
     retry_feedback: list[dict[str, Any]] | None = None,
     temporal_scope: dict[str, Any] | None = None,
+    dependency_context: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str]:
     prior_text = "\n".join(f"- {sql}" for sql in prior_sql[-3:]) or "- none"
     retry_text = _retry_feedback_text(retry_feedback)
@@ -137,6 +138,11 @@ def sql_prompt(
             "dialect_rules": dialect_rules,
             "prior_sql": prior_text,
             "retry_feedback": retry_text,
+            "dependency_context": (
+                json.dumps(dependency_context, ensure_ascii=True)
+                if dependency_context
+                else "[]"
+            ),
         },
     )
     return system, user

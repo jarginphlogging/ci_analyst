@@ -148,6 +148,7 @@ export interface PresentationIntent {
   chartType?: "line" | "bar" | "stacked_bar" | "stacked_area" | "grouped_bar" | null;
   tableStyle?: "simple" | "ranked" | "comparison" | null;
   rationale?: string;
+  rankingObjectives?: string[];
 }
 
 export interface ChartConfig {
@@ -206,6 +207,9 @@ export interface AgentResponse {
   claimSupport?: ClaimSupport[];
   headline?: string;
   headlineEvidenceRefs?: EvidenceReference[];
+  periodStart?: string;
+  periodEnd?: string;
+  periodLabel?: string;
 }
 
 export interface ChatMessage {

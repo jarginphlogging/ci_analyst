@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from calendar import monthrange
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Any, Awaitable, Callable, Literal, cast
 
 from app.config import settings
@@ -23,6 +23,7 @@ from app.models import (
     PrimaryVisual,
     QueryPlanStep,
     SummaryCard,
+    TemporalScope,
     SqlExecutionResult,
     SubtaskStatus,
     SynthesisContextPackage,
@@ -49,6 +50,8 @@ from app.services.table_analysis import (
 )
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
+
+_OBJECTIVE_STOP_TOKENS = {"the", "and", "for", "with", "by", "of", "to", "in"}
 
 
 def _as_float(value: Any) -> float | None:
@@ -104,6 +107,305 @@ def _first_column_by_kind(table: DataTable, kind: Literal["number", "date", "str
             continue
         if _column_kind(table, column) == kind:
             return column
+    return None
+
+
+def _normalize_objective_token(token: str) -> str:
+    lowered = token.lower()
+    aliases = {
+        "average": "avg",
+        "mean": "avg",
+        "amount": "amt",
+        "value": "amt",
+        "transaction": "transactions",
+        "count": "transactions",
+        "volume": "transactions",
+        "sales": "spend",
+        "revenue": "spend",
+    }
+    return aliases.get(lowered, lowered)
+
+
+def _objective_tokens(text: str) -> set[str]:
+    tokens = {
+        _normalize_objective_token(token)
+        for token in re.split(r"[^a-z0-9]+", text.lower())
+        if len(token) >= 3 and token not in _OBJECTIVE_STOP_TOKENS
+    }
+    return {token for token in tokens if token}
+
+
+def _resolve_objective_columns(table: DataTable, objectives: list[str]) -> list[str]:
+    numeric_columns = [column for column in table.columns if _column_kind(table, column) == "number"]
+    if len(numeric_columns) < 2:
+        return []
+
+    selected: list[str] = []
+    used: set[str] = set()
+    for objective in objectives:
+        objective_tokens = _objective_tokens(objective)
+        if not objective_tokens:
+            continue
+        best_column: str | None = None
+        best_score = 0
+        for column in numeric_columns:
+            if column in used:
+                continue
+            column_tokens = _objective_tokens(column)
+            overlap = len(objective_tokens.intersection(column_tokens))
+            if overlap <= 0:
+                continue
+            if overlap > best_score:
+                best_score = overlap
+                best_column = column
+        if best_column is None:
+            continue
+        used.add(best_column)
+        selected.append(best_column)
+    return selected
+
+
+def _rank_column_key(metric_column: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "_", metric_column.lower()).strip("_")
+    return f"rank_by_{normalized or 'metric'}"
+
+
+def _row_number_ranks(rows: list[dict[str, Any]], metric_column: str) -> list[int]:
+    scored: list[tuple[int, float]] = []
+    for index, row in enumerate(rows):
+        value = _as_float(row.get(metric_column))
+        scored.append((index, value if value is not None else float("-inf")))
+    ordered = sorted(scored, key=lambda item: item[1], reverse=True)
+    rank_by_index: dict[int, int] = {}
+    for rank, (index, _value) in enumerate(ordered, start=1):
+        rank_by_index[index] = rank
+    return [rank_by_index.get(index, len(rows)) for index in range(len(rows))]
+
+
+def _table_column_index(columns: list[TableColumnConfig]) -> dict[str, TableColumnConfig]:
+    return {column.key: column for column in columns}
+
+
+def _enforce_multi_objective_rank_contract(
+    *,
+    data_tables: list[DataTable],
+    table_config: TableConfig | None,
+    presentation_intent: PresentationIntent,
+) -> None:
+    if table_config is None or table_config.style != "ranked":
+        return
+    objectives = [item.strip() for item in presentation_intent.rankingObjectives if item and item.strip()]
+    if len(objectives) < 2:
+        return
+    if not data_tables:
+        return
+
+    primary_table = data_tables[0]
+    objective_columns = _resolve_objective_columns(primary_table, objectives)
+    if len(objective_columns) < 2:
+        return
+
+    rank_columns: list[str] = []
+    for metric_column in objective_columns[:2]:
+        rank_column = _rank_column_key(metric_column)
+        rank_columns.append(rank_column)
+        ranks = _row_number_ranks(primary_table.rows, metric_column)
+        for index, row in enumerate(primary_table.rows):
+            row[rank_column] = ranks[index]
+        if rank_column not in primary_table.columns:
+            primary_table.columns.append(rank_column)
+
+    existing_configs = _table_column_index(table_config.columns)
+    rewritten_columns: list[TableColumnConfig] = []
+    for rank_column in rank_columns:
+        rewritten_columns.append(
+            existing_configs.get(
+                rank_column,
+                TableColumnConfig(
+                    key=rank_column,
+                    label=_prettify(rank_column),
+                    format="number",
+                    align="right",
+                ),
+            )
+        )
+
+    for column in table_config.columns:
+        if column.key in rank_columns:
+            continue
+        rewritten_columns.append(column)
+
+    table_config.style = "simple"
+    table_config.showRank = False
+    table_config.sortBy = rank_columns[0]
+    table_config.sortDir = "asc"
+    table_config.columns = rewritten_columns
+
+
+def _has_dual_rank_columns(*, data_tables: list[DataTable], table_config: TableConfig | None) -> bool:
+    if table_config is not None:
+        config_rank_columns = [column.key for column in table_config.columns if column.key.startswith("rank_by_")]
+        if len(set(config_rank_columns)) >= 2:
+            return True
+    if not data_tables:
+        return False
+    table_rank_columns = [column for column in data_tables[0].columns if column.startswith("rank_by_")]
+    return len(set(table_rank_columns)) >= 2
+
+
+def _normalize_multi_objective_confidence_reason(
+    *,
+    confidence_reason: str,
+    presentation_intent: PresentationIntent,
+    data_tables: list[DataTable],
+    table_config: TableConfig | None,
+) -> str:
+    objectives = [item.strip() for item in presentation_intent.rankingObjectives if item and item.strip()]
+    if len(objectives) < 2:
+        return confidence_reason
+    if not _has_dual_rank_columns(data_tables=data_tables, table_config=table_config):
+        return confidence_reason
+
+    lowered = confidence_reason.lower()
+    contradiction_patterns = (
+        "only one objective",
+        "single objective",
+        "one objective",
+        "single-sort evidence",
+    )
+    if any(pattern in lowered for pattern in contradiction_patterns):
+        objective_text = " and ".join(objectives[:2])
+        return (
+            "Data is sufficient for dual-objective ranking with explicit rank columns for "
+            f"{objective_text}."
+        )
+    return confidence_reason
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if not isinstance(value, str):
+        return None
+    raw = value.strip()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw):
+        try:
+            return datetime.fromisoformat(raw).date()
+        except ValueError:
+            return None
+    if len(raw) >= 10 and re.fullmatch(r"\d{4}-\d{2}-\d{2}", raw[:10]):
+        try:
+            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _date_range_from_sql(sql: str) -> tuple[date, date] | None:
+    between_match = re.search(r"between\s+'(\d{4}-\d{2}-\d{2})'\s+and\s+'(\d{4}-\d{2}-\d{2})'", sql, re.IGNORECASE)
+    if between_match:
+        start = _parse_iso_date(between_match.group(1))
+        end = _parse_iso_date(between_match.group(2))
+        if start and end:
+            return (start, end) if start <= end else (end, start)
+
+    year_match = re.search(r"year\s*\(\s*resp_date\s*\)\s*=\s*(20\d{2})", sql, re.IGNORECASE)
+    if year_match:
+        year = int(year_match.group(1))
+        return date(year, 1, 1), date(year, 12, 31)
+    return None
+
+
+def _date_range_from_results(results: list[SqlExecutionResult]) -> tuple[date, date] | None:
+    discovered: list[date] = []
+    for result in results:
+        for row in result.rows[:500]:
+            for value in row.values():
+                parsed = _parse_iso_date(value)
+                if parsed is not None:
+                    discovered.append(parsed)
+    if not discovered:
+        return None
+    return min(discovered), max(discovered)
+
+
+def _add_months(base: date, months: int) -> date:
+    month_index = (base.month - 1) + months
+    year = base.year + (month_index // 12)
+    month = (month_index % 12) + 1
+    day = min(base.day, monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _relative_date_range(scope: TemporalScope, *, anchor_end: date) -> tuple[date, date] | None:
+    if scope.kind != "relative_last_n":
+        return None
+    count = max(1, int(scope.count))
+    unit = scope.unit
+    if unit == "day":
+        start = anchor_end - timedelta(days=count - 1)
+        return start, anchor_end
+    if unit == "week":
+        start = anchor_end - timedelta(days=(count * 7) - 1)
+        return start, anchor_end
+    if unit == "month":
+        current_month_start = anchor_end.replace(day=1)
+        start = _add_months(current_month_start, -(count - 1))
+        return start, anchor_end
+    if unit == "quarter":
+        quarter_start_month = ((anchor_end.month - 1) // 3) * 3 + 1
+        quarter_start = anchor_end.replace(month=quarter_start_month, day=1)
+        start = _add_months(quarter_start, -((count - 1) * 3))
+        return start, anchor_end
+    if unit == "year":
+        start = date(anchor_end.year - (count - 1), 1, 1)
+        return start, anchor_end
+    return None
+
+
+def _year_from_message(message: str) -> tuple[date, date] | None:
+    years = [int(match.group(1)) for match in re.finditer(r"\b(20\d{2})\b", message)]
+    if len(years) != 1:
+        return None
+    year = years[0]
+    return date(year, 1, 1), date(year, 12, 31)
+
+
+def _derive_period_bounds(
+    *,
+    message: str,
+    results: list[SqlExecutionResult],
+    temporal_scope: TemporalScope | None,
+) -> tuple[str, str, str] | None:
+    from_results = _date_range_from_results(results)
+    if from_results is not None:
+        start, end = from_results
+        return start.isoformat(), end.isoformat(), f"Period: {start.isoformat()} to {end.isoformat()}"
+
+    sql_ranges: list[tuple[date, date]] = []
+    for result in results:
+        parsed = _date_range_from_sql(result.sql)
+        if parsed is not None:
+            sql_ranges.append(parsed)
+    if sql_ranges:
+        start = min(item[0] for item in sql_ranges)
+        end = max(item[1] for item in sql_ranges)
+        return start.isoformat(), end.isoformat(), f"Period: {start.isoformat()} to {end.isoformat()}"
+
+    if temporal_scope is not None:
+        anchor_end = datetime.now().date()
+        derived = _relative_date_range(temporal_scope, anchor_end=anchor_end)
+        if derived is not None:
+            start, end = derived
+            return start.isoformat(), end.isoformat(), f"Period: {start.isoformat()} to {end.isoformat()}"
+
+    explicit_year = _year_from_message(message)
+    if explicit_year is not None:
+        start, end = explicit_year
+        return start.isoformat(), end.isoformat(), f"Period: {start.isoformat()} to {end.isoformat()}"
+
     return None
 
 
@@ -965,11 +1267,13 @@ class SynthesisStage:
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
+        temporal_scope: TemporalScope | None = None,
     ) -> AgentResponse:
         return await self._build_response(
             message=message,
             plan=plan,
             presentation_intent=presentation_intent,
+            temporal_scope=temporal_scope,
             results=results,
             prior_assumptions=prior_assumptions,
             history=history,
@@ -985,11 +1289,13 @@ class SynthesisStage:
         results: list[SqlExecutionResult],
         prior_assumptions: list[str],
         history: list[str],
+        temporal_scope: TemporalScope | None = None,
     ) -> AgentResponse:
         return await self._build_response(
             message=message,
             plan=plan,
             presentation_intent=presentation_intent,
+            temporal_scope=temporal_scope,
             results=results,
             prior_assumptions=prior_assumptions,
             history=history,
@@ -1067,6 +1373,7 @@ class SynthesisStage:
         prior_assumptions: list[str],
         history: list[str],
         with_llm: bool,
+        temporal_scope: TemporalScope | None = None,
     ) -> AgentResponse:
         _ = prior_assumptions
         evidence = build_evidence_rows(results, message=message)
@@ -1139,6 +1446,22 @@ class SynthesisStage:
             presentation_intent=presentation_intent,
             data_tables=data_tables,
         )
+        _enforce_multi_objective_rank_contract(
+            data_tables=data_tables,
+            table_config=table_config,
+            presentation_intent=presentation_intent,
+        )
+        confidence_reason = _normalize_multi_objective_confidence_reason(
+            confidence_reason=confidence_reason,
+            presentation_intent=presentation_intent,
+            data_tables=data_tables,
+            table_config=table_config,
+        )
+        period_bounds = _derive_period_bounds(
+            message=message,
+            results=results,
+            temporal_scope=temporal_scope,
+        )
         insights = _sanitize_insights(llm_payload.get("insights")) or [
             Insight(id="i1", title="Primary data is ready", detail="Tabular evidence is available for inspection and export.", importance="medium")
         ]
@@ -1209,6 +1532,9 @@ class SynthesisStage:
             claimSupport=claim_support[:40],
             headline=headline,
             headlineEvidenceRefs=headline_refs,
+            periodStart=period_bounds[0] if period_bounds else None,
+            periodEnd=period_bounds[1] if period_bounds else None,
+            periodLabel=period_bounds[2] if period_bounds else None,
         )
 
 

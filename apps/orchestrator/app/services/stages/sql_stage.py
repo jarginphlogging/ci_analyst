@@ -26,7 +26,7 @@ from app.services.stages.sql_state_machine import (
     informed_clarification_message,
     normalize_retry_feedback,
 )
-from app.services.stages.sql_stage_topology import dependency_levels, execution_dispatch
+from app.services.stages.sql_stage_topology import dependency_indices, dependency_levels, execution_dispatch
 from app.services.table_analysis import normalize_rows
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
@@ -162,6 +162,10 @@ async def _emit_progress(progress_callback: ProgressFn | None, message: str) -> 
 
 
 class SqlExecutionStage:
+    _DEPENDENCY_CONTEXT_MAX_ROWS = 24
+    _DEPENDENCY_CONTEXT_MAX_COLUMNS = 12
+    _DEPENDENCY_CONTEXT_MAX_CELL_CHARS = 80
+
     def __init__(
         self,
         *,
@@ -192,6 +196,71 @@ class SqlExecutionStage:
                 payload.setdefault("stepId", step_id)
                 flattened.append(payload)
         return normalize_retry_feedback(flattened, max_items=12)
+
+    @classmethod
+    def _compact_context_value(cls, value: Any) -> Any:
+        if value is None or isinstance(value, (int, float, bool)):
+            return value
+        text = " ".join(str(value).split()).strip()
+        if len(text) <= cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS:
+            return text
+        return f"{text[: cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS - 3]}..."
+
+    @classmethod
+    def _sample_dependency_rows(cls, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
+        if not rows:
+            return [], False
+        total = len(rows)
+        limit = cls._DEPENDENCY_CONTEXT_MAX_ROWS
+        if total <= limit:
+            selected = rows
+            truncated = False
+        else:
+            head = max(1, limit // 2)
+            tail = max(1, limit - head)
+            selected = [*rows[:head], *rows[-tail:]]
+            truncated = True
+
+        sampled: list[dict[str, Any]] = []
+        for row in selected:
+            compact_row: dict[str, Any] = {}
+            for column_index, (column, value) in enumerate(row.items()):
+                if column_index >= cls._DEPENDENCY_CONTEXT_MAX_COLUMNS:
+                    break
+                compact_row[str(column)] = cls._compact_context_value(value)
+            sampled.append(compact_row)
+        return sampled, truncated
+
+    @classmethod
+    def _dependency_context_for_step(
+        cls,
+        *,
+        index: int,
+        dependencies_by_index: dict[int, set[int]],
+        plan: list[QueryPlanStep],
+        results_by_index: dict[int, SqlExecutionResult],
+    ) -> list[dict[str, Any]]:
+        dependency_indexes = sorted(dependencies_by_index.get(index, set()))
+        if not dependency_indexes:
+            return []
+
+        context_items: list[dict[str, Any]] = []
+        for dep_index in dependency_indexes:
+            result = results_by_index.get(dep_index)
+            if result is None:
+                continue
+            sampled_rows, truncated = cls._sample_dependency_rows(result.rows)
+            context_items.append(
+                {
+                    "stepId": plan[dep_index].id,
+                    "stepGoal": plan[dep_index].goal,
+                    "rowCount": result.rowCount,
+                    "columns": list(result.rows[0].keys()) if result.rows else [],
+                    "sampleRows": sampled_rows,
+                    "sampleTruncated": truncated,
+                }
+            )
+        return context_items
 
     async def _execute_sql(self, sql: str) -> SqlExecutionResult:
         started_at = perf_counter()
@@ -356,6 +425,7 @@ class SqlExecutionStage:
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
         temporal_scope: TemporalScope | None,
+        dependency_context: list[dict[str, Any]] | None = None,
         start_attempt: int = 1,
     ) -> tuple[GeneratedStep, int]:
         step_retry_feedback = retry_feedback_by_step.setdefault(step.id, [])
@@ -387,6 +457,7 @@ class SqlExecutionStage:
                 attempt_number=attempt,
                 retry_feedback=step_retry_feedback,
                 temporal_scope=temporal_scope.model_dump(mode="json", exclude_none=True) if temporal_scope else None,
+                dependency_context=dependency_context,
             )
             assumptions.extend(generated.assumptions[:4])
             if generated.rationale:
@@ -401,7 +472,13 @@ class SqlExecutionStage:
                 and generated.clarification_kind == "technical_failure"
                 and attempt < MAX_SQL_ATTEMPTS
             )
-            if is_generation_retryable:
+            is_dependency_context_retryable = (
+                generated.status == "clarification"
+                and generated.clarification_kind == "user_input_required"
+                and bool(dependency_context)
+                and attempt < MAX_SQL_ATTEMPTS
+            )
+            if is_generation_retryable or is_dependency_context_retryable:
                 failure_text = generated.clarification_question or generated.rationale or "technical SQL generation failure"
                 step_retry_feedback.append(
                     build_retry_event(
@@ -419,10 +496,19 @@ class SqlExecutionStage:
                 assumptions.append(
                     f"SQL generation retry {attempt} failed for {generated.step.id}: {failure_text}"
                 )
-                generation_history = [
-                    *generation_history,
-                    f"Previous SQL generation failed for {generated.step.id}: {failure_text}",
-                ]
+                if is_dependency_context_retryable:
+                    generation_history = [
+                        *generation_history,
+                        (
+                            "Dependency context from prerequisite steps is already available. "
+                            "Use that context to derive entity scope; do not ask the user for entity IDs/top-N."
+                        ),
+                    ]
+                else:
+                    generation_history = [
+                        *generation_history,
+                        f"Previous SQL generation failed for {generated.step.id}: {failure_text}",
+                    ]
                 attempt += 1
                 continue
 
@@ -448,6 +534,7 @@ class SqlExecutionStage:
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
         temporal_scope: TemporalScope | None,
+        dependency_context: list[dict[str, Any]] | None = None,
     ) -> tuple[int, SqlExecutionResult]:
         def _is_timeout_error(error: Exception) -> bool:
             if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
@@ -614,6 +701,7 @@ class SqlExecutionStage:
                         progress_callback=progress_callback,
                         sync_retry_feedback=sync_retry_feedback,
                         temporal_scope=temporal_scope,
+                        dependency_context=dependency_context,
                         start_attempt=attempt_cursor + 1,
                     )
                 except SqlGenerationBlockedError as blocked:
@@ -679,26 +767,33 @@ class SqlExecutionStage:
                 f"Dispatching {total_steps} data retrieval step(s) to {dispatch.target_label}",
             )
             levels = dependency_levels(plan)
+            dependencies_by_index = dependency_indices(plan)
             generation_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
             execution_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
 
             prior_sql: list[str] = []
             assumptions: list[str] = []
-            generated_by_index: dict[int, GeneratedStep] = {}
             generated_attempt_by_index: dict[int, int] = {}
             retry_feedback_by_step: dict[str, list[dict[str, Any]]] = {}
+            results_by_index: dict[int, SqlExecutionResult] = {}
 
             def _sync_retry_feedback() -> None:
                 self._latest_retry_feedback = self._flatten_retry_feedback(retry_feedback_by_step)
 
-            # Phase 1: generate executable SQL for every plan step (respecting
-            # dependency levels so independent steps can run in parallel).
+            # Process each dependency level as generate -> execute so downstream
+            # levels can consume upstream result context.
             for level in levels:
                 snapshot_prior_sql = list(prior_sql)
 
                 async def _generate(index: int) -> tuple[GeneratedStep, int]:
                     async with generation_semaphore:
                         step = plan[index]
+                        dependency_context = self._dependency_context_for_step(
+                            index=index,
+                            dependencies_by_index=dependencies_by_index,
+                            plan=plan,
+                            results_by_index=results_by_index,
+                        )
                         return await self._generate_ready_step(
                             index=index,
                             step=step,
@@ -708,30 +803,24 @@ class SqlExecutionStage:
                             prior_sql=snapshot_prior_sql,
                             conversation_id=conversation_id,
                             retry_feedback_by_step=retry_feedback_by_step,
-                        assumptions=assumptions,
-                        progress_callback=progress_callback,
-                        sync_retry_feedback=_sync_retry_feedback,
-                        temporal_scope=temporal_scope,
-                    )
+                            assumptions=assumptions,
+                            progress_callback=progress_callback,
+                            sync_retry_feedback=_sync_retry_feedback,
+                            temporal_scope=temporal_scope,
+                            dependency_context=dependency_context,
+                        )
 
                 generated_level = (
                     await asyncio.gather(*(_generate(index) for index in level))
                     if len(level) > 1
                     else [await _generate(level[0])]
                 )
-
-                for generated, generated_attempt in sorted(generated_level, key=lambda item: item[0].index):
+                ordered_generated_level = sorted(generated_level, key=lambda item: item[0].index)
+                for generated, generated_attempt in ordered_generated_level:
                     prior_sql.append(generated.sql)
-                    generated_by_index[generated.index] = generated
                     generated_attempt_by_index[generated.index] = generated_attempt
 
-            generated_steps = [generated_by_index[index] for index in range(total_steps)]
-            results_by_index: dict[int, SqlExecutionResult] = {}
-
-            # Phase 2: execute generated SQL, and if warehouse execution fails,
-            # regenerate with failure feedback until retry budget is exhausted.
-            for level in levels:
-                generated_level = [generated_steps[index] for index in level]
+                generated_level_steps = [generated for generated, _ in ordered_generated_level]
                 should_parallel_execute = len(generated_level) > 1 and dispatch.parallel_capable
                 level_positions = ", ".join(str(index + 1) for index in level)
                 await _emit_progress(
@@ -745,6 +834,12 @@ class SqlExecutionStage:
 
                 async def _execute(generated: GeneratedStep) -> tuple[int, SqlExecutionResult]:
                     async with execution_semaphore:
+                        dependency_context = self._dependency_context_for_step(
+                            index=generated.index,
+                            dependencies_by_index=dependencies_by_index,
+                            plan=plan,
+                            results_by_index=results_by_index,
+                        )
                         return await self._execute_with_retries(
                             generated=generated,
                             generated_attempt=generated_attempt_by_index.get(generated.index, 1),
@@ -758,12 +853,13 @@ class SqlExecutionStage:
                             progress_callback=progress_callback,
                             sync_retry_feedback=_sync_retry_feedback,
                             temporal_scope=temporal_scope,
+                            dependency_context=dependency_context,
                         )
 
                 level_results = (
-                    await asyncio.gather(*(_execute(generated) for generated in generated_level))
+                    await asyncio.gather(*(_execute(generated) for generated in generated_level_steps))
                     if should_parallel_execute
-                    else [await _execute(generated) for generated in generated_level]
+                    else [await _execute(generated) for generated in generated_level_steps]
                 )
                 for index, result in level_results:
                     results_by_index[index] = result

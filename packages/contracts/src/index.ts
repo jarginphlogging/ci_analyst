@@ -60,6 +60,7 @@ export const presentationIntentSchema = z.object({
   chartType: z.enum(["line", "bar", "stacked_bar", "stacked_area", "grouped_bar"]).nullable().optional(),
   tableStyle: z.enum(["simple", "ranked", "comparison"]).nullable().optional(),
   rationale: z.string().optional(),
+  rankingObjectives: z.array(z.string()).optional(),
 });
 
 export const chartConfigSchema = z.object({
@@ -210,6 +211,9 @@ export const agentResponseSchema = z.object({
   claimSupport: z.array(claimSupportSchema).optional(),
   headline: z.string().optional(),
   headlineEvidenceRefs: z.array(evidenceReferenceSchema).optional(),
+  periodStart: z.string().optional(),
+  periodEnd: z.string().optional(),
+  periodLabel: z.string().optional(),
 });
 
 export type AgentResponse = z.infer<typeof agentResponseSchema>;

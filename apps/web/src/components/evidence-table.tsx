@@ -474,26 +474,29 @@ function BarChart({ table, config }: { table: DataTable; config: ChartConfig }) 
           <p className="text-xs font-semibold text-slate-700">{formatXLabel(x)}</p>
           {stacked ? (
             <div className="mt-1.5 space-y-2">
-              <div className="h-3 rounded-full bg-slate-200">
-                <div
-                  className="h-3 overflow-hidden rounded-full"
-                  style={{ width: `${Math.max(0, Math.min(100, ((stackedTotals[idx] ?? 0) / maxValue) * 100))}%` }}
-                >
-                  <div className="flex h-full">
-                    {series.map((entry, seriesIdx) => {
-                      const value = entry.points[idx]?.y;
-                      const normalized = value !== null && Number.isFinite(value) ? Math.max(0, value) : 0;
-                      const widthPct = (stackedTotals[idx] ?? 0) <= 0 ? 0 : (normalized / (stackedTotals[idx] ?? 1)) * 100;
-                      return (
-                        <div
-                          key={`${x}-${entry.key}`}
-                          style={{ width: `${widthPct}%`, backgroundColor: CHART_COLORS[seriesIdx % CHART_COLORS.length] }}
-                          title={`${prettify(entry.key)}: ${formatValue(normalized, config.yFormat ?? "number")}`}
-                        />
-                      );
-                    })}
-                  </div>
-                </div>
+              <div className="relative h-3 overflow-hidden rounded-full bg-slate-200">
+                {(() => {
+                  let cumulative = 0;
+                  return series.map((entry, seriesIdx) => {
+                    const value = entry.points[idx]?.y;
+                    const normalized = value !== null && Number.isFinite(value) ? Math.max(0, value) : 0;
+                    const leftPct = (cumulative / maxValue) * 100;
+                    const widthPct = (normalized / maxValue) * 100;
+                    cumulative += normalized;
+                    return (
+                      <div
+                        key={`${x}-${entry.key}`}
+                        className="absolute bottom-0 top-0"
+                        style={{
+                          left: `${Math.max(0, Math.min(100, leftPct))}%`,
+                          width: `${Math.max(0, Math.min(100, widthPct))}%`,
+                          backgroundColor: CHART_COLORS[seriesIdx % CHART_COLORS.length],
+                        }}
+                        title={`${prettify(entry.key)}: ${formatValue(normalized, config.yFormat ?? "number")}`}
+                      />
+                    );
+                  });
+                })()}
               </div>
               <div className="grid grid-cols-[minmax(0,1fr)_120px] items-center gap-2 text-xs">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -542,7 +545,7 @@ function ChartPanel({ table, config }: { table: DataTable; config: ChartConfig }
   }`;
   const chartLabel =
     config.type === "line"
-      ? "line"
+      ? "trend"
       : config.type === "stacked_bar"
       ? "stacked bar"
       : config.type === "stacked_area"

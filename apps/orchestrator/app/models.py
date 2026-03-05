@@ -168,6 +168,7 @@ class PresentationIntent(BaseModel):
     chartType: Optional[ChartType] = None
     tableStyle: Optional[TableStyle] = None
     rationale: str = ""
+    rankingObjectives: list[str] = Field(default_factory=list)
 
 
 class TemporalScope(BaseModel):
@@ -234,6 +235,9 @@ class AgentResponse(BaseModel):
     claimSupport: list[ClaimSupport] = Field(default_factory=list)
     headline: str = ""
     headlineEvidenceRefs: list[EvidenceReference] = Field(default_factory=list)
+    periodStart: Optional[str] = None
+    periodEnd: Optional[str] = None
+    periodLabel: Optional[str] = None
 
 
 class TurnResult(BaseModel):

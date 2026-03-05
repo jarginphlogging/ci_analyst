@@ -46,12 +46,33 @@ export async function streamMockEvents(
   events: ChatStreamEvent[],
   write: (chunk: string) => void,
   delays: StreamDelays = { statusMs: 650, tokenMs: 110, responseMs: 400 },
+  signal?: AbortSignal,
 ): Promise<void> {
   for (const event of events) {
+    if (signal?.aborted) return;
     write(`${JSON.stringify(event)}\n`);
     const eventDelay = delayForEvent(event, delays);
     if (eventDelay > 0) {
-      await new Promise((resolve) => setTimeout(resolve, eventDelay));
+      await new Promise<void>((resolve, reject) => {
+        const abortError = new Error("Aborted");
+        abortError.name = "AbortError";
+        const timeout = setTimeout(() => {
+          signal?.removeEventListener("abort", onAbort);
+          resolve();
+        }, eventDelay);
+        const onAbort = () => {
+          clearTimeout(timeout);
+          signal?.removeEventListener("abort", onAbort);
+          reject(abortError);
+        };
+        if (signal?.aborted) {
+          onAbort();
+          return;
+        }
+        if (signal) {
+          signal.addEventListener("abort", onAbort, { once: true });
+        }
+      });
     }
   }
 }

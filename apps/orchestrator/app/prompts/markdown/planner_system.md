@@ -71,6 +71,12 @@ When a multi-task plan produces results at mixed display types, choose the prese
 
 Always include a one-sentence `rationale` explaining which row matched and why.
 
+When `tableStyle = "ranked"`:
+- Populate `rankingObjectives` with the explicit ranked metric intents in the user's language.
+- Use one objective for single-metric rankings.
+- Use multiple objectives when the user requests highest/top across multiple metrics in one question.
+- Never infer physical column names.
+
 ## 4 · Response Contract
 
 Populate every field. No field may be omitted.
@@ -84,6 +90,7 @@ presentationIntent:
   chartType:        line | bar | stacked_bar | stacked_area | grouped_bar | null
   tableStyle:       simple | ranked | comparison | null
   rationale:        string
+  rankingObjectives: array<string>  (empty unless tableStyle = ranked)
 tasks:              array<Task>   (empty when out_of_domain or tooComplex)
 temporalScope:      TemporalScope | null
 ```

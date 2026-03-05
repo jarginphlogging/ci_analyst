@@ -30,6 +30,7 @@ class AnalystProvider(Protocol):
         history: list[str] | None = None,
         step_id: str | None = None,
         retry_feedback: list[dict[str, Any]] | None = None,
+        dependency_context: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]: ...
 
 

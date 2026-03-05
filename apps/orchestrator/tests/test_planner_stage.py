@@ -261,3 +261,31 @@ async def test_planner_infers_temporal_scope_for_last_n_months() -> None:
     assert decision.temporal_scope.unit == "month"
     assert decision.temporal_scope.count == 6
     assert decision.temporal_scope.granularity == "month"
+
+
+@pytest.mark.asyncio
+async def test_planner_preserves_structured_ranking_objectives() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "relevance": "in_domain",
+            "relevanceReason": "In scope ranking request.",
+            "presentationIntent": {
+                "displayType": "table",
+                "tableStyle": "ranked",
+                "rationale": "User asked for highest values across two metrics.",
+                "rankingObjectives": ["average ticket", "transaction volume"],
+            },
+            "tooComplex": False,
+            "tasks": [{"task": "Rank day-of-week and time-window combinations by requested metrics."}],
+        }
+
+    stage = PlannerStage(model=load_semantic_model(), ask_llm_json=fake_ask_llm_json)
+    decision = await stage.create_plan(
+        "For the last 8 weeks, which day of week and transaction time window drive the highest average ticket and transaction volume?",
+        [],
+    )
+
+    assert decision.stop_reason == "none"
+    assert decision.presentation_intent.tableStyle == "ranked"
+    assert decision.presentation_intent.rankingObjectives == ["average ticket", "transaction volume"]
