@@ -289,6 +289,12 @@ class SynthesisContextPackage(BaseModel):
     executedSteps: list[SynthesisExecutedStep] = Field(default_factory=list)
     availableVisualArtifacts: list[SynthesisVisualArtifact] = Field(default_factory=list)
     portfolioSummary: SynthesisPortfolioSummary
+    requestedClaimModes: list[str] = Field(default_factory=list)
+    supportedClaims: list[dict[str, Any]] = Field(default_factory=list)
+    unsupportedClaims: list[dict[str, Any]] = Field(default_factory=list)
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+    series: list[dict[str, Any]] = Field(default_factory=list)
+    dataQuality: list[dict[str, Any]] = Field(default_factory=list)
     facts: list[FactSignal] = Field(default_factory=list)
     comparisons: list[ComparisonSignal] = Field(default_factory=list)
     evidenceStatus: EvidenceStatus = "insufficient"

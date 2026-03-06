@@ -145,7 +145,22 @@ def _coerce_temporal_scope(raw: Any, message: str) -> TemporalScope | None:
 
 
 def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
-    _ = message
+    normalized_message = _normalized(message)
+
+    def _is_temporal_composition_trend() -> bool:
+        has_temporal_grain = bool(
+            re.search(r"\b(by|per)\s+(day|week|month|quarter|year)\b", normalized_message)
+            or re.search(r"\b(daily|weekly|monthly|quarterly|yearly)\b", normalized_message)
+            or re.search(r"\bover time\b", normalized_message)
+        )
+        has_composition_language = bool(
+            re.search(r"\b(mix|split|share|composition|breakdown|vs|versus)\b", normalized_message)
+        )
+        has_named_pairing = ("new" in normalized_message and "repeat" in normalized_message) or (
+            "channel" in normalized_message and ("cp" in normalized_message or "cnp" in normalized_message)
+        )
+        return has_temporal_grain and (has_composition_language or has_named_pairing)
+
     if not isinstance(raw, dict):
         return PresentationIntent(
             displayType="table",
@@ -171,6 +186,8 @@ def _coerce_presentation_intent(raw: Any, message: str) -> PresentationIntent:
             ranking_objectives.append(objective)
     if display_type == "chart" and chart_type is None:
         chart_type = "line"
+    if display_type == "chart" and chart_type == "line" and _is_temporal_composition_trend():
+        chart_type = "stacked_area"
     if display_type == "table" and table_style is None:
         table_style = "simple"
     if display_type != "table" or table_style != "ranked":

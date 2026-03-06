@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import time
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -13,9 +14,10 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 _ANTHROPIC_TIMEOUT_SECONDS = 45.0
-_ANTHROPIC_MAX_ATTEMPTS = 3
+_ANTHROPIC_MAX_ATTEMPTS = 4
 _ANTHROPIC_BASE_RETRY_DELAY_SECONDS = 0.35
 _ANTHROPIC_RETRYABLE_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
+_ANTHROPIC_MAX_RETRY_DELAY_SECONDS = 30.0
 
 
 def _messages_endpoint() -> str:
@@ -24,6 +26,28 @@ def _messages_endpoint() -> str:
             "Anthropic credentials are not configured. Set ANTHROPIC_API_KEY and ANTHROPIC_MODEL."
         )
     return f"{settings.anthropic_base_url.rstrip('/')}/v1/messages"
+
+
+def _parse_retry_seconds(response: httpx.Response, *, attempt: int) -> float:
+    retry_after_header = str(response.headers.get("retry-after", "")).strip()
+    retry_after_seconds = 0.0
+    if retry_after_header:
+        try:
+            retry_after_seconds = max(0.0, float(retry_after_header))
+        except ValueError:
+            retry_after_seconds = 0.0
+
+    input_reset_header = str(response.headers.get("anthropic-ratelimit-input-tokens-reset", "")).strip()
+    reset_wait_seconds = 0.0
+    if input_reset_header:
+        try:
+            parsed = datetime.fromisoformat(input_reset_header.replace("Z", "+00:00"))
+            reset_wait_seconds = max(0.0, parsed.astimezone(timezone.utc).timestamp() - time.time())
+        except ValueError:
+            reset_wait_seconds = 0.0
+
+    fallback_seconds = _ANTHROPIC_BASE_RETRY_DELAY_SECONDS * attempt
+    return min(_ANTHROPIC_MAX_RETRY_DELAY_SECONDS, max(fallback_seconds, retry_after_seconds, reset_wait_seconds))
 
 
 async def chat_completion(
@@ -116,6 +140,7 @@ async def chat_completion(
 
         if response.status_code >= 400:
             if response.status_code in _ANTHROPIC_RETRYABLE_STATUS_CODES and attempt < _ANTHROPIC_MAX_ATTEMPTS:
+                wait_seconds = _parse_retry_seconds(response, attempt=attempt)
                 logger.warning(
                     "Anthropic request returned transient HTTP error; retrying",
                     extra={
@@ -124,10 +149,11 @@ async def chat_completion(
                         "attempt": attempt,
                         "maxAttempts": _ANTHROPIC_MAX_ATTEMPTS,
                         "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
+                        "retryDelaySeconds": round(wait_seconds, 2),
                         "responsePreview": response.text[:500],
                     },
                 )
-                await asyncio.sleep(_ANTHROPIC_BASE_RETRY_DELAY_SECONDS * attempt)
+                await asyncio.sleep(wait_seconds)
                 continue
             logger.error(
                 "Anthropic request returned error",

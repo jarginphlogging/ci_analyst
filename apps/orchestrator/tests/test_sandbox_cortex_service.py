@@ -161,3 +161,58 @@ async def test_sandbox_cortex_message_retries_schema_validation_generation_error
     assert payload.get("type") == "sql_ready"
     assert payload.get("sql") == "SELECT 1"
     assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_sandbox_cortex_message_does_not_inject_retry_feedback_into_history(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db_path = str(tmp_path / "cortex_sandbox.db")
+    captured_history: list[str] = []
+
+    async def _fake_generate_sql_from_message(**kwargs):  # type: ignore[no-untyped-def]
+        nonlocal captured_history
+        captured_history = list(kwargs.get("conversation_history", []))
+        return {
+            "type": "sql_ready",
+            "sql": "SELECT 1",
+            "lightResponse": "",
+            "clarificationQuestion": "",
+            "clarificationKind": "none",
+            "notRelevantReason": "",
+            "assumptions": [],
+        }
+
+    original_path = settings.sandbox_sqlite_path
+    original_key = settings.sandbox_cortex_api_key
+    try:
+        object.__setattr__(settings, "sandbox_sqlite_path", db_path)
+        object.__setattr__(settings, "sandbox_cortex_api_key", "test-key")
+        monkeypatch.setattr(sandbox_sca_service, "_generate_sql_from_message", _fake_generate_sql_from_message)
+        client = TestClient(app)
+
+        response = client.post(
+            "/api/v2/cortex/analyst/message",
+            headers={"Authorization": "Bearer test-key"},
+            json={
+                "conversationId": "conv-no-history-injection",
+                "message": "Show spend by state",
+                "history": ["prior user text"],
+                "retryFeedback": [
+                    {
+                        "phase": "sql_execution",
+                        "attempt": 1,
+                        "error": "Temporal scope mismatch: expected 6 month period(s), but found 7.",
+                        "failedSql": "SELECT bad_window",
+                    }
+                ],
+            },
+        )
+    finally:
+        object.__setattr__(settings, "sandbox_sqlite_path", original_path)
+        object.__setattr__(settings, "sandbox_cortex_api_key", original_key)
+
+    assert response.status_code == 200
+    assert captured_history
+    assert all("Previous SQL execution attempt" not in item for item in captured_history)

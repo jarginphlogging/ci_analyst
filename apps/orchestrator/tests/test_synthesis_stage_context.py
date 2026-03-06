@@ -11,12 +11,58 @@ from app.services.stages.synthesis_stage import SynthesisStage
 
 def _extract_context_payload(prompt_text: str) -> dict[str, object]:
     prefix = "Synthesis context package:\n"
-    suffix = "\n\nPopulate these structured fields:"
     start = prompt_text.index(prefix) + len(prefix)
-    end = prompt_text.find(suffix, start)
-    if end == -1:
-        return json.loads(prompt_text[start:].strip())
-    return json.loads(prompt_text[start:end].strip())
+    context_text = prompt_text[start:].strip()
+    if context_text.startswith("{"):
+        return json.loads(context_text)
+
+    def _extract_json_block(title: str) -> object:
+        pattern = rf"### {re.escape(title)} \(JSON\)\n```json\n(.*?)\n```"
+        match = re.search(pattern, context_text, re.DOTALL)
+        if not match:
+            raise AssertionError(f"Missing JSON block: {title}")
+        return json.loads(match.group(1))
+
+    def _extract_scalar(key: str) -> str | None:
+        match = re.search(rf"^{re.escape(key)}:\s*(.*)$", context_text, re.MULTILINE)
+        if not match:
+            return None
+        return match.group(1).strip()
+
+    headline_scalar = _extract_scalar("Headline")
+    headline = ""
+    if headline_scalar:
+        try:
+            headline = str(json.loads(headline_scalar))
+        except json.JSONDecodeError:
+            headline = headline_scalar
+
+    context: dict[str, object] = {
+        "plan": _extract_json_block("Plan"),
+        "subtaskStatus": _extract_json_block("Subtask Status"),
+        "availableVisualArtifacts": _extract_json_block("Available Visual Artifacts"),
+        "requestedClaimModes": _extract_json_block("Requested Claim Modes"),
+        "supportedClaims": _extract_json_block("Supported Claims"),
+        "unsupportedClaims": _extract_json_block("Unsupported Claims"),
+        "observations": _extract_json_block("Observations"),
+        "series": _extract_json_block("Series"),
+        "dataQuality": _extract_json_block("Data Quality"),
+        "executedSteps": _extract_json_block("Executed Steps"),
+        "facts": _extract_json_block("Facts"),
+        "comparisons": _extract_json_block("Comparisons"),
+        "headlineEvidenceRefs": _extract_json_block("Headline Evidence Refs"),
+        "evidenceStatus": _extract_scalar("EvidenceStatus") or "",
+        "headline": headline,
+    }
+
+    ranking_evidence = _extract_json_block("Ranking Evidence")
+    if ranking_evidence is not None:
+        context["rankingEvidence"] = ranking_evidence
+
+    evidence_empty_reason = _extract_scalar("EvidenceEmptyReason")
+    if evidence_empty_reason:
+        context["evidenceEmptyReason"] = evidence_empty_reason
+    return context
 
 
 @pytest.mark.asyncio
@@ -107,7 +153,7 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
     prompt_text = captured_prompts["user"]
     assert re.search(r'"displayType"\s*:\s*"chart"', prompt_text)
     assert re.search(r'"chartType"\s*:\s*"grouped_bar"', prompt_text)
-    assert '"facts":[' in prompt_text
+    assert "### Facts (JSON)" in prompt_text
     assert "Evidence summary:" not in prompt_text
     context = _extract_context_payload(prompt_text)
     assert "queryContext" not in context
@@ -127,6 +173,11 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
     assert "evidenceStatus" in context
     assert "headline" in context
     assert "comparisons" in context
+    assert "requestedClaimModes" in context
+    assert "supportedClaims" in context
+    assert "observations" in context
+    assert "series" in context
+    assert "dataQuality" in context
     assert "evidenceEmptyReason" not in context
     subtask_status = context["subtaskStatus"]
     assert isinstance(subtask_status, list) and subtask_status
@@ -134,6 +185,8 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
     assert isinstance(first_subtask, dict)
     assert first_subtask["status"] == "sufficient"
     assert "reason" not in first_subtask
+    supported_claims = context["supportedClaims"]
+    assert isinstance(supported_claims, list)
 
 
 @pytest.mark.asyncio
@@ -210,6 +263,77 @@ async def test_synthesis_stage_formats_comparison_period_labels_and_deltas() -> 
     assert sales_cmp["currentPeriodLabel"] == "Q4 2025"
     assert sales_cmp["pctDelta"] == 16.47
     assert sales_cmp["absDelta"] == 42659690.4
+
+
+@pytest.mark.asyncio
+async def test_synthesis_stage_marks_trend_claim_supported_without_fact_or_comparison_rows() -> None:
+    captured_prompts: dict[str, str] = {}
+
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        captured_prompts["user"] = str(kwargs.get("user_prompt", ""))
+        return {
+            "answer": "New and repeat customers are shown month by month.",
+            "whyItMatters": "This provides a recent monthly baseline for customer mix.",
+            "confidence": "high",
+            "confidenceReason": "The monthly time series is directly available.",
+            "summaryCards": [],
+            "chartConfig": {
+                "type": "stacked_area",
+                "x": "month",
+                "y": ["new_customers", "repeat_customers"],
+                "series": None,
+                "xLabel": "Month",
+                "yLabel": "Customers",
+                "yFormat": "number",
+            },
+            "tableConfig": None,
+            "insights": [],
+            "suggestedQuestions": ["Q1", "Q2", "Q3"],
+            "assumptions": [],
+        }
+
+    stage = SynthesisStage(ask_llm_json=fake_ask_llm_json)
+    results = [
+        SqlExecutionResult(
+            sql=(
+                "SELECT month, new_customers, repeat_customers, total_transactions "
+                "FROM t ORDER BY month"
+            ),
+            rows=[
+                {"month": "2025-07-01", "new_customers": 1176843, "repeat_customers": 1551627, "total_transactions": 2728470},
+                {"month": "2025-08-01", "new_customers": 1162219, "repeat_customers": 1532381, "total_transactions": 2694600},
+                {"month": "2025-09-01", "new_customers": 1172162, "repeat_customers": 1545490, "total_transactions": 2717652},
+                {"month": "2025-10-01", "new_customers": 1182201, "repeat_customers": 1558743, "total_transactions": 2740944},
+                {"month": "2025-11-01", "new_customers": 1232906, "repeat_customers": 1625638, "total_transactions": 2858544},
+                {"month": "2025-12-01", "new_customers": 1236953, "repeat_customers": 1631017, "total_transactions": 2867970},
+            ],
+            rowCount=6,
+        )
+    ]
+
+    response = await stage.build_response(
+        message="Show me new vs repeat customers by month for the last 6 months.",
+        plan=[],
+        presentation_intent=PresentationIntent(displayType="chart", chartType="stacked_area"),
+        results=results,
+        prior_assumptions=[],
+        history=[],
+    )
+
+    assert response.evidenceStatus == "sufficient"
+    assert response.evidenceEmptyReason == ""
+    context = _extract_context_payload(captured_prompts["user"])
+    assert context["requestedClaimModes"] == ["trend"]
+    supported_claims = context["supportedClaims"]
+    assert isinstance(supported_claims, list) and supported_claims
+    trend_claim = next((item for item in supported_claims if isinstance(item, dict) and item.get("mode") == "trend"), None)
+    assert trend_claim is not None
+    series = context["series"]
+    assert isinstance(series, list) and series
+    series_entry = series[0]
+    assert isinstance(series_entry, dict)
+    assert series_entry["timeKey"] == "month"
+    assert series_entry["metricKeys"][:2] == ["new_customers", "repeat_customers"]
 
 
 @pytest.mark.asyncio

@@ -424,6 +424,343 @@ def _comparison_sort_key(column: str) -> tuple[int, int, int, str]:
     return (3, 0, 0, lowered)
 
 
+def _requested_claim_modes(
+    *,
+    message: str,
+    presentation_intent: PresentationIntent,
+    step_count: int,
+) -> list[str]:
+    text = message.lower()
+    requested: set[str] = set()
+
+    if step_count > 1:
+        requested.add("multi_step_synthesis")
+
+    if presentation_intent.displayType == "chart":
+        if presentation_intent.chartType in {"line", "stacked_area"}:
+            requested.add("trend")
+        elif presentation_intent.chartType == "stacked_bar":
+            requested.add("composition")
+        elif presentation_intent.chartType in {"bar", "grouped_bar"}:
+            if any(token in text for token in ("top", "bottom", "rank", "highest", "lowest")):
+                requested.add("ranking")
+            elif any(token in text for token in ("compare", "versus", "yoy", "mom", "delta", "change")):
+                requested.add("comparison")
+            else:
+                requested.add("snapshot")
+
+    if presentation_intent.displayType == "table":
+        if presentation_intent.tableStyle == "comparison":
+            requested.add("comparison")
+        elif presentation_intent.tableStyle == "ranked":
+            requested.add("ranking")
+        else:
+            requested.add("snapshot")
+
+    keyword_modes: dict[str, tuple[str, ...]] = {
+        "trend": ("trend", "over time", "month", "months", "week", "weeks", "quarter", "quarters", "year", "years", "daily", "weekly", "monthly"),
+        "comparison": ("compare", "versus", "yoy", "mom", "delta", "change", "prior", "previous"),
+        "ranking": ("top", "bottom", "rank", "highest", "lowest", "best", "worst"),
+        "composition": ("mix", "share", "split", "composition", "contribution", "breakdown"),
+        "distribution": ("distribution", "spread", "variance", "volatility", "outlier", "percentile", "skew"),
+    }
+    for mode, tokens in keyword_modes.items():
+        if any(token in text for token in tokens):
+            requested.add(mode)
+
+    if not requested:
+        requested.add("snapshot")
+
+    ordered_modes = (
+        "snapshot",
+        "trend",
+        "comparison",
+        "ranking",
+        "composition",
+        "distribution",
+        "multi_step_synthesis",
+    )
+    return [mode for mode in ordered_modes if mode in requested]
+
+
+def _infer_table_roles(table: DataTable) -> tuple[list[str], list[str], list[str]]:
+    date_columns = [column for column in table.columns if _column_kind(table, column) == "date"]
+    numeric_columns = [column for column in table.columns if _column_kind(table, column) == "number"]
+    excluded = set(date_columns).union(numeric_columns)
+    dimension_columns = [column for column in table.columns if column not in excluded]
+    return date_columns, numeric_columns, dimension_columns
+
+
+def _sort_rows_by_column(rows: list[dict[str, Any]], column: str) -> list[dict[str, Any]]:
+    def _sort_key(row: dict[str, Any]) -> tuple[int, float, str]:
+        value = row.get(column)
+        if isinstance(value, str):
+            parsed = _parse_iso_date(value)
+            if parsed is not None:
+                return (0, float(parsed.toordinal()), value)
+            return (1, 0.0, value)
+        if isinstance(value, (date, datetime)):
+            normalized = value.date() if isinstance(value, datetime) else value
+            return (0, float(normalized.toordinal()), normalized.isoformat())
+        return (2, 0.0, str(value))
+
+    return sorted(rows, key=_sort_key)
+
+
+def _build_observations(data_tables: list[DataTable]) -> list[dict[str, Any]]:
+    observations: list[dict[str, Any]] = []
+    for step_index, table in enumerate(data_tables, start=1):
+        if not table.rows:
+            continue
+        date_columns, numeric_columns, dimension_columns = _infer_table_roles(table)
+        if table.rowCount == 1 and numeric_columns:
+            row = table.rows[0]
+            metrics = []
+            for column in numeric_columns[:4]:
+                value = _as_float(row.get(column))
+                if value is None:
+                    continue
+                metrics.append(
+                    {
+                        "metric": column,
+                        "value": value,
+                        "unit": "number",
+                    }
+                )
+            if metrics:
+                observations.append(
+                    {
+                        "stepIndex": step_index,
+                        "type": "single_row_summary",
+                        "period": str(row.get(date_columns[0])) if date_columns else None,
+                        "metrics": metrics,
+                    }
+                )
+            continue
+        if date_columns or not numeric_columns or not dimension_columns:
+            continue
+        dimension_key = dimension_columns[0]
+        metric_keys = numeric_columns[:2]
+        row_observations: list[dict[str, Any]] = []
+        for row in table.rows[:5]:
+            metric_values = {
+                metric: _as_float(row.get(metric))
+                for metric in metric_keys
+                if _as_float(row.get(metric)) is not None
+            }
+            if not metric_values:
+                continue
+            row_observations.append(
+                {
+                    "dimensionValue": row.get(dimension_key),
+                    "metrics": metric_values,
+                }
+            )
+        if row_observations:
+            observations.append(
+                {
+                    "stepIndex": step_index,
+                    "type": "row_observations",
+                    "dimensionKey": dimension_key,
+                    "rows": row_observations,
+                }
+            )
+    return observations[:8]
+
+
+def _build_series(data_tables: list[DataTable]) -> list[dict[str, Any]]:
+    series_entries: list[dict[str, Any]] = []
+    for step_index, table in enumerate(data_tables, start=1):
+        if table.rowCount < 2 or not table.rows:
+            continue
+        date_columns, numeric_columns, _dimension_columns = _infer_table_roles(table)
+        if not date_columns or not numeric_columns:
+            continue
+        time_key = date_columns[0]
+        metric_keys = numeric_columns[:3]
+        ordered_rows = _sort_rows_by_column(table.rows, time_key)
+        trimmed_rows = ordered_rows[:12]
+        points: list[dict[str, Any]] = []
+        summaries: list[dict[str, Any]] = []
+        for row in trimmed_rows:
+            point: dict[str, Any] = {time_key: row.get(time_key)}
+            for metric_key in metric_keys:
+                value = _as_float(row.get(metric_key))
+                point[metric_key] = value
+            points.append(point)
+
+        for metric_key in metric_keys:
+            metric_points = [
+                (row.get(time_key), _as_float(row.get(metric_key)))
+                for row in ordered_rows
+                if _as_float(row.get(metric_key)) is not None
+            ]
+            if len(metric_points) < 2:
+                continue
+            start_period, start_value = metric_points[0]
+            end_period, end_value = metric_points[-1]
+            max_period, max_value = max(metric_points, key=lambda item: item[1] or float("-inf"))
+            min_period, min_value = min(metric_points, key=lambda item: item[1] or float("inf"))
+            abs_delta = (end_value or 0.0) - (start_value or 0.0)
+            pct_delta = None if start_value in {None, 0.0} else (abs_delta / start_value) * 100.0
+            summaries.append(
+                {
+                    "metric": metric_key,
+                    "startPeriod": start_period,
+                    "startValue": start_value,
+                    "endPeriod": end_period,
+                    "endValue": end_value,
+                    "absDelta": abs_delta,
+                    "pctDelta": round(pct_delta, 2) if pct_delta is not None else None,
+                    "peakPeriod": max_period,
+                    "peakValue": max_value,
+                    "troughPeriod": min_period,
+                    "troughValue": min_value,
+                }
+            )
+        if not summaries:
+            continue
+        series_entries.append(
+            {
+                "stepIndex": step_index,
+                "timeKey": time_key,
+                "metricKeys": metric_keys,
+                "pointCount": len(ordered_rows),
+                "points": points,
+                "summaries": summaries,
+            }
+        )
+    return series_entries[:4]
+
+
+def _build_data_quality(
+    *,
+    data_tables: list[DataTable],
+    table_summaries: list[dict[str, Any]],
+    subtask_status: list[SubtaskStatus],
+) -> list[dict[str, Any]]:
+    quality: list[dict[str, Any]] = []
+    for step_index, table in enumerate(data_tables, start=1):
+        summary = table_summaries[step_index - 1] if step_index - 1 < len(table_summaries) else {}
+        status = subtask_status[step_index - 1] if step_index - 1 < len(subtask_status) else None
+        date_stats = summary.get("dateStats", {}) if isinstance(summary, dict) else {}
+        date_columns, numeric_columns, _dimension_columns = _infer_table_roles(table)
+        quality.append(
+            {
+                "stepIndex": step_index,
+                "rowCount": table.rowCount,
+                "columnCount": len(table.columns),
+                "nullRatePct": float(summary.get("nullRatePct", 0.0) or 0.0) if isinstance(summary, dict) else 0.0,
+                "dateColumns": date_columns,
+                "numericColumns": numeric_columns,
+                "status": status.status if status else "sufficient",
+                "statusReason": status.reason if status else "",
+                "dateCoverage": {
+                    key: value
+                    for key, value in date_stats.items()
+                    if isinstance(value, dict)
+                },
+            }
+        )
+    return quality
+
+
+def _build_claim_coverage(
+    *,
+    requested_modes: list[str],
+    data_tables: list[DataTable],
+    artifacts: list[AnalysisArtifact],
+    series: list[dict[str, Any]],
+    facts: list[FactSignal],
+    comparisons: list[ComparisonSignal],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    artifact_kinds = {artifact.kind for artifact in artifacts if artifact.rows}
+    ranking_available = "ranking_breakdown" in artifact_kinds
+    comparison_available = bool(comparisons) or "comparison_breakdown" in artifact_kinds
+    distribution_available = "distribution_breakdown" in artifact_kinds
+    snapshot_available = any(table.rowCount > 0 for table in data_tables) and (
+        bool(facts)
+        or bool(series)
+        or any(any(_column_kind(table, column) == "number" for column in table.columns) for table in data_tables)
+    )
+    composition_available = any(
+        any(token in column.lower() for token in ("share", "mix", "percent", "pct", "rate"))
+        for table in data_tables
+        for column in table.columns
+    )
+    multi_step_available = len([table for table in data_tables if table.rowCount > 0]) >= 2
+    support_matrix = {
+        "snapshot": (
+            snapshot_available,
+            ["observations", "facts"] if snapshot_available else [],
+            "Absolute values are available from deterministic summaries or direct table observations."
+            if snapshot_available
+            else "No grounded absolute-value evidence was available.",
+        ),
+        "trend": (
+            bool(series),
+            ["series"] if series else [],
+            "Time-ordered numeric series are available."
+            if series
+            else "No aligned time-based numeric series were available.",
+        ),
+        "comparison": (
+            comparison_available,
+            ["comparisons"] if comparison_available else [],
+            "Deterministic comparisons or comparison artifacts are available."
+            if comparison_available
+            else "No deterministic prior/current comparison evidence was available.",
+        ),
+        "ranking": (
+            ranking_available,
+            ["rankingEvidence"] if ranking_available else [],
+            "Deterministic ranking evidence is available."
+            if ranking_available
+            else "No authoritative ranking evidence was available.",
+        ),
+        "composition": (
+            composition_available,
+            ["observations"] if composition_available else [],
+            "Composition-style percentage or share columns are available."
+            if composition_available
+            else "No deterministic composition/share evidence was available.",
+        ),
+        "distribution": (
+            distribution_available,
+            ["artifacts"] if distribution_available else [],
+            "Distribution evidence is available."
+            if distribution_available
+            else "No deterministic distribution summary was available.",
+        ),
+        "multi_step_synthesis": (
+            multi_step_available,
+            ["executedSteps"] if multi_step_available else [],
+            "Multiple non-empty executed steps are available for cross-step synthesis."
+            if multi_step_available
+            else "Only one populated step was available.",
+        ),
+    }
+
+    supported_claims: list[dict[str, Any]] = []
+    unsupported_claims: list[dict[str, Any]] = []
+    for mode in requested_modes:
+        supported, sources, reason = support_matrix.get(mode, (False, [], "No support metadata available."))
+        entry = {"mode": mode, "sources": sources, "reason": reason}
+        if supported:
+            supported_claims.append(entry)
+        else:
+            unsupported_claims.append(entry)
+    if not requested_modes:
+        supported_claims.append(
+            {
+                "mode": "snapshot",
+                "sources": ["observations"] if snapshot_available else [],
+                "reason": "Defaulted to snapshot because no stronger analytical mode was requested.",
+            }
+        )
+    return supported_claims, unsupported_claims
+
+
 def _is_comparison_like_column(column: str) -> bool:
     lowered = column.lower()
     if re.search(r"(19|20)\d{2}", lowered):
@@ -946,17 +1283,27 @@ def _subtask_statuses(
 
 def _derive_evidence_status(
     *,
+    requested_claim_modes: list[str],
+    supported_claims: list[dict[str, Any]],
+    unsupported_claims: list[dict[str, Any]],
     facts: list[FactSignal],
     comparisons: list[ComparisonSignal],
     subtask_status: list[SubtaskStatus],
 ) -> tuple[EvidenceStatus, str]:
-    if not facts and not comparisons:
-        return "insufficient", "No comparable facts could be derived from returned columns and periods."
+    if requested_claim_modes and not supported_claims:
+        requested = ", ".join(requested_claim_modes)
+        return "insufficient", f"The requested analytical claim types could not be grounded: {requested}."
     if any(item.status == "insufficient" for item in subtask_status):
         return "limited", "At least one planned subtask returned insufficient evidence."
+    if unsupported_claims:
+        unsupported = ", ".join(str(item.get("mode", "")).strip() for item in unsupported_claims if item.get("mode"))
+        if unsupported:
+            return "limited", f"Some requested analytical claim types were not fully grounded: {unsupported}."
     weak_count = sum(1 for item in [*facts, *comparisons] if item.supportStatus == "weak")
     if weak_count > 0:
         return "limited", "Some derived claims are weak due to incomplete or weakly aligned evidence."
+    if not supported_claims and not facts and not comparisons:
+        return "insufficient", "No grounded analytical evidence could be derived from the returned results."
     return "sufficient", ""
 
 
@@ -1075,6 +1422,14 @@ def _context_payload_for_prompt(
     *,
     artifacts: list[AnalysisArtifact] | None = None,
 ) -> str:
+    def _json_block(title: str, value: Any) -> str:
+        return (
+            f"### {title} (JSON)\n"
+            "```json\n"
+            f"{json.dumps(value, ensure_ascii=True, separators=(',', ':'))}\n"
+            "```"
+        )
+
     def _compact_date_stats(raw: Any) -> dict[str, Any]:
         if not isinstance(raw, dict):
             return {}
@@ -1184,6 +1539,12 @@ def _context_payload_for_prompt(
             {"kind": item.kind, "title": item.title, "rowCount": item.rowCount}
             for item in context.availableVisualArtifacts
         ],
+        "requestedClaimModes": context.requestedClaimModes,
+        "supportedClaims": context.supportedClaims,
+        "unsupportedClaims": context.unsupportedClaims,
+        "observations": context.observations,
+        "series": context.series,
+        "dataQuality": context.dataQuality,
         "facts": [
             {
                 "id": item.id,
@@ -1250,7 +1611,42 @@ def _context_payload_for_prompt(
             entry["reason"] = item.reason
         payload["subtaskStatus"].append(entry)
 
-    return json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+    lines = [
+        "## Synthesis Context Package (Hybrid)",
+        "",
+        f"EvidenceStatus: {payload['evidenceStatus']}",
+        f"Headline: {json.dumps(payload.get('headline', ''), ensure_ascii=True)}",
+        f"RequestedClaimModesCount: {len(payload['requestedClaimModes'])}",
+        f"SupportedClaimsCount: {len(payload['supportedClaims'])}",
+        f"FactsCount: {len(payload['facts'])}",
+        f"ComparisonsCount: {len(payload['comparisons'])}",
+    ]
+    if "evidenceEmptyReason" in payload:
+        lines.append(f"EvidenceEmptyReason: {payload['evidenceEmptyReason']}")
+    lines.append("")
+
+    blocks: list[tuple[str, Any]] = [
+        ("Plan", payload["plan"]),
+        ("Subtask Status", payload["subtaskStatus"]),
+        ("Available Visual Artifacts", payload["availableVisualArtifacts"]),
+        ("Requested Claim Modes", payload["requestedClaimModes"]),
+        ("Supported Claims", payload["supportedClaims"]),
+        ("Unsupported Claims", payload["unsupportedClaims"]),
+        ("Observations", payload["observations"]),
+        ("Series", payload["series"]),
+        ("Data Quality", payload["dataQuality"]),
+        ("Ranking Evidence", payload.get("rankingEvidence")),
+        ("Executed Steps", payload["executedSteps"]),
+        ("Facts", payload["facts"]),
+        ("Comparisons", payload["comparisons"]),
+        ("Headline Evidence Refs", payload["headlineEvidenceRefs"]),
+    ]
+    for index, (title, value) in enumerate(blocks):
+        lines.append(_json_block(title, value))
+        if index < len(blocks) - 1:
+            lines.append("")
+
+    return "\n".join(lines).strip()
 
 
 class SynthesisStage:
@@ -1305,10 +1701,16 @@ class SynthesisStage:
     def _synthesis_context_package(
         self,
         *,
-        message: str,
         plan: list[QueryPlanStep] | None,
         results: list[SqlExecutionResult],
+        table_summaries: list[dict[str, Any]],
         artifacts: list[AnalysisArtifact],
+        requested_claim_modes: list[str],
+        supported_claims: list[dict[str, Any]],
+        unsupported_claims: list[dict[str, Any]],
+        observations: list[dict[str, Any]],
+        series: list[dict[str, Any]],
+        data_quality: list[dict[str, Any]],
         facts: list[FactSignal],
         comparisons: list[ComparisonSignal],
         evidence_status: EvidenceStatus,
@@ -1316,9 +1718,9 @@ class SynthesisStage:
         subtask_status: list[SubtaskStatus],
         headline: str,
         headline_refs: list[EvidenceReference],
+        message: str,
     ) -> SynthesisContextPackage:
         plan_steps = plan or []
-        table_summaries = self._data_summarizer.summarize_tables(results=results, message=message)
         synthesis_plan = [
             SynthesisPlanStep(id=step.id, goal=step.goal, dependsOn=step.dependsOn, independent=step.independent)
             for step in plan_steps
@@ -1354,6 +1756,12 @@ class SynthesisStage:
                 tableCount=len(results),
                 totalRows=sum(result.rowCount for result in results),
             ),
+            requestedClaimModes=requested_claim_modes,
+            supportedClaims=supported_claims,
+            unsupportedClaims=unsupported_claims,
+            observations=observations,
+            series=series,
+            dataQuality=data_quality,
             facts=facts[:_CONTEXT_FACT_CAP],
             comparisons=comparisons[:_CONTEXT_COMPARISON_CAP],
             evidenceStatus=evidence_status,
@@ -1377,12 +1785,36 @@ class SynthesisStage:
     ) -> AgentResponse:
         _ = prior_assumptions
         evidence = build_evidence_rows(results, message=message)
+        data_tables = results_to_data_tables(results)
         raw_artifacts = build_analysis_artifacts(results, message=message)
         facts, comparisons = build_fact_comparison_signals(results, message=message)
         artifacts = _attach_artifact_evidence(artifacts=raw_artifacts, facts=facts, comparisons=comparisons)
         table_summaries = self._data_summarizer.summarize_tables(results=results, message=message)
         subtask_status = _subtask_statuses(plan=plan, results=results, table_summaries=table_summaries)
+        requested_claim_modes = _requested_claim_modes(
+            message=message,
+            presentation_intent=presentation_intent,
+            step_count=max(len(plan or []), len(results)),
+        )
+        observations = _build_observations(data_tables)
+        series = _build_series(data_tables)
+        data_quality = _build_data_quality(
+            data_tables=data_tables,
+            table_summaries=table_summaries,
+            subtask_status=subtask_status,
+        )
+        supported_claims, unsupported_claims = _build_claim_coverage(
+            requested_modes=requested_claim_modes,
+            data_tables=data_tables,
+            artifacts=artifacts,
+            series=series,
+            facts=facts,
+            comparisons=comparisons,
+        )
         evidence_status, evidence_empty_reason = _derive_evidence_status(
+            requested_claim_modes=requested_claim_modes,
+            supported_claims=supported_claims,
+            unsupported_claims=unsupported_claims,
             facts=facts,
             comparisons=comparisons,
             subtask_status=subtask_status,
@@ -1390,12 +1822,17 @@ class SynthesisStage:
         headline, headline_refs = _deterministic_headline(facts=facts, comparisons=comparisons)
         claim_support = _claim_support(facts=facts, comparisons=comparisons)
         metrics = build_metric_points(results, evidence, message=message)
-        data_tables = results_to_data_tables(results)
         synthesis_context = self._synthesis_context_package(
-            message=message,
             plan=plan,
             results=results,
+            table_summaries=table_summaries,
             artifacts=artifacts,
+            requested_claim_modes=requested_claim_modes,
+            supported_claims=supported_claims,
+            unsupported_claims=unsupported_claims,
+            observations=observations,
+            series=series,
+            data_quality=data_quality,
             facts=facts,
             comparisons=comparisons,
             evidence_status=evidence_status,
@@ -1403,6 +1840,7 @@ class SynthesisStage:
             subtask_status=subtask_status,
             headline=headline,
             headline_refs=headline_refs,
+            message=message,
         )
         result_summary = _context_payload_for_prompt(synthesis_context, artifacts=artifacts)
 

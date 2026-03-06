@@ -33,6 +33,7 @@ interface LlmPromptEntry {
 interface LlmResponseEntry {
   provider?: string;
   metadata?: Record<string, unknown>;
+  humanResponse?: string | null;
   rawResponse?: string | null;
   parsedResponse?: Record<string, unknown> | null;
   error?: string | null;
@@ -221,6 +222,171 @@ function prettyText(value: string): string {
   }
 }
 
+function humanizeKey(key: string): string {
+  return key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (value) => value.toUpperCase());
+}
+
+function formatScalarValue(value: string | number | boolean | null): string {
+  if (value === null) return "null";
+  return String(value);
+}
+
+function appendMultilineBullet(lines: string[], bullet: string, value: string, indent: number): void {
+  const prefix = " ".repeat(indent);
+  const textLines = value.split("\n");
+  lines.push(`${prefix}${bullet}${textLines[0] ?? ""}`);
+  for (const line of textLines.slice(1)) {
+    lines.push(`${prefix}  ${line}`);
+  }
+}
+
+function formatMarkdownValue(lines: string[], value: unknown, indent = 0): void {
+  const prefix = " ".repeat(indent);
+
+  if (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    const scalar = typeof value === "string" ? prettyText(value) : formatScalarValue(value);
+    appendMultilineBullet(lines, "- ", scalar, indent);
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      lines.push(`${prefix}- []`);
+      return;
+    }
+    value.forEach((item, index) => {
+      if (item === null || typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
+        const scalar = typeof item === "string" ? prettyText(item) : formatScalarValue(item);
+        appendMultilineBullet(lines, `${index + 1}. `, scalar, indent);
+        return;
+      }
+
+      lines.push(`${prefix}${index + 1}.`);
+      formatMarkdownValue(lines, item, indent + 2);
+    });
+    return;
+  }
+
+  const record = asRecord(value);
+  if (!record) return;
+  const entries = Object.entries(record);
+  if (!entries.length) {
+    lines.push(`${prefix}- {}`);
+    return;
+  }
+  for (const [key, nestedValue] of entries) {
+    const label = humanizeKey(key);
+    if (
+      nestedValue === null ||
+      typeof nestedValue === "string" ||
+      typeof nestedValue === "number" ||
+      typeof nestedValue === "boolean"
+    ) {
+      const scalar = typeof nestedValue === "string" ? prettyText(nestedValue) : formatScalarValue(nestedValue);
+      appendMultilineBullet(lines, `- ${label}: `, scalar, indent);
+      continue;
+    }
+    lines.push(`${prefix}- ${label}:`);
+    formatMarkdownValue(lines, nestedValue, indent + 2);
+  }
+}
+
+function parsedResponsePayload(response: LlmResponseEntry): Record<string, unknown> | null {
+  if (response.parsedResponse && typeof response.parsedResponse === "object") {
+    return response.parsedResponse;
+  }
+  const raw = asStringValue(response.rawResponse);
+  if (!raw) return null;
+  try {
+    return asRecord(JSON.parse(raw));
+  } catch {
+    return null;
+  }
+}
+
+const responseFieldOrder = [
+  "relevance",
+  "relevanceReason",
+  "tooComplex",
+  "type",
+  "generationType",
+  "lightResponse",
+  "explanation",
+  "clarificationQuestion",
+  "notRelevantReason",
+  "assumptions",
+  "presentationIntent",
+  "temporalScope",
+  "tasks",
+  "steps",
+  "sql",
+  "failedSql",
+  "rows",
+  "rowCount",
+  "answer",
+  "whyItMatters",
+  "confidence",
+  "confidenceReason",
+  "summaryCards",
+  "chartConfig",
+  "tableConfig",
+  "insights",
+  "suggestedQuestions",
+  "headline",
+  "periodStart",
+  "periodEnd",
+  "periodLabel",
+] as const;
+
+function formattedResponseContent(response: LlmResponseEntry): string {
+  const payload = parsedResponsePayload(response);
+  const lines: string[] = [];
+  const seen = new Set<string>();
+
+  const pushSection = (title: string, value: unknown) => {
+    if (value === undefined) return;
+    lines.push(`## ${title}`);
+    formatMarkdownValue(lines, value);
+    lines.push("");
+  };
+
+  const payloadStrings = payload
+    ? Object.values(payload).filter((value): value is string => typeof value === "string").map((value) => value.trim())
+    : [];
+  const shouldIncludeSummary =
+    typeof response.humanResponse === "string" &&
+    response.humanResponse.trim() &&
+    !payloadStrings.some((value) => value === response.humanResponse?.trim());
+
+  if (shouldIncludeSummary) {
+    pushSection("Summary", response.humanResponse);
+  }
+
+  if (payload) {
+    for (const key of responseFieldOrder) {
+      if (!(key in payload)) continue;
+      seen.add(key);
+      pushSection(humanizeKey(key), payload[key]);
+    }
+    for (const [key, value] of Object.entries(payload)) {
+      if (seen.has(key)) continue;
+      pushSection(humanizeKey(key), value);
+    }
+  }
+
+  if (!lines.length && response.error) return response.error;
+  if (!lines.length && typeof response.rawResponse === "string" && response.rawResponse.trim()) {
+    return prettyText(response.rawResponse);
+  }
+  while (lines[lines.length - 1] === "") lines.pop();
+  return lines.join("\n");
+}
+
 function responseContent(response: LlmResponseEntry): string {
   if (typeof response.rawResponse === "string" && response.rawResponse.trim()) {
     return prettyText(response.rawResponse);
@@ -331,9 +497,24 @@ function LlmExchangeCard({
       {response ? (
         <>
           <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">Response</p>
-          <pre className="mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded bg-slate-950 p-2 text-[11px] leading-relaxed text-slate-100">
-            <code>{responseContent(response)}</code>
-          </pre>
+          <div className="mt-1 overflow-hidden rounded-md border border-slate-900 bg-slate-950">
+            <div>
+              <div className="border-b border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                Response (formatted)
+              </div>
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words p-2 text-[11px] leading-relaxed text-slate-100">
+                <code>{formattedResponseContent(response)}</code>
+              </pre>
+            </div>
+            <div className="border-t border-slate-800">
+              <div className="border-b border-slate-800 bg-slate-900 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                Response (structured json output)
+              </div>
+              <pre className="max-h-56 overflow-auto whitespace-pre-wrap break-words p-2 text-[11px] leading-relaxed text-slate-100">
+                <code>{responseContent(response)}</code>
+              </pre>
+            </div>
+          </div>
           {response.error ? <p className="mt-2 text-xs font-medium text-rose-700">Error: {response.error}</p> : null}
         </>
       ) : null}
@@ -445,7 +626,7 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                 <div className="mt-3 grid gap-3 md:grid-cols-2">
                   <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
                     <div className="border-b border-slate-200 bg-slate-100 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                      Input
+                      State Input
                     </div>
                     <pre className="max-h-56 overflow-auto p-3 text-[11px] leading-relaxed text-slate-800">
                       <code>{renderPayload(step.stageInput)}</code>
@@ -453,7 +634,7 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
                   </div>
                   <div className="overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
                     <div className="border-b border-slate-200 bg-slate-100 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-slate-600">
-                      Output
+                      State Output
                     </div>
                     <pre className="max-h-56 overflow-auto p-3 text-[11px] leading-relaxed text-slate-800">
                       <code>{renderPayload(step.stageOutput)}</code>

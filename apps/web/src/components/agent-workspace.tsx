@@ -39,6 +39,15 @@ const sessionItems = [
   "Channel Mix Deep Dive",
 ];
 
+function createWelcomeMessage(): ChatMessage {
+  return {
+    id: "assistant-welcome",
+    role: "assistant",
+    text: "Ask any Customer Insights question across Sales, Loyalty, Demographics, Geographics, or Industry. I will return key insights, exportable data, and an audited trace.",
+    createdAt: new Date().toISOString(),
+  };
+}
+
 const insightImportanceRank: Record<"high" | "medium", number> = {
   high: 0,
   medium: 1,
@@ -168,6 +177,19 @@ function summaryCardsForResponse(response: AgentResponse): SummaryCard[] {
   }));
 }
 
+function splitSummaryCardLabel(label: string): { title: string; qualifier: string } {
+  const trimmed = label.trim();
+  const match = trimmed.match(/^(.*?)(?:\s*\(([^)]+)\))$/);
+  if (!match) {
+    return { title: trimmed, qualifier: "" };
+  }
+
+  return {
+    title: match[1].trim(),
+    qualifier: match[2].trim(),
+  };
+}
+
 function parseDateValue(value: unknown): Date | null {
   if (value instanceof Date) {
     return Number.isNaN(value.getTime()) ? null : value;
@@ -286,13 +308,36 @@ function periodFromMetricLabels(metrics: MetricPoint[]): string | null {
   return null;
 }
 
+function isMonthlyPeriodContext(response: AgentResponse, userQuery: string): boolean {
+  const chartX = response.chartConfig?.x?.toLowerCase() ?? "";
+  const chartXLabel = response.chartConfig?.xLabel?.toLowerCase() ?? "";
+  if (chartX.includes("month") || chartXLabel.includes("month")) return true;
+
+  const hasMonthColumn = (response.dataTables ?? []).some((table) =>
+    table.columns.some((column) => column.toLowerCase().includes("month")),
+  );
+  if (hasMonthColumn) return true;
+
+  return /\b(by month|per month|monthly|last\s+\d+\s+months?)\b/i.test(userQuery);
+}
+
+function adjustInclusiveMonthlyEnd(start: Date, end: Date, isMonthlyContext: boolean): Date {
+  if (!isMonthlyContext) return end;
+  if (end.getDate() !== 1) return end;
+  if (end.getTime() < start.getTime()) return end;
+  return new Date(end.getFullYear(), end.getMonth() + 1, 0);
+}
+
 function deriveMetricPeriodLabel(response: AgentResponse, userQuery: string, responseCreatedAt: string): string {
   const explicitLabel = (response.periodLabel ?? "").trim();
   if (explicitLabel) return explicitLabel;
 
   const explicitStart = parseDateValue(response.periodStart ?? "");
   const explicitEnd = parseDateValue(response.periodEnd ?? "");
-  if (explicitStart && explicitEnd) return formatDateRange(explicitStart, explicitEnd);
+  if (explicitStart && explicitEnd) {
+    const adjustedEnd = adjustInclusiveMonthlyEnd(explicitStart, explicitEnd, isMonthlyPeriodContext(response, userQuery));
+    return formatDateRange(explicitStart, adjustedEnd);
+  }
 
   for (const table of response.dataTables ?? []) {
     const fromSql = periodFromSql(table.sourceSql);
@@ -403,15 +448,8 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   const [isLeftPaneVisible, setIsLeftPaneVisible] = useState(true);
   const [isRightPaneVisible, setIsRightPaneVisible] = useState(true);
   const [feedbackByMessageId, setFeedbackByMessageId] = useState<Record<string, ResponseFeedback | undefined>>({});
-  const [sessionId] = useState(() => crypto.randomUUID());
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "assistant-welcome",
-      role: "assistant",
-      text: "Ask any Customer Insights question across Sales, Loyalty, Demographics, Geographics, or Industry. I will return key insights, exportable data, and an audited trace.",
-      createdAt: new Date().toISOString(),
-    },
-  ]);
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [createWelcomeMessage()]);
   const inFlightRequestRef = useRef<{
     controller: AbortController;
     assistantMessageId: string;
@@ -463,15 +501,15 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   const hasOddStarterCount = starterPrompts.length % 2 === 1;
   const workspaceGridClassName = useMemo(() => {
     if (isLeftPaneVisible && isRightPaneVisible) {
-      return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)_320px] lg:px-6 lg:py-6";
+      return "mx-auto grid w-full max-w-[1680px] grid-cols-1 gap-5 px-4 py-5 lg:h-screen lg:grid-cols-[260px_minmax(0,1fr)_320px] lg:items-start lg:px-6 lg:py-6";
     }
     if (isLeftPaneVisible) {
-      return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[260px_minmax(0,1fr)] lg:px-6 lg:py-6";
+      return "mx-auto grid w-full max-w-[1680px] grid-cols-1 gap-5 px-4 py-5 lg:h-screen lg:grid-cols-[260px_minmax(0,1fr)] lg:items-start lg:px-6 lg:py-6";
     }
     if (isRightPaneVisible) {
-      return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-[minmax(0,1fr)_320px] lg:px-6 lg:py-6";
+      return "mx-auto grid w-full max-w-[1680px] grid-cols-1 gap-5 px-4 py-5 lg:h-screen lg:grid-cols-[minmax(0,1fr)_320px] lg:items-start lg:px-6 lg:py-6";
     }
-    return "mx-auto grid w-full max-w-[1500px] grid-cols-1 gap-5 px-4 py-5 lg:grid-cols-1 lg:px-6 lg:py-6";
+    return "mx-auto grid w-full max-w-[1680px] grid-cols-1 gap-5 px-4 py-5 lg:h-screen lg:grid-cols-1 lg:items-start lg:px-6 lg:py-6";
   }, [isLeftPaneVisible, isRightPaneVisible]);
 
   useEffect(() => {
@@ -541,6 +579,15 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     });
     setIsLoading(false);
     inFlightRequestRef.current = null;
+  };
+
+  const composeNewThread = (): void => {
+    stopCurrentRequest();
+    setSessionId(crypto.randomUUID());
+    setInput("");
+    setAreStarterPromptsExpanded(true);
+    setFeedbackByMessageId({});
+    setMessages([createWelcomeMessage()]);
   };
 
   async function submitQuery(query: string) {
@@ -677,14 +724,101 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     }
   }
 
+  const composerFooter = (
+    <footer className="mt-4 rounded-[1.75rem] border border-slate-300/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(242,248,253,0.92))] p-3 shadow-[0_14px_30px_rgba(14,44,68,0.08)] sm:p-4">
+      {showStarterPrompts ? (
+        <div className="mb-3 rounded-2xl border border-slate-200/90 bg-white/85 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] sm:p-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Starter Questions</p>
+              <p className="mt-1 text-sm text-slate-700">Start with a baseline or jump into a deeper diagnostic path.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAreStarterPromptsExpanded((prev) => !prev)}
+              aria-expanded={areStarterPromptsExpanded}
+              aria-controls="starter-questions-grid"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+            >
+              <span>{areStarterPromptsExpanded ? "Collapse" : "Expand"}</span>
+              <svg
+                viewBox="0 0 20 20"
+                aria-hidden="true"
+                className={`h-4 w-4 transition-transform ${areStarterPromptsExpanded ? "rotate-0" : "-rotate-90"}`}
+              >
+                <path d="M5.25 7.5L10 12.25L14.75 7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+              </svg>
+            </button>
+          </div>
+
+          {areStarterPromptsExpanded ? (
+            <div id="starter-questions-grid" className="mt-3 grid gap-2 sm:grid-cols-2">
+              {starterPrompts.map((prompt, index) => {
+                const isLastOddCard = hasOddStarterCount && index === starterPrompts.length - 1;
+                return (
+                  <button
+                    key={prompt.question}
+                    onClick={() => setInput(prompt.question)}
+                    className={`group relative flex animate-fade-up flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_8px_18px_rgba(14,44,68,0.08)] transition duration-200 hover:-translate-y-0.5 hover:border-cyan-500 hover:shadow-[0_14px_24px_rgba(14,44,68,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 active:translate-y-0 ${
+                      isLastOddCard ? "sm:col-span-2" : ""
+                    }`}
+                    style={{ animationDelay: `${index * 40}ms` }}
+                    type="button"
+                  >
+                    <span className="rounded-full bg-white px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
+                      {prompt.tag}
+                    </span>
+                    <span className="absolute right-3 top-3 w-6 text-right text-xs font-semibold tabular-nums text-slate-500 group-hover:text-cyan-800">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    <p className="mt-1.5 font-[var(--font-body)] text-sm font-medium leading-tight text-slate-800">{prompt.question}</p>
+                  </button>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submitQuery(input);
+        }}
+        className="flex flex-col gap-2.5 sm:flex-row"
+      >
+        <textarea
+          value={input}
+          onChange={(event) => setInput(event.target.value)}
+          rows={1}
+          placeholder="Ask a Customer Insights Analyst a question..."
+          className="min-h-[63px] flex-1 resize-none rounded-2xl border border-slate-300 bg-[linear-gradient(180deg,#ffffff,#f6faff)] px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)] outline-none ring-cyan-500 placeholder:font-normal placeholder:text-slate-500 focus:ring-2"
+        />
+        <button
+          aria-label={isLoading ? "Stop analysis" : "Send message"}
+          disabled={!isLoading && !input.trim()}
+          className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
+            isLoading
+              ? "border-rose-700 bg-[linear-gradient(145deg,#7f1d1d,#b91c1c)] hover:bg-[linear-gradient(145deg,#991b1b,#dc2626)]"
+              : "border-slate-700 bg-slate-900 hover:bg-slate-800"
+          }`}
+          onClick={isLoading ? stopCurrentRequest : undefined}
+          type={isLoading ? "button" : "submit"}
+        >
+          {isLoading ? "Stop" : "Send"}
+        </button>
+      </form>
+    </footer>
+  );
+
   return (
-    <div className="relative min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_10%_10%,#d7f5ff_0,#f5f2e9_38%,#eff4f8_100%)]">
+    <div className="relative min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_10%_10%,#d7f5ff_0,#f5f2e9_38%,#eff4f8_100%)] lg:h-screen lg:overflow-hidden">
       <div className="pointer-events-none absolute -left-24 top-12 h-80 w-80 rounded-full bg-cyan-300/40 blur-3xl" />
       <div className="pointer-events-none absolute right-10 top-36 h-72 w-72 rounded-full bg-orange-200/50 blur-3xl" />
 
       <div className={workspaceGridClassName}>
         {isLeftPaneVisible ? (
-          <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)]">
+          <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
           <p className="text-xs uppercase tracking-[0.22em] text-cyan-300">Customer Insights</p>
           <h1 className="mt-2 text-3xl font-bold leading-tight">Analyst</h1>
           <p className="mt-2 text-sm text-slate-300">Ask questions about your data in natural language.</p>
@@ -698,7 +832,34 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
           </div>
 
           <div className="mt-6">
-            <p className="text-xs uppercase tracking-wide text-slate-400">Sessions</p>
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs uppercase tracking-wide text-slate-400">Sessions</p>
+              <button
+                type="button"
+                onClick={composeNewThread}
+                aria-label="Compose new thread"
+                title="Compose new thread"
+                className="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-cyan-400/40 bg-cyan-400/10 text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-400/20 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-400/50"
+              >
+                <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
+                  <path
+                    d="M13.97 3.47a1.75 1.75 0 0 1 2.47 2.47l-8.2 8.2-3.24.77.77-3.24 8.2-8.2Z"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                  <path
+                    d="M11.9 5.55l2.55 2.55"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.5"
+                    strokeLinecap="round"
+                  />
+                </svg>
+              </button>
+            </div>
             <ul className="mt-3 space-y-2">
               {sessionItems.map((item, idx) => (
                 <li
@@ -717,8 +878,8 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
           </aside>
         ) : null}
 
-        <main className="flex min-h-[calc(100vh-2.5rem)] flex-col rounded-3xl border border-slate-200 bg-white/70 p-4 shadow-[0_18px_40px_rgba(14,44,68,0.13)] backdrop-blur lg:p-5">
-          <header className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
+        <section className="relative flex min-h-[calc(100vh-2.5rem)] flex-col lg:h-[calc(100vh-3rem)] lg:min-h-0">
+          <header className="relative z-10 rounded-2xl border border-slate-700/90 bg-slate-900 px-5 py-3 shadow-[0_22px_44px_rgba(15,23,42,0.26)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-slate-100">Conversation Workspace</h2>
@@ -734,15 +895,23 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   aria-pressed={isLeftPaneVisible}
                   aria-label={isLeftPaneVisible ? "Hide left pane" : "Show left pane"}
                   title={isLeftPaneVisible ? "Hide left pane" : "Show left pane"}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-slate-100 transition ${
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${
                     isLeftPaneVisible
-                      ? "border-cyan-400/60 bg-cyan-500/20 hover:bg-cyan-500/30"
-                      : "border-slate-600 bg-slate-700/70 hover:bg-slate-700"
+                      ? "border-cyan-400/70 bg-cyan-500/18 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(103,232,249,0.18)] hover:bg-cyan-500/26"
+                      : "border-slate-600/80 bg-slate-800/70 text-slate-300 hover:border-slate-500 hover:bg-slate-700/80 hover:text-slate-100"
                   }`}
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
-                    <rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                    <line x1="7.5" y1="4.5" x2="7.5" y2="15.5" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                    <rect x="4.4" y="5.3" width="3.2" height="9.4" rx="0.9" fill="currentColor" opacity="0.85" />
+                    <path
+                      d="M11.8 7.2 9.5 10l2.3 2.8"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                 </button>
                 <button
@@ -751,23 +920,41 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   aria-pressed={isRightPaneVisible}
                   aria-label={isRightPaneVisible ? "Hide right pane" : "Show right pane"}
                   title={isRightPaneVisible ? "Hide right pane" : "Show right pane"}
-                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border text-slate-100 transition ${
+                  className={`inline-flex h-8 w-8 items-center justify-center rounded-lg border transition ${
                     isRightPaneVisible
-                      ? "border-cyan-400/60 bg-cyan-500/20 hover:bg-cyan-500/30"
-                      : "border-slate-600 bg-slate-700/70 hover:bg-slate-700"
+                      ? "border-cyan-400/70 bg-cyan-500/18 text-cyan-100 shadow-[inset_0_0_0_1px_rgba(103,232,249,0.18)] hover:bg-cyan-500/26"
+                      : "border-slate-600/80 bg-slate-800/70 text-slate-300 hover:border-slate-500 hover:bg-slate-700/80 hover:text-slate-100"
                   }`}
                 >
                   <svg viewBox="0 0 20 20" aria-hidden="true" className="h-4 w-4">
-                    <rect x="2.5" y="3.5" width="15" height="13" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-                    <line x1="12.5" y1="4.5" x2="12.5" y2="15.5" stroke="currentColor" strokeWidth="1.5" />
+                    <rect x="2.75" y="3.75" width="14.5" height="12.5" rx="2.25" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                    <rect x="12.4" y="5.3" width="3.2" height="9.4" rx="0.9" fill="currentColor" opacity="0.85" />
+                    <path
+                      d="M8.2 7.2 10.5 10l-2.3 2.8"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
                   </svg>
                 </button>
               </div>
             </div>
           </header>
 
-          <section className="mt-4 flex-1 space-y-4 overflow-y-auto pr-1">
-            {messages.map((message, messageIndex) => {
+          <div className="relative mt-3 flex min-h-0 flex-1 flex-col rounded-[2rem] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(241,247,251,0.94))] p-4 pt-5 shadow-[0_18px_40px_rgba(14,44,68,0.13)] backdrop-blur lg:overflow-hidden lg:p-5 lg:pt-6">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-[linear-gradient(180deg,rgba(243,247,251,0.92)_0%,rgba(243,247,251,0.72)_38%,rgba(243,247,251,0.28)_68%,rgba(243,247,251,0)_100%)]"
+            />
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-8 bg-[linear-gradient(0deg,rgba(243,247,251,0.92)_0%,rgba(243,247,251,0.72)_38%,rgba(243,247,251,0.28)_68%,rgba(243,247,251,0)_100%)]"
+            />
+            <section className="flex min-h-0 flex-1 flex-col overflow-y-auto pt-1 pr-1">
+              <div className="space-y-4">
+                {messages.map((message, messageIndex) => {
               if (message.role === "user") {
                 return (
                   <article key={message.id} className="flex justify-end">
@@ -776,7 +963,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                         <p className="text-xs uppercase tracking-[0.16em] text-cyan-300">User Query</p>
                         <p className="text-sm text-slate-300">{messageTime(message.createdAt)}</p>
                       </div>
-                      <p className="text-base font-medium leading-relaxed text-slate-100">{message.text}</p>
+                      <p className="text-sm font-medium leading-relaxed text-slate-100">{message.text}</p>
                     </div>
                   </article>
                 );
@@ -805,7 +992,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                     ) : null}
                   </div>
 
-                  {message.text ? <p className="text-base font-medium leading-relaxed text-slate-950">{message.text}</p> : null}
+                  {message.text ? <p className="text-sm font-medium leading-relaxed text-slate-950">{message.text}</p> : null}
 
                   {message.isStreaming ? (
                     <div className="rounded-xl border border-cyan-200 bg-cyan-50 p-3">
@@ -845,13 +1032,27 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
 
                         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
                           <div className="grid gap-3 sm:grid-cols-3">
-                            {summaryCardsForResponse(message.response).map((card, index) => (
-                              <div key={`${card.label}-${index}`} className="rounded-xl border border-slate-200 bg-white p-3">
-                                <p className="text-xs uppercase tracking-wide text-slate-500">{card.label}</p>
-                                <p className="mt-2 text-xl font-bold text-slate-900">{card.value}</p>
-                                {card.detail ? <p className="mt-1 text-sm text-slate-700">{card.detail}</p> : null}
-                              </div>
-                            ))}
+                            {summaryCardsForResponse(message.response).map((card, index) => {
+                              const { title, qualifier } = splitSummaryCardLabel(card.label);
+
+                              return (
+                                <div
+                                  key={`${card.label}-${index}`}
+                                  className="flex min-h-[7.5rem] flex-col rounded-xl border border-slate-200 bg-white px-3 py-3"
+                                >
+                                  <div className="min-h-[2.5rem]">
+                                    <p className="text-[11px] uppercase tracking-wide text-slate-500">{title}</p>
+                                    {qualifier ? (
+                                      <p className="mt-0.5 text-[11px] uppercase tracking-wide text-slate-500">{qualifier}</p>
+                                    ) : null}
+                                  </div>
+                                  <p className="mt-1 text-[1.35rem] font-bold tabular-nums leading-none text-slate-900">{card.value}</p>
+                                  <div className="mt-auto min-h-[1.5rem] pt-1">
+                                    {card.detail ? <p className="text-sm leading-snug text-slate-700">{card.detail}</p> : null}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </section>
 
@@ -985,100 +1186,15 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   ) : null}
                 </article>
               );
-            })}
-
-          </section>
-
-          <footer className="mt-4 rounded-[1.75rem] border border-slate-300/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(242,248,253,0.92))] p-3 shadow-[0_14px_30px_rgba(14,44,68,0.08)] sm:p-4">
-            {showStarterPrompts ? (
-              <div className="mb-3 rounded-2xl border border-slate-200/90 bg-white/85 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] sm:p-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-slate-500">Starter Questions</p>
-                    <p className="mt-1 text-sm text-slate-700">Start with a baseline or jump into a deeper diagnostic path.</p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAreStarterPromptsExpanded((prev) => !prev)}
-                    aria-expanded={areStarterPromptsExpanded}
-                    aria-controls="starter-questions-grid"
-                    className="inline-flex items-center gap-1.5 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-semibold text-slate-700 transition hover:border-cyan-500 hover:text-cyan-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
-                  >
-                    <span>{areStarterPromptsExpanded ? "Collapse" : "Expand"}</span>
-                    <svg
-                      viewBox="0 0 20 20"
-                      aria-hidden="true"
-                      className={`h-4 w-4 transition-transform ${areStarterPromptsExpanded ? "rotate-0" : "-rotate-90"}`}
-                    >
-                      <path d="M5.25 7.5L10 12.25L14.75 7.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
-                    </svg>
-                  </button>
-                </div>
-
-                {areStarterPromptsExpanded ? (
-                  <div id="starter-questions-grid" className="mt-3 grid gap-2 sm:grid-cols-2">
-                    {starterPrompts.map((prompt, index) => {
-                      const isLastOddCard = hasOddStarterCount && index === starterPrompts.length - 1;
-                      return (
-                        <button
-                          key={prompt.question}
-                          onClick={() => setInput(prompt.question)}
-                          className={`group relative flex animate-fade-up flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_8px_18px_rgba(14,44,68,0.08)] transition duration-200 hover:-translate-y-0.5 hover:border-cyan-500 hover:shadow-[0_14px_24px_rgba(14,44,68,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 active:translate-y-0 ${
-                            isLastOddCard ? "sm:col-span-2" : ""
-                          }`}
-                          style={{ animationDelay: `${index * 40}ms` }}
-                          type="button"
-                        >
-                          <span className="rounded-full bg-white px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
-                            {prompt.tag}
-                          </span>
-                          <span className="absolute right-3 top-3 w-6 text-right text-xs font-semibold tabular-nums text-slate-500 group-hover:text-cyan-800">
-                            {String(index + 1).padStart(2, "0")}
-                          </span>
-                          <p className="mt-1.5 font-[var(--font-body)] text-sm font-medium leading-tight text-slate-800">
-                            {prompt.question}
-                          </p>
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
+                })}
               </div>
-            ) : null}
-
-            <form
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submitQuery(input);
-              }}
-              className="flex flex-col gap-2.5 sm:flex-row"
-            >
-              <textarea
-                value={input}
-                onChange={(event) => setInput(event.target.value)}
-                rows={1}
-                placeholder="Ask a Customer Insights Analyst a question..."
-                className="min-h-[63px] flex-1 resize-none rounded-2xl border border-slate-300 bg-[linear-gradient(180deg,#ffffff,#f6faff)] px-3.5 py-2.5 text-sm font-medium text-slate-900 shadow-[inset_0_1px_2px_rgba(15,23,42,0.06)] outline-none ring-cyan-500 placeholder:font-normal placeholder:text-slate-500 focus:ring-2"
-              />
-              <button
-                aria-label={isLoading ? "Stop analysis" : "Send message"}
-                disabled={!isLoading && !input.trim()}
-                className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
-                  isLoading
-                    ? "border-rose-700 bg-[linear-gradient(145deg,#7f1d1d,#b91c1c)] hover:bg-[linear-gradient(145deg,#991b1b,#dc2626)]"
-                    : "border-slate-700 bg-slate-900 hover:bg-slate-800"
-                }`}
-                onClick={isLoading ? stopCurrentRequest : undefined}
-                type={isLoading ? "button" : "submit"}
-              >
-                {isLoading ? "Stop" : "Send"}
-              </button>
-            </form>
-          </footer>
-        </main>
+              <div className="sticky bottom-0 z-20 mt-auto shrink-0 pt-4">{composerFooter}</div>
+            </section>
+          </div>
+        </section>
 
         {isRightPaneVisible ? (
-          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur">
+          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <p className="text-xl font-bold text-slate-100">Current Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">

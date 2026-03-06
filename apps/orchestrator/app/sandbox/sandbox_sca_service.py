@@ -138,26 +138,6 @@ def _record_message(conversation_id: str, message: str, history: list[str]) -> l
     return _CONVERSATION_MEMORY[conversation_id]
 
 
-def _retry_feedback_history(feedback: list[dict[str, Any]]) -> list[str]:
-    entries: list[str] = []
-    for item in feedback[-2:]:
-        phase = str(item.get("phase", "")).strip()
-        if phase != "sql_execution":
-            continue
-        attempt = str(item.get("attempt", "")).strip()
-        error = str(item.get("error", "")).strip()
-        failed_sql_raw = item.get("failedSql")
-        failed_sql = failed_sql_raw.strip() if isinstance(failed_sql_raw, str) else ""
-        parts = [f"Previous SQL execution attempt {attempt or '?'} failed"]
-        if error:
-            parts.append(f"warehouse_error={error}")
-        line = "; ".join(parts)
-        if failed_sql:
-            line = f"{line}\nFailed SQL:\n{failed_sql}"
-        entries.append(line)
-    return entries
-
-
 def _clean_assumptions(assumptions: list[str], *, clarification_question: str) -> list[str]:
     deduped: list[str] = []
     seen: set[str] = set()
@@ -333,9 +313,7 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
 
     conversation_history = _record_message(payload.conversationId, user_message, payload.history)
     retry_feedback = [item for item in payload.retryFeedback if isinstance(item, dict)]
-    retry_feedback_history = _retry_feedback_history(retry_feedback)
-
-    generation_history = [*conversation_history, *retry_feedback_history]
+    generation_history = list(conversation_history)
     generated: dict[str, Any] | None = None
     last_sandbox_error: SandboxSqlGenerationError | None = None
     last_generic_error: Exception | None = None

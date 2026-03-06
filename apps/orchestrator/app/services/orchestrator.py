@@ -547,12 +547,48 @@ class ConversationalOrchestrator:
             {
                 "provider": entry.provider,
                 "metadata": entry.metadata,
+                "humanResponse": self._human_response_for_trace_entry(entry),
                 "rawResponse": entry.raw_response,
                 "parsedResponse": entry.parsed_response,
                 "error": entry.error,
             }
             for entry in llm_entries
         ]
+
+    @staticmethod
+    def _human_response_for_trace_entry(entry: LlmTraceEntry) -> str | None:
+        if entry.error:
+            return entry.error.strip() or None
+
+        payload = entry.parsed_response if isinstance(entry.parsed_response, dict) else None
+        if not payload:
+            return None
+
+        candidates = [
+            payload.get("answer"),
+            payload.get("lightResponse"),
+            payload.get("explanation"),
+            payload.get("userMessage"),
+            payload.get("relevanceReason"),
+            payload.get("rationale"),
+            payload.get("clarificationQuestion"),
+            payload.get("notRelevantReason"),
+        ]
+        for value in candidates:
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+
+        generation_type = payload.get("generationType") or payload.get("type")
+        if isinstance(generation_type, str) and generation_type.strip():
+            assumptions = payload.get("assumptions")
+            assumption_suffix = ""
+            if isinstance(assumptions, list):
+                cleaned = [item.strip() for item in assumptions if isinstance(item, str) and item.strip()]
+                if cleaned:
+                    assumption_suffix = f" Assumptions: {'; '.join(cleaned[:2])}."
+            return f"{generation_type.strip()}.{assumption_suffix}".strip()
+
+        return None
 
     @staticmethod
     def _provider_request_payloads(llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:

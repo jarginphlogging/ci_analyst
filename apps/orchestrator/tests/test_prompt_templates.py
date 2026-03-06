@@ -44,3 +44,19 @@ def test_sql_prompt_includes_dependency_context_block() -> None:
 
     assert "Dependency context from completed prerequisite steps:" in user_prompt
     assert "\"stepId\": \"step_1\"" in user_prompt
+
+
+def test_sql_prompt_includes_temporal_scope_contract_block() -> None:
+    model = load_semantic_model()
+    _, user_prompt = sql_prompt(
+        user_message="Show new vs repeat customers by month for the last 6 months",
+        step_id="step_1",
+        step_goal="Show new vs repeat customers by month for the last 6 months.",
+        model=model,
+        prior_sql=[],
+        history=[],
+        temporal_scope={"unit": "month", "count": 6, "granularity": "month"},
+    )
+
+    assert "Planner temporal scope contract (hard constraint):" in user_prompt
+    assert "\"count\": 6" in user_prompt

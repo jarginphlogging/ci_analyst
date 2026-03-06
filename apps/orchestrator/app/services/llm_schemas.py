@@ -4,7 +4,7 @@ from typing import Any
 from typing import Literal
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.models import ChartConfig, PresentationIntent, TableConfig, TemporalScope
 
@@ -38,6 +38,13 @@ class SqlGenerationResponsePayload(BaseModel):
     clarificationKind: Optional[Literal["user_input_required", "technical_failure"]] = None
     notRelevantReason: Optional[str] = None
     assumptions: list[str] = Field(default_factory=list)
+
+    @field_validator("sql", "clarificationQuestion", "clarificationKind", "notRelevantReason", mode="before")
+    @classmethod
+    def _normalize_optional_blank_strings(cls, value: Any) -> Any:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
     @model_validator(mode="after")
     def _validate_required_fields(self) -> "SqlGenerationResponsePayload":

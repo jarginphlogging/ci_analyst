@@ -257,10 +257,30 @@ async def test_planner_infers_temporal_scope_for_last_n_months() -> None:
     decision = await stage.create_plan("Show me new vs repeat customers by month for the last 6 months.", [])
 
     assert decision.stop_reason == "none"
+    assert decision.presentation_intent.chartType == "stacked_area"
     assert decision.temporal_scope is not None
     assert decision.temporal_scope.unit == "month"
     assert decision.temporal_scope.count == 6
     assert decision.temporal_scope.granularity == "month"
+
+
+@pytest.mark.asyncio
+async def test_planner_keeps_line_for_non_composition_time_series() -> None:
+    async def fake_ask_llm_json(**kwargs):  # type: ignore[no-untyped-def]
+        _ = kwargs
+        return {
+            "relevance": "in_domain",
+            "relevanceReason": "In scope trend request.",
+            "presentationIntent": {"displayType": "chart", "chartType": "line"},
+            "tooComplex": False,
+            "tasks": [{"task": "Show total sales by month for the last 6 months."}],
+        }
+
+    stage = PlannerStage(model=load_semantic_model(), ask_llm_json=fake_ask_llm_json)
+    decision = await stage.create_plan("Show total sales by month for the last 6 months.", [])
+
+    assert decision.stop_reason == "none"
+    assert decision.presentation_intent.chartType == "line"
 
 
 @pytest.mark.asyncio

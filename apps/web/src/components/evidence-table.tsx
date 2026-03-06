@@ -277,7 +277,7 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
   const series = useMemo(() => chartSeriesFromTable(table, config), [table, config]);
   const width = 960;
   const height = 320;
-  const margin = { top: 8, right: 18, bottom: 34, left: 92 };
+  const margin = { top: 8, right: 30, bottom: 34, left: 92 };
   const plotWidth = width - margin.left - margin.right;
   const plotHeight = height - margin.top - margin.bottom;
   const pointCount = Math.max(1, series[0]?.points.length ?? 1);
@@ -302,10 +302,12 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
   const yRange = Math.max(1, domainMax - domainMin);
   const xStep = pointCount === 1 ? 0 : plotWidth / (pointCount - 1);
   const ticksY = yTicks(domainMin, domainMax, 4);
-  const xTickCount = Math.min(4, pointCount);
-  const xTickIndexes = Array.from({ length: xTickCount }, (_, idx) =>
-    Math.round((idx * Math.max(0, pointCount - 1)) / Math.max(1, xTickCount - 1)),
-  ).filter((value, idx, arr) => arr.indexOf(value) === idx);
+  const xTickIndexes =
+    pointCount <= 8
+      ? Array.from({ length: pointCount }, (_, idx) => idx)
+      : Array.from({ length: 4 }, (_, idx) =>
+          Math.round((idx * Math.max(0, pointCount - 1)) / 3),
+        ).filter((value, idx, arr) => arr.indexOf(value) === idx);
 
   const xOf = (idx: number): number => margin.left + idx * xStep;
   const yOf = (value: number): number => margin.top + ((domainMax - value) / yRange) * plotHeight;
@@ -336,7 +338,7 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
           return (
             <g key={`y-${tick}`}>
               <line x1={margin.left} x2={width - margin.right} y1={y} y2={y} stroke="#e2e8f0" strokeWidth={0.8} />
-              <text x={margin.left - 12} y={y + 4} textAnchor="end" fontSize="17" fill="#64748b">
+              <text x={margin.left - 12} y={y + 4} textAnchor="end" fontSize="13" fill="#64748b">
                 {formatAxisValue(tick, config.yFormat)}
               </text>
             </g>
@@ -363,6 +365,8 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
         {xTickIndexes.map((tickIdx) => {
           const label = series[0]?.points[tickIdx]?.x ?? "";
           const x = xOf(tickIdx);
+          const isFirst = tickIdx === 0;
+          const isLast = tickIdx === pointCount - 1;
           return (
             <g key={`x-${tickIdx}`}>
               <line
@@ -373,7 +377,13 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
                 stroke="#94a3b8"
                 strokeWidth={0.9}
               />
-              <text x={x} y={height - margin.bottom + 20} textAnchor="middle" fontSize="16" fill="#64748b">
+              <text
+                x={x}
+                y={height - margin.bottom + 20}
+                textAnchor={isFirst ? "start" : isLast ? "end" : "middle"}
+                fontSize="13"
+                fill="#64748b"
+              >
                 {formatXLabel(label)}
               </text>
             </g>
@@ -382,7 +392,13 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
 
         {series.map((entry, idx) => {
           const color = CHART_COLORS[idx % CHART_COLORS.length];
-          const path = linePath(entry.points, xOf, yOf);
+          const renderedPoints: ChartPoint[] = stacked
+            ? entry.points.map((point, pointIdx) => ({
+                x: point.x,
+                y: stackedTopBySeries[idx]?.[pointIdx] ?? null,
+              }))
+            : entry.points;
+          const path = linePath(renderedPoints, xOf, yOf);
           if (!path) return null;
           const fillPath = stacked
             ? (() => {
@@ -405,7 +421,7 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
             <g key={entry.key}>
               {fillPath ? <path d={fillPath} fill={color} fillOpacity={stacked ? 0.52 : 0.16} stroke="none" /> : null}
               <path d={path} fill="none" stroke={color} strokeWidth={2.2} strokeLinejoin="round" strokeLinecap="round" />
-              {entry.points.map((point, pointIdx) => {
+              {renderedPoints.map((point, pointIdx) => {
                 if (point.y === null) return null;
                 const x = xOf(pointIdx);
                 const y = yOf(point.y);
@@ -421,7 +437,12 @@ function AreaChart({ table, config }: { table: DataTable; config: ChartConfig })
                     stroke="#ffffff"
                     strokeWidth={1}
                   >
-                    <title>{`${prettify(entry.key)} | ${formatXLabel(point.x)}: ${formatValue(point.y, config.yFormat ?? "number")}`}</title>
+                    <title>
+                      {`${prettify(entry.key)} | ${formatXLabel(point.x)}: ${formatValue(
+                        entry.points[pointIdx]?.y ?? null,
+                        config.yFormat ?? "number",
+                      )}`}
+                    </title>
                   </circle>
                 );
               })}

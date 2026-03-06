@@ -15,6 +15,7 @@ from app.models import (
     TraceStep,
     ValidationResult,
 )
+from app.services.llm_trace import LlmTraceEntry
 from app.services.orchestrator import ConversationalOrchestrator
 from app.services.types import TurnExecutionContext
 
@@ -226,3 +227,26 @@ async def test_trace_excludes_generation_errors_from_warehouse_errors() -> None:
     warehouse_errors = sql_trace.stageOutput.get("warehouseErrors")
     assert isinstance(warehouse_errors, list)
     assert warehouse_errors == []
+
+
+def test_llm_response_payload_includes_human_readable_trace_response() -> None:
+    orchestrator = ConversationalOrchestrator(DeterministicDependencies())
+    payload = orchestrator._llm_response_payload(  # noqa: SLF001
+        [
+            LlmTraceEntry(
+                stage="plan_generation",
+                provider="anthropic",
+                system_prompt="system",
+                user_prompt="user",
+                max_tokens=100,
+                temperature=0.1,
+                raw_response='{"relevance":"in_domain","relevanceReason":"Maps to governed sales metrics."}',
+                parsed_response={
+                    "relevance": "in_domain",
+                    "relevanceReason": "Maps to governed sales metrics.",
+                },
+            )
+        ]
+    )
+
+    assert payload[0]["humanResponse"] == "Maps to governed sales metrics."

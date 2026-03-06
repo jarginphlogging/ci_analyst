@@ -53,6 +53,14 @@ The semantic model is your source of truth. Follow it closely:
 
 Follow the dialect constraints provided at runtime exactly. When a constraint prohibits a function or syntax form, do not use it or any variation of it.
 
+### Temporal Scope Contract
+
+If a planner temporal scope contract is provided, treat it as mandatory:
+
+- Return exactly the requested number of contiguous periods at the requested granularity.
+- For "last N months" grouped by month, avoid off-by-one windows. Including the anchor/current month requires an `N-1` month lookback from the anchor month start.
+- If retry feedback reports a temporal scope mismatch, fix the date window first before changing unrelated parts of the query.
+
 ### Using Prior Step SQL
 
 When your step depends on prior steps (e.g., "for the stores identified in step 1"):
@@ -68,8 +76,9 @@ When retry feedback is present, a prior attempt at *this* step's SQL failed at e
 1. Read the error message carefully. Identify the root cause: syntax error, unsupported function, type mismatch, missing column, etc.
 2. For syntax/function errors: avoid the entire function or operator family that failed, not just the exact expression. Find an alternative approach.
 3. For ambiguous column errors: add explicit table aliases or qualifiers.
-4. Do not repeat any prior failed SQL verbatim or with superficial changes.
-5. If two attempts have failed for the same root cause, return `clarification` with `clarificationKind = "technical_failure"`.
+4. For temporal scope mismatch errors: rewrite boundary logic so grouped output has exactly the required contiguous period count.
+5. Do not repeat any prior failed SQL verbatim or with superficial changes.
+6. If two attempts have failed for the same root cause, return `clarification` with `clarificationKind = "technical_failure"`.
 
 ## 5 · Assumptions
 

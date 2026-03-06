@@ -1,0 +1,14 @@
+{
+  "query": "Show me new vs repeat customers by month for the last 6 months.",
+  "completed": true,
+  "status": {
+    "hasWhyItMatters": true,
+    "hasRequestFailed": false,
+    "hasRunning": false,
+    "hasSqlGenerationFailed": false,
+    "length": 2343
+  },
+  "articleText": "AGENT RESPONSE\n\n06:05 PM\n\nmedium confidence\n\nOver the last six months (July–December 2025), repeat customers consistently outnumbered new customers each month, with repeat customers ranging from 1.53M to 1.63M and new customers ranging from 1.16M to 1.24M. Total monthly transactions ranged from 2.69M to 2.87M across this period.\n\nWHY IT MATTERS\n\nThe consistent 57% repeat customer share indicates stable customer retention, providing a foundation for predictable revenue patterns.\n\nAVG MONTHLY REPEAT CUSTOMERS\n\n1.57M\n\nJul–Dec 2025\n\nAVG MONTHLY NEW CUSTOMERS\n\n1.19M\n\nJul–Dec 2025\n\nAVG TOTAL TRANSACTIONS\n\n2.77M\n\nJul–Dec 2025\n\nCustomers by Month\nTREND\n1.1M\n1.3M\n1.5M\n1.7M\nJul 2025\nSep 2025\nOct 2025\nDec 2025\nNew Customers\nRepeat Customers\nPriority Insights\n\nhigh importance\n\nRepeat Customers Dominate Transaction Volume\n\nRepeat customers accounted for approximately 57% of total transactions on average across all six months, while new customers represented 43%.\n\nmedium importance\n\nStable Customer Mix Over Time\n\nThe ratio of repeat to new customers remained relatively consistent month-over-month, with repeat customers averaging 1.32x the volume of new customers.\n\nmedium importance\n\nDecember Shows Peak Activity\n\nDecember 2025 recorded the highest counts for both new customers (1.24M) and repeat customers (1.63M), suggesting seasonal effects.\n\nRetrieved Data\n\nView and export raw tables used in the analysis.\n\n1 table\n6 rows\n6 columns\nExpand\nAnalysis Trace\n\nStructured reasoning summary for auditability and trust.\n\nShow trace\n\nASSUMPTIONS\n\nInterpretation constraints used for this answer.\n\n1\nCustomer classification as 'new' or 'repeat' is determined at the transaction level within each month, not across the full customer lifecycle.\n2\nTotal transactions equals the sum of new and repeat customer transactions for each month.\n3\nData represents complete months from July through December 2025 with no partial-month effects.\n\nSUGGESTED NEXT QUESTIONS\n\nPick one to auto-fill the composer.\n\n1\nWhat is the month-over-month growth rate for new and repeat customers?\n→\n2\nHow does the new vs repeat customer mix compare to the same period last year?\n→\n3\nWhat is the average transaction value for new vs repeat customers?\n→",
+  "screenshotPath": "/Users/joe/Code/ci_analyst/.tmp-playwright/single-repeat6.png",
+  "capturedAt": "2026-03-05T23:06:04.725Z"
+}
