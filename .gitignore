@@ -21,7 +21,6 @@ apps/orchestrator/.sandbox/
 !.env.readme
 !apps/orchestrator/.env.readme
 !apps/web/.env.readme
-semantic_model.yaml
 
 # OS
 .DS_Store

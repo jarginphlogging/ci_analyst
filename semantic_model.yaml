@@ -1,0 +1,315 @@
+name: customer_insights_model
+description: |
+  Semantic model for Customer Insights analytics.
+
+  This model provides natural language access to transaction, customer, and business data.
+
+  IMPORTANT DATE CONTEXT:
+  - Data is updated on a rolling basis.
+  - To determine the latest data, query: SELECT MAX(RESP_DATE) FROM cia_sales_insights_cortex
+  - When users ask for "recent", "last month", "current", or "latest" data, first determine the max date.
+  - Do NOT assume fixed dates - always reference the actual max date in the data.
+
+query_guidance: |
+  - When aggregating data without a date grouping, ALWAYS include MIN(RESP_DATE) as data_from
+    and MAX(RESP_DATE) as data_through to show the date range of data returned.
+  - When aggregating data to the td_id level it is helpful to include city and state for context.
+
+# Tables exposed to Cortex Analyst
+tables:
+  - name: cia_sales_insights_cortex
+    description: |
+      Transaction summary table containing repeat/new transactions, spend, and channel breakdowns.
+      Use this table for spend analysis, repeat customer metrics, and channel performance.
+
+      IMPORTANT: When queries aggregate data without grouping by date, always include:
+      - MIN(RESP_DATE) as data_from
+      - MAX(RESP_DATE) as data_through
+
+      This provides essential context about the date range of the returned data.
+
+    dimensions:
+      - name: co_id
+        description: Company or customer organization identifier
+        expr: CO_ID
+        data_type: VARCHAR
+
+      - name: td_id
+        description: |
+          Store/location identifier. This is an internal ID that is not meaningful to users on its own.
+
+          CO-DISPLAY RULE: When td_id is included in a query, ALWAYS also include:
+            - transaction_city
+            - transaction_state
+
+          This provides essential location context. Never return td_id alone.
+        expr: TD_ID
+        data_type: VARCHAR
+        synonyms:
+          - store
+          - location
+          - store number
+          - store id
+          - outlet
+
+      - name: transaction_state
+        description: US state where transaction occurred.
+        expr: TRANSACTION_STATE
+        data_type: VARCHAR
+
+      - name: transaction_city
+        description: City where transaction occurred.
+        expr: TRANSACTION_CITY
+        data_type: VARCHAR
+
+      - name: mcc
+        description: |
+          Merchant Category Code - a 4-digit code classifying business type.
+
+          WARNING: Do not use MCC for filtering unless the user explicitly mentions it.
+          Users rarely know MCC codes.
+        expr: MCC
+        data_type: VARCHAR
+
+      - name: channel
+        description: Transaction channel (CP - Card Present, CNP - Card Not Present)
+        expr: CHANNEL
+        data_type: VARCHAR
+        sample_values:
+          - CP
+          - CNP
+
+      - name: repeat_flag
+        description: Indicates if transaction is a repeat (True/False)
+        expr: REPEAT_FLAG
+        data_type: BOOLEAN
+
+      - name: resp_date
+        description: Transaction date
+        expr: RESP_DATE
+        data_type: DATE
+
+      - name: day_of_week
+        description: Day of the week for transaction
+        expr: DAY_OF_WEEK
+        data_type: VARCHAR
+
+      - name: transaction_time
+        description: Time window when transaction occurred
+        expr: TRANSACTION_TIME
+        data_type: VARCHAR
+
+      - name: consumer_commercial
+        description: Consumer or Commercial transaction type
+        expr: CONSUMER_COMMERCIAL
+        data_type: VARCHAR
+        sample_values:
+          - Consumer
+          - Commercial
+
+    measures:
+      - name: repeat_transactions
+        description: Number of repeat transactions
+        expr: REPEAT_TRANSACTIONS
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: new_transactions
+        description: Number of new transactions
+        expr: NEW_TRANSACTIONS
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: repeat_spend
+        description: |
+          Dollar amount of repeat transactions. For context, show alongside total spend or new spend for comparison.
+        expr: REPEAT_SPEND
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: new_spend
+        description: |
+          Dollar amount of new transactions. For context, show alongside total spend or repeat_spend for comparison.
+        expr: NEW_SPEND
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: cp_transactions
+        description: Card Present transactions count
+        expr: CP_TRANSACTIONS
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: cnp_transactions
+        description: Card Not Present transactions count
+        expr: CNP_TRANSACTIONS
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: cp_spend
+        description: Card Present spend amount
+        expr: CP_SPEND
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: cnp_spend
+        description: Card Not Present spend amount
+        expr: CNP_SPEND
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: transactions
+        description: Total transactions
+        expr: TRANSACTIONS
+        data_type: NUMBER
+        default_aggregation: sum
+
+      - name: spend
+        description: Total spend in dollars
+        expr: SPEND
+        data_type: NUMBER
+        default_aggregation: sum
+
+    time_dimensions:
+      - name: resp_date
+        description: |
+          Primary date dimension for time-based analysis (YYYY-MM-DD).
+          Data is updated on a rolling basis.
+
+          IMPORTANT: To find the latest date, use: SELECT MAX(RESP_DATE) FROM cia_sales_insights_cortex
+          When users ask for "last month", calculate based on the max date in the data.
+          When users ask for "this month" or "current month", use the month containing the max date.
+        expr: RESP_DATE
+        data_type: DATE
+
+ 
+# Verified queries - examples of known-good queries to help Cortex Analyst
+verified_queries:
+  - name: max_date
+    question: What is the latest date in the data?
+    sql: |
+      SELECT MAX(RESP_DATE) AS max_dt FROM cia_sales_insights_cortex;
+
+  - name: last_month_spend
+    question: What was the spend last month?
+    sql: |
+      WITH max_date AS (
+        SELECT MAX(RESP_DATE) AS max_dt FROM cia_sales_insights_cortex
+      )
+      SELECT
+        SUM(SPEND) AS total_spend,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex, max_date
+      WHERE RESP_DATE >= DATE_TRUNC('MONTH', DATEADD('MONTH', -1, max_dt))
+        AND RESP_DATE < DATE_TRUNC('MONTH', max_dt);
+
+  - name: this_month_spend
+    question: What is the spend this month?
+    sql: |
+      WITH max_date AS (
+        SELECT MAX(RESP_DATE) AS max_dt FROM cia_sales_insights_cortex
+      )
+      SELECT
+        SUM(SPEND) AS total_spend,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex, max_date
+      WHERE RESP_DATE >= DATE_TRUNC('MONTH', max_dt)
+        AND RESP_DATE <= max_dt;
+
+  - name: recent_transactions
+    question: Show me recent transactions
+    sql: |
+      WITH max_date AS (
+        SELECT MAX(RESP_DATE) AS max_dt FROM cia_sales_insights_cortex
+      )
+      SELECT
+        RESP_DATE,
+        SUM(TRANSACTIONS) AS transaction_count,
+        SUM(SPEND) AS total_spend
+      FROM cia_sales_insights_cortex, max_date
+      WHERE RESP_DATE >= DATEADD('DAY', -7, max_dt)
+      GROUP BY RESP_DATE
+      ORDER BY RESP_DATE DESC;
+
+  - name: last_3_months
+    question: What are the trends for the last 3 months?
+    sql: |
+      WITH max_date AS (
+        SELECT MAX(RESP_DATE) AS max_dt FROM cia_sales_insights_cortex
+      )
+      SELECT
+        DATE_TRUNC('MONTH', RESP_DATE) AS month,
+        SUM(SPEND) AS total_spend,
+        SUM(TRANSACTIONS) AS transaction_count
+      FROM cia_sales_insights_cortex, max_date
+      WHERE RESP_DATE >= DATE_TRUNC('MONTH', DATEADD('MONTH', -3, max_dt))
+        AND RESP_DATE <= max_dt
+      GROUP BY 1
+      ORDER BY 1;
+
+  - name: total_spend_by_month
+    question: What is the total spend by month?
+    sql: |
+      SELECT
+        DATE_TRUNC('MONTH', RESP_DATE) AS month,
+        SUM(SPEND) AS total_spend,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex
+      GROUP BY 1
+      ORDER BY 1;
+
+  - name: transactions_by_channel
+    question: How do transactions break down by channel?
+    sql: |
+      SELECT
+        CHANNEL,
+        SUM(TRANSACTIONS) AS transaction_count,
+        SUM(SPEND) AS total_spend,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex
+      GROUP BY 1;
+
+  - name: repeat_vs_new_spend
+    question: What is the breakdown of repeat vs new spend?
+    sql: |
+      SELECT
+        SUM(REPEAT_SPEND) AS repeat_spend,
+        SUM(NEW_SPEND) AS new_spend,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex;
+
+  - name: sales_by_store
+    question: Show me sales by store
+    sql: |
+      SELECT
+        TD_ID,
+        TRANSACTION_CITY,
+        TRANSACTION_STATE,
+        SUM(SPEND) AS total_spend,
+        SUM(TRANSACTIONS) AS transaction_count,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex
+      GROUP BY TD_ID, TRANSACTION_CITY, TRANSACTION_STATE
+      ORDER BY total_spend DESC;
+
+  - name: top_stores
+    question: What are my top stores?
+    sql: |
+      SELECT
+        TD_ID,
+        TRANSACTION_CITY,
+        TRANSACTION_STATE,
+        SUM(SPEND) AS total_spend,
+        SUM(TRANSACTIONS) AS transaction_count,
+        MIN(RESP_DATE) AS data_from,
+        MAX(RESP_DATE) AS data_through
+      FROM cia_sales_insights_cortex
+      GROUP BY TD_ID, TRANSACTION_CITY, TRANSACTION_STATE
+      ORDER BY total_spend DESC
+      LIMIT 10;
