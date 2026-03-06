@@ -3,10 +3,19 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
-  "types": "src/index.ts",
+  "main": "./cjs/index.cjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./cjs/index.cjs"
+    }
+  },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run build:esm && npm run build:cjs",
+    "build:esm": "tsc -p tsconfig.json",
+    "build:cjs": "tsc -p tsconfig.cjs.json && node -e \"const fs=require('node:fs'); if (fs.existsSync('cjs/index.cjs')) fs.rmSync('cjs/index.cjs'); fs.renameSync('cjs/index.js', 'cjs/index.cjs');\"",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "echo 'no tests for @ci/contracts'"
   },

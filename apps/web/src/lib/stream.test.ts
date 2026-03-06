@@ -1,36 +1,36 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { parseNdjsonChunk } from "./stream";
 
 describe("parseNdjsonChunk", () => {
   it("parses complete lines and returns carry", () => {
     const first = parseNdjsonChunk('{"type":"status","message":"A"}\n{"type":"done"}\n');
-    expect(first.events).toHaveLength(2);
-    expect(first.carry).toBe("");
+    assert.equal(first.events.length, 2);
+    assert.equal(first.carry, "");
   });
 
   it("handles partial chunks", () => {
     const first = parseNdjsonChunk('{"type":"status","message":"A"}\n{"type":"answer_delta"');
-    expect(first.events).toHaveLength(1);
+    assert.equal(first.events.length, 1);
     const second = parseNdjsonChunk(',"delta":"x"}\n', first.carry);
-    expect(second.events).toHaveLength(1);
-    expect(second.events[0]).toEqual({ type: "answer_delta", delta: "x" });
+    assert.equal(second.events.length, 1);
+    assert.deepEqual(second.events[0], { type: "answer_delta", delta: "x" });
   });
 
   it("accepts response events with nullable trace fields", () => {
     const line =
-      '{"type":"response","phase":"final","response":{"answer":"Blocked","confidence":"low","whyItMatters":"Need clarification","metrics":[],"evidence":[],"insights":[],"suggestedQuestions":[],"assumptions":[],"trace":[{"id":"t2","title":"Generate and execute SQL","summary":"blocked","status":"blocked","sql":null,"qualityChecks":null}],"dataTables":[]}}\n';
+      '{"type":"response","response":{"answer":"Blocked","confidence":"low","whyItMatters":"Need clarification","metrics":[],"evidence":[],"insights":[],"suggestedQuestions":[],"assumptions":[],"trace":[{"id":"t2","title":"Generate and execute SQL","summary":"blocked","status":"blocked","sql":null,"qualityChecks":null}],"dataTables":[]}}\n';
     const parsed = parseNdjsonChunk(line);
-    expect(parsed.events).toHaveLength(1);
-    expect(parsed.events[0].type).toBe("response");
+    assert.equal(parsed.events.length, 1);
+    assert.equal(parsed.events[0].type, "response");
   });
 
   it("falls back to tolerant parsing when response shape drifts", () => {
-    const line = '{"type":"response","phase":"final","response":{"answer":"Fallback answer"}}\n';
+    const line = '{"type":"response","response":{"answer":"Fallback answer"}}\n';
     const parsed = parseNdjsonChunk(line);
-    expect(parsed.events).toHaveLength(1);
-    expect(parsed.events[0]).toEqual({
+    assert.equal(parsed.events.length, 1);
+    assert.deepEqual(parsed.events[0], {
       type: "response",
-      phase: "final",
       response: { answer: "Fallback answer" },
     });
   });

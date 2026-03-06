@@ -1,5 +1,6 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
 import { EvidenceTable } from "./evidence-table";
 
 describe("EvidenceTable comparison rendering", () => {
@@ -31,10 +32,10 @@ describe("EvidenceTable comparison rendering", () => {
     const utcShiftedFrom = new Date("2025-11-01").toLocaleDateString();
     const utcShiftedThrough = new Date("2025-11-30").toLocaleDateString();
 
-    expect(html).toContain(expectedFrom);
-    expect(html).toContain(expectedThrough);
-    if (utcShiftedFrom !== expectedFrom) expect(html).not.toContain(utcShiftedFrom);
-    if (utcShiftedThrough !== expectedThrough) expect(html).not.toContain(utcShiftedThrough);
+    assert.ok(html.includes(expectedFrom));
+    assert.ok(html.includes(expectedThrough));
+    if (utcShiftedFrom !== expectedFrom) assert.ok(!html.includes(utcShiftedFrom));
+    if (utcShiftedThrough !== expectedThrough) assert.ok(!html.includes(utcShiftedThrough));
   });
 
   it("renders date-only month labels without timezone month drift", () => {
@@ -64,8 +65,8 @@ describe("EvidenceTable comparison rendering", () => {
       />,
     );
 
-    expect(html).toContain("Jun 2025");
-    expect(html).not.toContain("May 2025");
+    assert.ok(html.includes("Jun 2025"));
+    assert.ok(!html.includes("May 2025"));
   });
 
   it("renders comparison table with configured comparison keys and delta columns", () => {
@@ -100,10 +101,10 @@ describe("EvidenceTable comparison rendering", () => {
       />,
     );
 
-    expect(html).toContain("Comparison Table");
-    expect(html).toContain("Q4 2023");
-    expect(html).toContain("Q4 2025");
-    expect(html).toContain("%Δ Q4 2025 vs Q4 2023");
+    assert.ok(html.includes("Comparison Table"));
+    assert.ok(html.includes("Q4 2023"));
+    assert.ok(html.includes("Q4 2025"));
+    assert.ok(html.includes("%Δ Q4 2025 vs Q4 2023"));
   });
 
   it("renders compact comparison message when comparands exceed threshold", () => {
@@ -139,7 +140,7 @@ describe("EvidenceTable comparison rendering", () => {
       />,
     );
 
-    expect(html).toContain("Showing top movers only");
+    assert.ok(html.includes("Showing top movers only"));
   });
 
   it("renders semantic comparison rows from comparison signals", () => {
@@ -185,12 +186,12 @@ describe("EvidenceTable comparison rendering", () => {
       />,
     );
 
-    expect(html).toContain("Q4 2025 vs Q4 2024");
-    expect(html).toContain(">Q4 2024<");
-    expect(html).toContain(">Q4 2025<");
-    expect(html).toContain("+$42.7M");
-    expect(html).not.toContain("Prior Period");
-    expect(html).not.toContain("Current Period");
+    assert.ok(html.includes("Q4 2025 vs Q4 2024"));
+    assert.ok(html.includes(">Q4 2024<"));
+    assert.ok(html.includes(">Q4 2025<"));
+    assert.ok(html.includes("+$42.7M"));
+    assert.ok(!html.includes("Prior Period"));
+    assert.ok(!html.includes("Current Period"));
   });
 
   it("prefers semantic comparison panel even if table style drifts from comparison", () => {
@@ -227,7 +228,7 @@ describe("EvidenceTable comparison rendering", () => {
       />,
     );
 
-    expect(html).toContain("Q4 2025 vs Q4 2024");
-    expect(html).not.toContain("Rank");
+    assert.ok(html.includes("Q4 2025 vs Q4 2024"));
+    assert.ok(!html.includes("Rank"));
   });
 });

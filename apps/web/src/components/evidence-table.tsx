@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo } from "react";
-import type { ChartConfig, ComparisonSignal, DataCell, DataTable, PrimaryVisual, TableConfig } from "@/lib/types";
+import type { ChartConfig, ComparisonSignal, DataCell, DataTable, PrimaryVisual, TableConfig } from "../lib/types";
 
 interface ChartPoint {
   x: string;

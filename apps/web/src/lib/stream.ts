@@ -1,5 +1,5 @@
 import { chatStreamEventSchema } from "@ci/contracts";
-import type { ChatStreamEvent } from "@/lib/types";
+import type { ChatStreamEvent } from "./types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
