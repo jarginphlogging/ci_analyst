@@ -633,17 +633,14 @@ class ConversationalOrchestrator:
         results: list[SqlExecutionResult],
         validation: ValidationResult,
         response: AgentResponse,
-        phase: str,
         llm_entries: list[LlmTraceEntry],
         stage_timings_ms: dict[str, float],
     ) -> list[TraceStep]:
         result_summary = self._results_summary(results)
-        synthesis_summary = "Prepared deterministic draft summary from retrieved SQL tables."
-        if phase == "final":
-            synthesis_summary = "Synthesized final narrative and recommendations from governed execution context."
+        synthesis_summary = "Synthesized final narrative and recommendations from governed execution context."
         plan_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
         sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
-        synthesis_llm_entries = self._llm_entries_for_stages(llm_entries, {"synthesis_final"}) if phase == "final" else []
+        synthesis_llm_entries = self._llm_entries_for_stages(llm_entries, {"synthesis_final"})
         sql_retry_feedback = context.sql_retry_feedback or self._sql_retry_feedback(sql_llm_entries)
         warehouse_errors = self._warehouse_errors(sql_retry_feedback)
         provider_requests = self._provider_request_payloads(sql_llm_entries)
@@ -683,6 +680,8 @@ class ConversationalOrchestrator:
                 },
                 stageOutput={
                     **result_summary,
+                    "interpretationNotes": context.sql_interpretation_notes,
+                    "caveats": context.sql_caveats,
                     "executionNotes": context.sql_assumptions,
                     "retryFeedback": sql_retry_feedback,
                     "warehouseErrors": warehouse_errors,
@@ -714,7 +713,8 @@ class ConversationalOrchestrator:
                 runtimeMs=self._step_runtime(stage_timings_ms, "t4"),
                 qualityChecks=self._inline_checks_for_stage("t4") or None,
                 stageInput={
-                    "phase": phase,
+                    "sqlInterpretationNoteCount": len(context.sql_interpretation_notes),
+                    "sqlCaveatCount": len(context.sql_caveats),
                     "sqlAssumptionCount": len(context.sql_assumptions),
                     "resultSummary": result_summary,
                     "llmPrompts": self._llm_prompt_payload(synthesis_llm_entries),
@@ -1074,7 +1074,6 @@ class ConversationalOrchestrator:
                             results=results,
                             validation=validation,
                             response=response,
-                            phase="final",
                             llm_entries=llm_collector.entries,
                             stage_timings_ms=stage_timings_ms,
                         )
@@ -1215,7 +1214,7 @@ class ConversationalOrchestrator:
                                     stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
                                 ),
                             )
-                            await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
+                            await emit({"type": "response", "response": blocked_response.model_dump()})
                             await emit({"type": "done"})
                             return
                         except SqlGenerationBlockedError as blocked:
@@ -1241,64 +1240,16 @@ class ConversationalOrchestrator:
                                     stage_timings_ms=getattr(blocked, "stage_timings_ms", {}),
                                 ),
                             )
-                            await emit({"type": "response", "phase": "final", "response": blocked_response.model_dump()})
+                            await emit({"type": "response", "response": blocked_response.model_dump()})
                             await emit({"type": "done"})
                             return
 
-                        await progress("Preparing initial answer from retrieved data")
-                        fast_synthesis_started_at = perf_counter()
-                        with stage_span(
-                            span_name="pipeline.t4_synthesis_draft",
-                            stage_id="t4",
-                            input_value={
-                                "phase": "draft",
-                                "message": request.message,
-                                "resultCount": len(results),
-                                "planStepCount": len(context.plan),
-                            },
-                        ):
-                            fast_response = await self._run_with_heartbeat(
-                                operation=lambda: self._dependencies.build_fast_response(request, context, results, prior_history),
-                                progress_callback=progress,
-                                heartbeat_message="Building initial answer...",
-                            )
-                            draft_stage_timings_ms = dict(stage_timings_ms)
-                            draft_stage_timings_ms["t4"] = round((perf_counter() - fast_synthesis_started_at) * 1000, 2)
-                            fast_response = self._apply_synthesis_inline_checks(fast_response, phase="draft")
-                            set_stage_output(
-                                self._response_summary(fast_response),
-                                attributes={
-                                    "response.confidence": fast_response.confidence,
-                                    "response.table_count": len(fast_response.dataTables),
-                                    "response.artifact_count": len(fast_response.artifacts),
-                                    "runtime.ms": draft_stage_timings_ms["t4"],
-                                },
-                            )
-                        fast_response.trace = self._build_trace(
-                            request=request,
-                            prior_history=prior_history,
-                            context=context,
-                            results=results,
-                            validation=validation,
-                            response=fast_response,
-                            phase="draft",
-                            llm_entries=llm_collector.entries,
-                            stage_timings_ms=draft_stage_timings_ms,
-                        )
-                        fast_response = self._finalize_response(
-                            response=fast_response,
-                            validation=validation,
-                            session_depth=len(self._session_history.get(session_id, [])),
-                        )
-                        await emit({"type": "response", "phase": "draft", "response": fast_response.model_dump()})
-
                         await progress("Generating final narrative and recommendations")
-                        final_synthesis_started_at = perf_counter()
+                        synthesis_started_at = perf_counter()
                         with stage_span(
-                            span_name="pipeline.t4_synthesis_final",
+                            span_name="pipeline.t4_synthesis",
                             stage_id="t4",
                             input_value={
-                                "phase": "final",
                                 "message": request.message,
                                 "resultCount": len(results),
                                 "planStepCount": len(context.plan),
@@ -1309,8 +1260,7 @@ class ConversationalOrchestrator:
                                 progress_callback=progress,
                                 heartbeat_message="Synthesizing narrative...",
                             )
-                            final_stage_timings_ms = dict(stage_timings_ms)
-                            final_stage_timings_ms["t4"] = round((perf_counter() - final_synthesis_started_at) * 1000, 2)
+                            stage_timings_ms["t4"] = round((perf_counter() - synthesis_started_at) * 1000, 2)
                             final_response = self._apply_synthesis_inline_checks(final_response, phase="final")
                             set_stage_output(
                                 self._response_summary(final_response),
@@ -1318,7 +1268,7 @@ class ConversationalOrchestrator:
                                     "response.confidence": final_response.confidence,
                                     "response.table_count": len(final_response.dataTables),
                                     "response.artifact_count": len(final_response.artifacts),
-                                    "runtime.ms": final_stage_timings_ms["t4"],
+                                    "runtime.ms": stage_timings_ms["t4"],
                                 },
                             )
                         final_response.trace = self._build_trace(
@@ -1328,21 +1278,19 @@ class ConversationalOrchestrator:
                             results=results,
                             validation=validation,
                             response=final_response,
-                            phase="final",
                             llm_entries=llm_collector.entries,
-                            stage_timings_ms=final_stage_timings_ms,
+                            stage_timings_ms=stage_timings_ms,
                         )
                         final_response = self._finalize_response(
                             response=final_response,
                             validation=validation,
                             session_depth=len(self._session_history.get(session_id, [])),
                         )
-
-                        for delta in build_incremental_answer_deltas(fast_response.answer, final_response.answer):
+                        for delta in build_incremental_answer_deltas(final_response.answer):
                             await emit({"type": "answer_delta", "delta": delta})
 
                         await progress("Finalizing response payload and audit trace")
-                        await emit({"type": "response", "phase": "final", "response": final_response.model_dump()})
+                        await emit({"type": "response", "response": final_response.model_dump()})
                         await emit({"type": "done"})
                     finally:
                         turn_context.__exit__(None, None, None)
@@ -1360,7 +1308,7 @@ class ConversationalOrchestrator:
                     error=error,
                     runtime_ms=round((perf_counter() - started_at) * 1000, 2),
                 )
-                await emit({"type": "response", "phase": "final", "response": failure_response.model_dump()})
+                await emit({"type": "response", "response": failure_response.model_dump()})
                 await emit({"type": "done"})
             finally:
                 logger.info(

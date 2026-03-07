@@ -19,6 +19,7 @@ FastAPI orchestration service for conversational analytics.
 
 Provider modes:
 - `sandbox`: Anthropic LLM + local Cortex-compatible REST + local SQLite data
+- `prod-sandbox`: Azure OpenAI LLM + local Cortex-compatible REST + local SQLite data
 - `prod`: Azure OpenAI + Snowflake Cortex Analyst + Snowflake Python Connector
 
 `prod` mode uses:
@@ -37,6 +38,12 @@ Provider modes:
   - raw `/query` endpoint for direct SQL execution
 - Local seeded SQLite dataset with allowlisted banking tables
 - No external Snowflake/Cortex API key required for sandbox mode.
+
+`prod-sandbox` mode uses:
+- Azure OpenAI for routing, planning, and narrative synthesis
+- Local pseudo-Cortex Analyst REST service for analyst-style SQL generation, powered by Azure OpenAI
+- Local seeded SQLite dataset with allowlisted banking tables
+- No Snowflake connectivity required
 
 Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`
@@ -60,8 +67,12 @@ source .venv/bin/activate
 python -m pip install -r requirements.txt
 ```
 
+`requirements.txt` pins `cryptography` and `pyOpenSSL` explicitly because some enterprise Windows mirrors
+otherwise backtrack onto a source-only `cryptography` release, which triggers an avoidable Rust/bootstrap path.
+
 Environment templates:
 - `.env.sandbox`
+- `.env.prod-sandbox`
 - `.env.prod`
 
 Runtime file:
@@ -142,4 +153,5 @@ SQL retry/tracing contract:
 Set in `.env`:
 
 - `PROVIDER_MODE=sandbox` (local end-to-end testing without enterprise services)
+- `PROVIDER_MODE=prod-sandbox` (Azure OpenAI + local Cortex emulator + SQLite)
 - `PROVIDER_MODE=prod` (Azure/Snowflake/Cortex)

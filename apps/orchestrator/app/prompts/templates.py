@@ -107,7 +107,7 @@ def sql_prompt(
         "- Use the warehouse dialect shown above.\n"
         "- Treat retry feedback syntax errors as hard constraints and avoid repeating the same syntax family."
     )
-    if mode == "sandbox":
+    if mode in {"sandbox", "prod-sandbox"}:
         execution_target = "SQLite sandbox warehouse"
         dialect_rules = (
             "- Use SQLite-compatible SQL.\n"

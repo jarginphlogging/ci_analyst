@@ -13,6 +13,8 @@ class TurnExecutionContext:
         default_factory=lambda: PresentationIntent(displayType="table", tableStyle="simple")
     )
     temporal_scope: TemporalScope | None = None
+    sql_interpretation_notes: list[str] = field(default_factory=list)
+    sql_caveats: list[str] = field(default_factory=list)
     sql_assumptions: list[str] = field(default_factory=list)
     sql_retry_feedback: list[dict[str, Any]] = field(default_factory=list)
 
@@ -35,14 +37,6 @@ class OrchestratorDependencies(Protocol):
     async def validate_results(self, results: list[SqlExecutionResult]) -> ValidationResult: ...
 
     async def build_response(
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results: list[SqlExecutionResult],
-        history: list[str],
-    ) -> AgentResponse: ...
-
-    async def build_fast_response(
         self,
         request: ChatTurnRequest,
         context: TurnExecutionContext,

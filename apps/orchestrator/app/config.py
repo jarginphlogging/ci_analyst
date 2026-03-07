@@ -129,11 +129,13 @@ class Settings:
 
     @property
     def provider_mode(self) -> str:
-        raw = (self.provider_mode_raw or "").strip().lower()
-        if raw in {"sandbox", "prod"}:
+        raw = (self.provider_mode_raw or "").strip().lower().replace("_", "-")
+        if raw in {"sandbox", "prod", "prod-sandbox"}:
             return raw
         if raw == "production":
             return "prod"
+        if raw in {"production-sandbox", "sandbox-prod"}:
+            return "prod-sandbox"
         return "sandbox"
 
     def has_azure_credentials(self) -> bool:

@@ -229,7 +229,7 @@ export type ChatTurnResponse = z.infer<typeof chatTurnResponseSchema>;
 export const chatStreamEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("status"), message: z.string() }),
   z.object({ type: z.literal("answer_delta"), delta: z.string() }),
-  z.object({ type: z.literal("response"), response: agentResponseSchema, phase: z.enum(["draft", "final"]).optional() }),
+  z.object({ type: z.literal("response"), response: agentResponseSchema }),
   z.object({ type: z.literal("done") }),
   z.object({ type: z.literal("error"), message: z.string() }),
 ]);

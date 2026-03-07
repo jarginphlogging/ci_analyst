@@ -10,7 +10,7 @@ Production-oriented monorepo for a fast, explainable conversational analytics ag
 This repo supports:
 - Streamed responses
 - Deterministic workflow + bounded agentic reasoning
-- Two provider modes (`sandbox`, `prod`) switched by env only
+- Three provider modes (`sandbox`, `prod-sandbox`, `prod`) switched by env only
 - In-UI tabular data explorer with CSV/JSON export
 
 ## Current Backend Status
@@ -74,6 +74,9 @@ npm run setup:orchestrator
 
 This runs in the orchestrator workspace to ensure installs and runtime use the same Python interpreter.
 
+On enterprise Windows machines, the orchestrator dependency set explicitly pins `cryptography` and `pyOpenSSL`
+to keep pip on a wheel-backed install path and avoid falling back to source builds during setup.
+
 4. Edit runtime env files (already present in repo):
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
 - `/Users/joe/Code/ci_analyst/apps/web/.env.local`
@@ -112,6 +115,7 @@ Frontend env file:
 Optional reference templates:
 - Sandbox:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.sandbox`
+  - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod-sandbox`
   - `/Users/joe/Code/ci_analyst/apps/web/.env.orchestrator`
 - Prod:
   - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env.prod`
@@ -171,6 +175,32 @@ npm run dev:web
 curl http://127.0.0.1:8788/health
 curl http://127.0.0.1:8787/health
 ```
+
+## Prod-Sandbox Mode (Azure OpenAI + Local Cortex + SQLite)
+
+1. Edit `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`:
+- `PROVIDER_MODE=prod-sandbox`
+- set `AZURE_OPENAI_*` credentials
+- keep `SANDBOX_CORTEX_BASE_URL` pointing at the local sandbox service
+- keep `SANDBOX_SQLITE_PATH` as your local SQLite database path
+
+2. Start the local Cortex-compatible sandbox service:
+```bash
+cd /Users/joe/Code/ci_analyst
+npm run dev:sandbox-cortex
+```
+
+3. Start the orchestrator and frontend as usual:
+```bash
+cd /Users/joe/Code/ci_analyst
+npm run dev:orchestrator
+npm run dev:web
+```
+
+In this mode:
+- planner/synthesis use Azure OpenAI
+- the sandbox Cortex emulator also uses Azure OpenAI for SQL generation
+- SQL execution still runs against local SQLite
 
 ## Streaming UX
 

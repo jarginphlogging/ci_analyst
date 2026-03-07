@@ -80,16 +80,28 @@ When retry feedback is present, a prior attempt at *this* step's SQL failed at e
 5. Do not repeat any prior failed SQL verbatim or with superficial changes.
 6. If two attempts have failed for the same root cause, return `clarification` with `clarificationKind = "technical_failure"`.
 
-## 5 · Assumptions
+## 5 · Interpretation Notes And Caveats
 
-Log assumptions when your query makes an interpretive choice that a reviewer should be able to verify. Good assumptions:
+Capture meaning first.
+
+- `interpretationNotes`: primary interpretation decisions that materially define what the query means.
+- `caveats`: material limitations that change how the user should read the result.
+- `assumptions`: optional overflow for additional interpretive notes not already captured above.
+
+Good `interpretationNotes`:
 
 - Business term resolution: "Interpreted 'performing' as total spend based on the semantic model's spend measure."
-- Time boundary choices: "Used calendar year 2024 as the prior period since the step goal says 'same period last year' relative to 2025."
-- Default limits: "Returned top/bottom 5 since the step goal did not specify a count."
-- Filter logic: "Included both Consumer and Commercial transactions since the step goal did not restrict transaction type."
+- Proxy basis: "Used transaction counts as the available measurement basis for the requested customer split."
+- Time boundary choice: "Used calendar year 2024 as the prior period since the step goal says 'same period last year' relative to 2025."
+
+Good `caveats`:
+
+- "Ranking reflects total spend; ranking by transaction count would produce a different order."
+- "Results cover a partial period, so this is not a full-period comparison."
+- "Available evidence supports transaction activity, not unique-entity counts."
 
 Do not log mechanical SQL decisions (join type, CTE structure, column aliasing) unless they reflect a business interpretation choice.
+Do not pad these fields with generic warnings. If there is no meaningful item for a field, return an empty array.
 
 ## 6 · Response Contract
 
@@ -102,5 +114,7 @@ rationale:             string       (brief explanation of approach)
 clarificationQuestion: string       (required when clarification)
 clarificationKind:     user_input_required | technical_failure (required when clarification)
 notRelevantReason:     string       (required when not_relevant)
-assumptions:           string[]     (interpretive choices made — see section 5)
+interpretationNotes:   string[]     (primary interpretation decisions — see section 5)
+caveats:               string[]     (material limitations — see section 5)
+assumptions:           string[]     (optional additional interpretive context not already captured above)
 ```

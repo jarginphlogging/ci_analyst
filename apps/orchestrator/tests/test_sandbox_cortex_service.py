@@ -10,6 +10,18 @@ from app.sandbox import sandbox_sca_service
 from app.sandbox.sandbox_sca_service import SandboxSqlGenerationError, app
 
 
+def test_sandbox_sql_generation_llm_uses_azure_in_prod_sandbox_mode() -> None:
+    original_provider_mode_raw = settings.provider_mode_raw
+    try:
+        object.__setattr__(settings, "provider_mode_raw", "prod-sandbox")
+        provider_name, provider_fn = sandbox_sca_service._sql_generation_llm()
+    finally:
+        object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
+
+    assert provider_name == "azure_openai"
+    assert provider_fn is sandbox_sca_service.azure_chat_completion
+
+
 def test_sandbox_cortex_query_endpoint(tmp_path: Path) -> None:
     db_path = str(tmp_path / "cortex_sandbox.db")
 

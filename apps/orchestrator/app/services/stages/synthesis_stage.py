@@ -282,6 +282,25 @@ def _normalize_multi_objective_confidence_reason(
     return confidence_reason
 
 
+def _ordered_assumptions(
+    *,
+    interpretation_notes: list[str],
+    caveats: list[str],
+    llm_assumptions: list[str],
+    fallback_assumptions: list[str],
+) -> list[str]:
+    ordered: list[str] = []
+    for bucket in (interpretation_notes, caveats, llm_assumptions, fallback_assumptions):
+        for item in bucket:
+            text = " ".join(str(item).split()).strip()
+            if not text or text in ordered:
+                continue
+            ordered.append(text)
+            if len(ordered) >= 5:
+                return ordered
+    return ordered
+
+
 def _parse_iso_date(value: Any) -> date | None:
     if isinstance(value, datetime):
         return value.date()
@@ -1545,6 +1564,8 @@ def _context_payload_for_prompt(
         "observations": context.observations,
         "series": context.series,
         "dataQuality": context.dataQuality,
+        "interpretationNotes": context.interpretationNotes,
+        "caveats": context.caveats,
         "facts": [
             {
                 "id": item.id,
@@ -1620,6 +1641,8 @@ def _context_payload_for_prompt(
         f"SupportedClaimsCount: {len(payload['supportedClaims'])}",
         f"FactsCount: {len(payload['facts'])}",
         f"ComparisonsCount: {len(payload['comparisons'])}",
+        f"InterpretationNotesCount: {len(payload['interpretationNotes'])}",
+        f"CaveatsCount: {len(payload['caveats'])}",
     ]
     if "evidenceEmptyReason" in payload:
         lines.append(f"EvidenceEmptyReason: {payload['evidenceEmptyReason']}")
@@ -1635,6 +1658,8 @@ def _context_payload_for_prompt(
         ("Observations", payload["observations"]),
         ("Series", payload["series"]),
         ("Data Quality", payload["dataQuality"]),
+        ("Interpretation Notes", payload["interpretationNotes"]),
+        ("Caveats", payload["caveats"]),
         ("Ranking Evidence", payload.get("rankingEvidence")),
         ("Executed Steps", payload["executedSteps"]),
         ("Facts", payload["facts"]),
@@ -1654,28 +1679,6 @@ class SynthesisStage:
         self._ask_llm_json = ask_llm_json
         self._data_summarizer = DataSummarizerStage()
 
-    async def build_fast_response(
-        self,
-        *,
-        message: str,
-        plan: list[QueryPlanStep] | None,
-        presentation_intent: PresentationIntent,
-        results: list[SqlExecutionResult],
-        prior_assumptions: list[str],
-        history: list[str],
-        temporal_scope: TemporalScope | None = None,
-    ) -> AgentResponse:
-        return await self._build_response(
-            message=message,
-            plan=plan,
-            presentation_intent=presentation_intent,
-            temporal_scope=temporal_scope,
-            results=results,
-            prior_assumptions=prior_assumptions,
-            history=history,
-            with_llm=False,
-        )
-
     async def build_response(
         self,
         *,
@@ -1683,6 +1686,8 @@ class SynthesisStage:
         plan: list[QueryPlanStep] | None,
         presentation_intent: PresentationIntent,
         results: list[SqlExecutionResult],
+        prior_interpretation_notes: list[str],
+        prior_caveats: list[str],
         prior_assumptions: list[str],
         history: list[str],
         temporal_scope: TemporalScope | None = None,
@@ -1693,9 +1698,10 @@ class SynthesisStage:
             presentation_intent=presentation_intent,
             temporal_scope=temporal_scope,
             results=results,
+            prior_interpretation_notes=prior_interpretation_notes,
+            prior_caveats=prior_caveats,
             prior_assumptions=prior_assumptions,
             history=history,
-            with_llm=True,
         )
 
     def _synthesis_context_package(
@@ -1716,6 +1722,8 @@ class SynthesisStage:
         evidence_status: EvidenceStatus,
         evidence_empty_reason: str,
         subtask_status: list[SubtaskStatus],
+        interpretation_notes: list[str],
+        caveats: list[str],
         headline: str,
         headline_refs: list[EvidenceReference],
         message: str,
@@ -1767,6 +1775,8 @@ class SynthesisStage:
             evidenceStatus=evidence_status,
             evidenceEmptyReason=evidence_empty_reason,
             subtaskStatus=subtask_status,
+            interpretationNotes=interpretation_notes[:5],
+            caveats=caveats[:5],
             headline=headline,
             headlineEvidenceRefs=headline_refs,
         )
@@ -1778,12 +1788,12 @@ class SynthesisStage:
         plan: list[QueryPlanStep] | None,
         presentation_intent: PresentationIntent,
         results: list[SqlExecutionResult],
+        prior_interpretation_notes: list[str],
+        prior_caveats: list[str],
         prior_assumptions: list[str],
         history: list[str],
-        with_llm: bool,
         temporal_scope: TemporalScope | None = None,
     ) -> AgentResponse:
-        _ = prior_assumptions
         evidence = build_evidence_rows(results, message=message)
         data_tables = results_to_data_tables(results)
         raw_artifacts = build_analysis_artifacts(results, message=message)
@@ -1838,6 +1848,8 @@ class SynthesisStage:
             evidence_status=evidence_status,
             evidence_empty_reason=evidence_empty_reason,
             subtask_status=subtask_status,
+            interpretation_notes=prior_interpretation_notes,
+            caveats=prior_caveats,
             headline=headline,
             headline_refs=headline_refs,
             message=message,
@@ -1845,37 +1857,31 @@ class SynthesisStage:
         result_summary = _context_payload_for_prompt(synthesis_context, artifacts=artifacts)
 
         llm_payload: dict[str, Any] = {}
-        if with_llm:
-            try:
-                system_prompt, user_prompt = response_prompt(
-                    message,
-                    json.dumps(presentation_intent.model_dump(), ensure_ascii=True),
-                    result_summary,
-                    history,
+        try:
+            system_prompt, user_prompt = response_prompt(
+                message,
+                json.dumps(presentation_intent.model_dump(), ensure_ascii=True),
+                result_summary,
+                history,
+            )
+            with llm_trace_stage(
+                "synthesis_final",
+                {"planStepCount": len(plan or []), "historyDepth": len(history)},
+            ):
+                llm_payload = await self._ask_llm_json(
+                    system_prompt=system_prompt,
+                    user_prompt=user_prompt,
+                    max_tokens=settings.real_llm_max_tokens,
                 )
-                with llm_trace_stage(
-                    "synthesis_final",
-                    {"planStepCount": len(plan or []), "historyDepth": len(history)},
-                ):
-                    llm_payload = await self._ask_llm_json(
-                        system_prompt=system_prompt,
-                        user_prompt=user_prompt,
-                        max_tokens=settings.real_llm_max_tokens,
-                    )
-            except Exception:
-                if settings.provider_mode in {"sandbox", "prod"}:
-                    raise
-                llm_payload = {}
+        except Exception:
+            if settings.provider_mode in {"sandbox", "prod", "prod-sandbox"}:
+                raise
+            llm_payload = {}
 
         answer = str(llm_payload.get("answer", "")).strip() or _deterministic_answer(results)
         why_it_matters = str(llm_payload.get("whyItMatters", "")).strip() or _deterministic_why_it_matters()
-        confidence_default = "medium" if with_llm else "high"
-        confidence = _normalize_confidence(str(llm_payload.get("confidence", confidence_default)))
+        confidence = _normalize_confidence(str(llm_payload.get("confidence", "medium")))
         confidence_reason = str(llm_payload.get("confidenceReason", "")).strip()
-        if not confidence_reason:
-            llm_assumptions = as_string_list(llm_payload.get("assumptions"), max_items=1)
-            if llm_assumptions:
-                confidence_reason = llm_assumptions[0]
         if not confidence_reason:
             confidence_reason = why_it_matters
 
@@ -1911,7 +1917,12 @@ class SynthesisStage:
             ]
         suggested_questions = as_string_list(llm_payload.get("suggestedQuestions"), max_items=3) or _default_questions(artifacts)
 
-        assumptions = as_string_list(llm_payload.get("assumptions"), max_items=5)
+        assumptions = _ordered_assumptions(
+            interpretation_notes=prior_interpretation_notes,
+            caveats=prior_caveats,
+            llm_assumptions=as_string_list(llm_payload.get("assumptions"), max_items=5),
+            fallback_assumptions=prior_assumptions,
+        )
         grain_mismatch = detect_grain_mismatch(results, message)
         if grain_mismatch:
             requested, detected = grain_mismatch
@@ -1935,11 +1946,7 @@ class SynthesisStage:
             TraceStep(
                 id="t3",
                 title="Synthesize narrative and visual config",
-                summary=(
-                    "Built deterministic narrative and visual fallback from retrieved data."
-                    if not with_llm
-                    else "Combined deterministic summaries with constrained narrative synthesis and validated visual config."
-                ),
+                summary="Combined deterministic summaries with constrained narrative synthesis and validated visual config.",
                 status="done",
             ),
         ]
@@ -1976,9 +1983,8 @@ class SynthesisStage:
         )
 
 
-def build_incremental_answer_deltas(fast_answer: str, final_answer: str) -> list[str]:
-    _ = fast_answer
-    final = final_answer.strip()
+def build_incremental_answer_deltas(answer: str) -> list[str]:
+    final = answer.strip()
     if not final:
         return [""]
     return [f"{token} " for token in final.split(" ")]

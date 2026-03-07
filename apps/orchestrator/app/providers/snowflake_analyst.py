@@ -102,19 +102,17 @@ def _normalize_analyst_response(*, body: dict[str, Any], conversation_id: str) -
             raise RuntimeError("Snowflake Cortex Analyst returned neither SQL nor clarification text.")
 
     request_id = str(body.get("request_id", "")).strip()
-    assumptions: list[str] = []
-    if request_id:
-        assumptions.append(f"Analyst request_id: {request_id}")
-
     return {
         "type": response_type,
         "conversationId": conversation_id,
         "sql": sql,
         "lightResponse": text_parts[0] if text_parts else "",
+        "interpretationNotes": text_parts[:2],
+        "caveats": [],
         "clarificationQuestion": clarification_question,
         "clarificationKind": clarification_kind,
         "notRelevantReason": "",
-        "assumptions": assumptions,
+        "assumptions": [],
         "rows": [],
         "rowCount": 0,
         "failedSql": None,

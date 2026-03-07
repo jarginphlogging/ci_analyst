@@ -16,6 +16,7 @@ from app.services.stages.sql_stage_models import (
     MAX_SQL_ATTEMPTS,
     OUT_OF_DOMAIN_MESSAGE,
     GeneratedStep,
+    SqlStageOutcome,
     SqlGenerationBlockedError,
 )
 from app.services.stages.sql_state_machine import (
@@ -68,6 +69,16 @@ def _parse_date(value: Any) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _append_unique(target: list[str], items: list[str], *, limit: int | None = None) -> None:
+    for item in items:
+        text = " ".join(str(item).split()).strip()
+        if not text or text in target:
+            continue
+        target.append(text)
+        if limit is not None and len(target) >= limit:
+            return
 
 
 def _period_start(value: date, unit: str) -> date:
@@ -340,6 +351,8 @@ class SqlExecutionStage:
                     "errorCode": SqlFailureCode.NOT_RELEVANT.value,
                     "errorCategory": error_category(SqlFailureCode.NOT_RELEVANT),
                     "reason": generated.not_relevant_reason,
+                    "interpretationNotes": generated.interpretation_notes,
+                    "caveats": generated.caveats,
                     "assumptions": generated.assumptions,
                     "failedSql": failed_sql,
                     "retryFeedback": retry_tail,
@@ -368,6 +381,8 @@ class SqlExecutionStage:
                 "errorCode": code.value,
                 "errorCategory": error_category(code),
                 "clarificationKind": generated.clarification_kind,
+                "interpretationNotes": generated.interpretation_notes,
+                "caveats": generated.caveats,
                 "assumptions": generated.assumptions,
                 "failedSql": failed_sql,
                 "retryFeedback": retry_tail,
@@ -421,6 +436,8 @@ class SqlExecutionStage:
         prior_sql: list[str],
         conversation_id: str,
         retry_feedback_by_step: dict[str, list[dict[str, Any]]],
+        interpretation_notes: list[str],
+        caveats: list[str],
         assumptions: list[str],
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
@@ -459,9 +476,9 @@ class SqlExecutionStage:
                 temporal_scope=temporal_scope.model_dump(mode="json", exclude_none=True) if temporal_scope else None,
                 dependency_context=dependency_context,
             )
-            assumptions.extend(generated.assumptions[:4])
-            if generated.rationale:
-                assumptions.append(f"{generated.step.id} rationale: {generated.rationale}")
+            _append_unique(interpretation_notes, generated.interpretation_notes, limit=6)
+            _append_unique(caveats, generated.caveats, limit=8)
+            _append_unique(assumptions, generated.assumptions, limit=8)
 
             if generated.status == "sql_ready" and generated.sql:
                 return generated, attempt
@@ -493,9 +510,6 @@ class SqlExecutionStage:
                     )
                 )
                 sync_retry_feedback()
-                assumptions.append(
-                    f"SQL generation retry {attempt} failed for {generated.step.id}: {failure_text}"
-                )
                 if is_dependency_context_retryable:
                     generation_history = [
                         *generation_history,
@@ -530,6 +544,8 @@ class SqlExecutionStage:
         prior_sql: list[str],
         conversation_id: str,
         retry_feedback_by_step: dict[str, list[dict[str, Any]]],
+        interpretation_notes: list[str],
+        caveats: list[str],
         assumptions: list[str],
         progress_callback: ProgressFn | None,
         sync_retry_feedback: Callable[[], None],
@@ -633,9 +649,6 @@ class SqlExecutionStage:
                     )
                 )
                 sync_retry_feedback()
-                assumptions.append(
-                    f"SQL execution retry {attempt_cursor} failed for {current_generated.step.id}: {error}"
-                )
                 elapsed_seconds = perf_counter() - step_started_at
 
                 if failure_code == SqlFailureCode.EXECUTION_TIMEOUT or elapsed_seconds >= settings.sql_step_sla_seconds:
@@ -697,6 +710,8 @@ class SqlExecutionStage:
                         prior_sql=prior_sql,
                         conversation_id=conversation_id,
                         retry_feedback_by_step=retry_feedback_by_step,
+                        interpretation_notes=interpretation_notes,
+                        caveats=caveats,
                         assumptions=assumptions,
                         progress_callback=progress_callback,
                         sync_retry_feedback=sync_retry_feedback,
@@ -727,7 +742,7 @@ class SqlExecutionStage:
         conversation_id: str = "anonymous",
         temporal_scope: TemporalScope | None = None,
         progress_callback: ProgressFn | None = None,
-    ) -> tuple[list[SqlExecutionResult], list[str]]:
+    ) -> SqlStageOutcome:
         started_at = perf_counter()
         self._latest_retry_feedback = []
         total_steps = len(plan)
@@ -742,7 +757,7 @@ class SqlExecutionStage:
         )
         try:
             if total_steps == 0:
-                return [], []
+                return SqlStageOutcome(results=[], interpretation_notes=[], caveats=[], assumptions=[])
             plan_limit = max(1, settings.plan_max_steps)
             if total_steps > plan_limit:
                 detail = (
@@ -772,6 +787,8 @@ class SqlExecutionStage:
             execution_semaphore = asyncio.Semaphore(max(1, settings.real_max_parallel_queries))
 
             prior_sql: list[str] = []
+            interpretation_notes: list[str] = []
+            caveats: list[str] = []
             assumptions: list[str] = []
             generated_attempt_by_index: dict[int, int] = {}
             retry_feedback_by_step: dict[str, list[dict[str, Any]]] = {}
@@ -803,6 +820,8 @@ class SqlExecutionStage:
                             prior_sql=snapshot_prior_sql,
                             conversation_id=conversation_id,
                             retry_feedback_by_step=retry_feedback_by_step,
+                            interpretation_notes=interpretation_notes,
+                            caveats=caveats,
                             assumptions=assumptions,
                             progress_callback=progress_callback,
                             sync_retry_feedback=_sync_retry_feedback,
@@ -849,6 +868,8 @@ class SqlExecutionStage:
                             prior_sql=prior_sql,
                             conversation_id=conversation_id,
                             retry_feedback_by_step=retry_feedback_by_step,
+                            interpretation_notes=interpretation_notes,
+                            caveats=caveats,
                             assumptions=assumptions,
                             progress_callback=progress_callback,
                             sync_retry_feedback=_sync_retry_feedback,
@@ -865,11 +886,6 @@ class SqlExecutionStage:
                     results_by_index[index] = result
 
             results = [results_by_index[index] for index in range(total_steps)]
-
-            deduped_assumptions: list[str] = []
-            for item in assumptions:
-                if item not in deduped_assumptions:
-                    deduped_assumptions.append(item)
             _sync_retry_feedback()
             logger.info(
                 "SQL stage completed",
@@ -882,7 +898,12 @@ class SqlExecutionStage:
                     "durationMs": round((perf_counter() - started_at) * 1000, 2),
                 },
             )
-            return results, deduped_assumptions[:8]
+            return SqlStageOutcome(
+                results=results,
+                interpretation_notes=interpretation_notes[:6],
+                caveats=caveats[:8],
+                assumptions=assumptions[:8],
+            )
         except Exception:
             logger.exception(
                 "SQL stage failed",

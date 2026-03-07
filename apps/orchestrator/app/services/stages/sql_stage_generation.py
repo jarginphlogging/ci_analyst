@@ -173,7 +173,7 @@ class SqlStepGenerator:
                 "providerMode": settings.provider_mode,
                 "analystTarget": (
                     "sandbox_cortex_emulator"
-                    if settings.provider_mode == "sandbox"
+                    if settings.provider_mode in {"sandbox", "prod-sandbox"}
                     else "snowflake_cortex_analyst"
                 ),
                 "stepId": step.id,
@@ -262,6 +262,8 @@ class SqlStepGenerator:
         attempted_sql = raw_failed_sql.strip() if isinstance(raw_failed_sql, str) else ""
         attempted_sql = attempted_sql or candidate_sql
         rationale = str(analyst_payload.get("lightResponse", "") or analyst_payload.get("explanation", "")).strip()
+        interpretation_notes = as_string_list(analyst_payload.get("interpretationNotes"), max_items=2)
+        caveats = as_string_list(analyst_payload.get("caveats"), max_items=4)
         assumptions = as_string_list(analyst_payload.get("assumptions"), max_items=4)
         payload_rows = None
         clarification_kind = _infer_clarification_kind(
@@ -314,6 +316,8 @@ class SqlStepGenerator:
                     "providerPayload": analyst_payload,
                 },
             )
+        interpretation_notes = _clean_assumptions(interpretation_notes, clarification_question=clarification_question)
+        caveats = _clean_assumptions(caveats, clarification_question=clarification_question)
         assumptions = _clean_assumptions(assumptions, clarification_question=clarification_question)
 
         return GeneratedStep(
@@ -323,6 +327,8 @@ class SqlStepGenerator:
             status=generation_type,
             sql=guarded_sql,
             rationale=rationale,
+            interpretation_notes=interpretation_notes,
+            caveats=caveats,
             assumptions=assumptions,
             clarification_question=clarification_question,
             not_relevant_reason=not_relevant_reason,
@@ -348,6 +354,8 @@ class SqlStepGenerator:
         clarification_question = ""
         not_relevant_reason = ""
         clarification_kind: ClarificationKind = "none"
+        interpretation_notes: list[str] = []
+        caveats: list[str] = []
         assumptions: list[str] = []
         generation_type: Literal["sql_ready", "clarification", "not_relevant"] = "sql_ready"
         attempted_sql: str | None = None
@@ -388,6 +396,8 @@ class SqlStepGenerator:
             rationale = str(payload.get("rationale", "")).strip()
             candidate_sql = str(payload.get("sql", "")).strip()
             attempted_sql = candidate_sql or attempted_sql
+            interpretation_notes.extend(as_string_list(payload.get("interpretationNotes"), max_items=2))
+            caveats.extend(as_string_list(payload.get("caveats"), max_items=4))
             assumptions.extend(as_string_list(payload.get("assumptions"), max_items=4))
             clarification_kind = _infer_clarification_kind(
                 status=generation_type,
@@ -418,7 +428,7 @@ class SqlStepGenerator:
             generation_type = "clarification"
             clarification_kind = "technical_failure"
             clarification_question = str(error).strip()
-            assumptions.append(f"SQL generation failed: {error}")
+            caveats.append(f"SQL generation failed: {error}")
 
         guarded_sql = None
         if generation_type == "sql_ready":
@@ -427,7 +437,7 @@ class SqlStepGenerator:
             except Exception as error:  # noqa: BLE001
                 generation_type = "clarification"
                 clarification_kind = "technical_failure"
-                assumptions.append(f"SQL generation guardrail check failed: {error}")
+                caveats.append(f"SQL generation guardrail check failed: {error}")
                 clarification_question = (
                     clarification_question
                     or rationale
@@ -441,6 +451,8 @@ class SqlStepGenerator:
                 or rationale
                 or ""
             )
+        interpretation_notes = _clean_assumptions(interpretation_notes, clarification_question=clarification_question)
+        caveats = _clean_assumptions(caveats, clarification_question=clarification_question)
         assumptions = _clean_assumptions(assumptions, clarification_question=clarification_question)
 
         return GeneratedStep(
@@ -450,6 +462,8 @@ class SqlStepGenerator:
             status=generation_type,
             sql=guarded_sql,
             rationale=rationale,
+            interpretation_notes=interpretation_notes,
+            caveats=caveats,
             assumptions=assumptions,
             clarification_question=clarification_question,
             not_relevant_reason=not_relevant_reason,
@@ -532,13 +546,7 @@ class SqlStepGenerator:
                             dependency_context=dependency_context,
                         )
                         fallback_assumptions = _clean_assumptions(
-                            [
-                                (
-                                    "Sandbox analyst provider unavailable for this attempt; "
-                                    f"used direct LLM SQL generation fallback ({error_code})."
-                                ),
-                                *fallback_generated.assumptions,
-                            ],
+                            fallback_generated.assumptions,
                             clarification_question=fallback_generated.clarification_question,
                         )
                         generated = GeneratedStep(
@@ -548,6 +556,8 @@ class SqlStepGenerator:
                             status=fallback_generated.status,
                             sql=fallback_generated.sql,
                             rationale=fallback_generated.rationale,
+                            interpretation_notes=fallback_generated.interpretation_notes,
+                            caveats=fallback_generated.caveats,
                             assumptions=fallback_assumptions,
                             clarification_question=fallback_generated.clarification_question,
                             not_relevant_reason=fallback_generated.not_relevant_reason,
@@ -575,10 +585,9 @@ class SqlStepGenerator:
                     status="clarification",
                     sql=None,
                     rationale="",
-                    assumptions=_clean_assumptions(
-                        [f"SQL generation provider error type: {error_code}"],
-                        clarification_question=clarification_message,
-                    ),
+                    interpretation_notes=[],
+                    caveats=[f"SQL generation provider error type: {error_code}"],
+                    assumptions=[],
                     clarification_question=clarification_message,
                     not_relevant_reason="",
                     clarification_kind="technical_failure",
@@ -605,6 +614,8 @@ class SqlStepGenerator:
             status=generated.status,
             sql=generated.sql,
             rationale=generated.rationale,
+            interpretation_notes=generated.interpretation_notes,
+            caveats=generated.caveats,
             assumptions=generated.assumptions,
             clarification_question=generated.clarification_question,
             not_relevant_reason=generated.not_relevant_reason,

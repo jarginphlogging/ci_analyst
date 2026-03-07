@@ -37,16 +37,6 @@ class OutOfDomainDependencies:
     ):
         raise AssertionError("build_response should not be called when planner blocks the request")
 
-    async def build_fast_response(  # noqa: ARG002
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results,
-        history: list[str],
-    ):
-        raise AssertionError("build_fast_response should not be called when planner blocks the request")
-
-
 class ClarificationDependencies:
     async def create_plan(self, request: ChatTurnRequest, history: list[str]):  # noqa: ARG002
         return TurnExecutionContext(
@@ -78,16 +68,6 @@ class ClarificationDependencies:
     ):
         raise AssertionError("build_response should not be called when SQL generation blocks")
 
-    async def build_fast_response(  # noqa: ARG002
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results,
-        history: list[str],
-    ):
-        raise AssertionError("build_fast_response should not be called when SQL generation blocks")
-
-
 class SqlRuntimeFailureDependencies:
     async def create_plan(self, request: ChatTurnRequest, history: list[str]):  # noqa: ARG002
         return TurnExecutionContext(
@@ -115,16 +95,6 @@ class SqlRuntimeFailureDependencies:
     ):
         raise AssertionError("build_response should not be called when SQL execution fails")
 
-    async def build_fast_response(  # noqa: ARG002
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results,
-        history: list[str],
-    ):
-        raise AssertionError("build_fast_response should not be called when SQL execution fails")
-
-
 class UnexpectedFailureDependencies:
     async def create_plan(self, request: ChatTurnRequest, history: list[str]):  # noqa: ARG002
         raise RuntimeError("planner crash")
@@ -149,16 +119,6 @@ class UnexpectedFailureDependencies:
         history: list[str],
     ):
         raise AssertionError("build_response should not be called when planner crashes")
-
-    async def build_fast_response(  # noqa: ARG002
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results,
-        history: list[str],
-    ):
-        raise AssertionError("build_fast_response should not be called when planner crashes")
-
 
 @pytest.mark.asyncio
 async def test_run_turn_returns_guardrail_response_when_out_of_domain() -> None:

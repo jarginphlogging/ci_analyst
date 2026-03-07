@@ -300,6 +300,8 @@ class SynthesisContextPackage(BaseModel):
     evidenceStatus: EvidenceStatus = "insufficient"
     evidenceEmptyReason: str = ""
     subtaskStatus: list[SubtaskStatus] = Field(default_factory=list)
+    interpretationNotes: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
     headline: str = ""
     headlineEvidenceRefs: list[EvidenceReference] = Field(default_factory=list)
 
@@ -340,7 +342,6 @@ class ResponseEvent(BaseModel):
     model_config = ConfigDict(extra="forbid")
     type: Literal["response"]
     response: AgentResponse
-    phase: Optional[Literal["draft", "final"]] = None
 
 
 class DoneEvent(BaseModel):

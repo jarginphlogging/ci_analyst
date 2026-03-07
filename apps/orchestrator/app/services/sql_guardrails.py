@@ -107,9 +107,9 @@ def _enforce_limit(sql: str, model: SemanticModel) -> str:
 
 def guard_sql(sql: str, model: SemanticModel) -> str:
     canonical_sql = sql
-    # Sandbox SCA may emit fully qualified table refs (db.schema.table) while the
-    # semantic-model allowlist stores canonical table names. Normalize only in sandbox mode.
-    if settings.provider_mode == "sandbox":
+    # Sandbox-style SCA modes may emit fully qualified table refs (db.schema.table)
+    # while the semantic-model allowlist stores canonical table names.
+    if settings.provider_mode in {"sandbox", "prod-sandbox"}:
         canonical_sql = _rewrite_qualified_table_refs_for_sandbox(sql, model)
     _enforce_select_only(canonical_sql)
     _enforce_allowed_tables(canonical_sql, model)

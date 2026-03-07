@@ -8,6 +8,7 @@ from typing import Any, Optional
 import httpx
 
 from app.config import settings
+from app.providers.azure_schema import compile_azure_strict_schema
 
 _TOKEN_CACHE: dict[str, int | str | None] = {"token": None, "expires_on": 0}
 logger = logging.getLogger(__name__)
@@ -108,12 +109,13 @@ async def chat_completion(
     }
 
     if response_schema is not None:
+        azure_schema = compile_azure_strict_schema(response_schema)
         payload["response_format"] = {
             "type": "json_schema",
             "json_schema": {
                 "name": (response_schema_name or "structured_response").strip() or "structured_response",
                 "strict": True,
-                "schema": response_schema,
+                "schema": azure_schema,
             },
         }
     elif response_json:

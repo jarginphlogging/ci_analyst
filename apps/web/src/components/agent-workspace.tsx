@@ -663,19 +663,10 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         }
 
         if (event.type === "response") {
-          if (event.phase === "draft") {
-            updateAssistantMessage(assistantMessageId, (draft) => ({
-              ...draft,
-              draftResponse: event.response,
-            }));
-            return;
-          }
-
           updateAssistantMessage(assistantMessageId, (draft) => ({
             ...draft,
             text: event.response.answer,
             response: event.response,
-            draftResponse: undefined,
             hasAnswerDeltas: true,
             requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
           }));
@@ -952,9 +943,10 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               aria-hidden="true"
               className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-8 bg-[linear-gradient(0deg,rgba(243,247,251,0.92)_0%,rgba(243,247,251,0.72)_38%,rgba(243,247,251,0.28)_68%,rgba(243,247,251,0)_100%)]"
             />
-            <section className="flex min-h-0 flex-1 flex-col overflow-y-auto pt-1 pr-1">
-              <div className="space-y-4">
-                {messages.map((message, messageIndex) => {
+            <section className="min-h-0 flex-1 overflow-y-auto pt-1 pr-1">
+              <div className="flex min-h-full flex-col">
+                <div className="space-y-4">
+                  {messages.map((message, messageIndex) => {
               if (message.role === "user") {
                 return (
                   <article key={message.id} className="flex justify-end">
@@ -1186,9 +1178,10 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   ) : null}
                 </article>
               );
-                })}
+                  })}
+                </div>
+                <div className="mt-auto shrink-0 pt-4">{composerFooter}</div>
               </div>
-              <div className="sticky bottom-0 z-20 mt-auto shrink-0 pt-4">{composerFooter}</div>
             </section>
           </div>
         </section>

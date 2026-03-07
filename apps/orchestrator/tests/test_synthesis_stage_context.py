@@ -139,6 +139,8 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
         plan=plan,
         presentation_intent=PresentationIntent(displayType="chart", chartType="grouped_bar"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -250,6 +252,8 @@ async def test_synthesis_stage_formats_comparison_period_labels_and_deltas() -> 
         plan=[],
         presentation_intent=PresentationIntent(displayType="table", tableStyle="comparison"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -316,6 +320,8 @@ async def test_synthesis_stage_marks_trend_claim_supported_without_fact_or_compa
         plan=[],
         presentation_intent=PresentationIntent(displayType="chart", chartType="stacked_area"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -387,6 +393,8 @@ async def test_synthesis_stage_includes_ranking_evidence_in_context_payload() ->
         plan=[],
         presentation_intent=PresentationIntent(displayType="table", tableStyle="ranked"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -452,6 +460,8 @@ async def test_synthesis_stage_accepts_stacked_area_chart_config() -> None:
         plan=[],
         presentation_intent=PresentationIntent(displayType="chart", chartType="stacked_area"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -510,6 +520,8 @@ async def test_synthesis_stage_sanitizes_multiway_comparison_table_config() -> N
         plan=[],
         presentation_intent=PresentationIntent(displayType="table", tableStyle="comparison"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -567,6 +579,8 @@ async def test_synthesis_stage_infers_comparison_keys_when_llm_config_is_invalid
         plan=[],
         presentation_intent=PresentationIntent(displayType="table", tableStyle="comparison"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -630,6 +644,8 @@ async def test_synthesis_stage_rejects_mixed_metric_family_comparison_keys() -> 
         plan=[],
         presentation_intent=PresentationIntent(displayType="table", tableStyle="comparison"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )

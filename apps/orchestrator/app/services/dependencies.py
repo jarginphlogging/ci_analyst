@@ -75,7 +75,7 @@ class RealDependencies:
         if "anthropic" in module_name:
             return "anthropic"
         mode = settings.provider_mode.strip().lower()
-        if mode == "prod":
+        if mode in {"prod", "prod-sandbox"}:
             return "azure_openai"
         if mode == "sandbox":
             return "anthropic"
@@ -301,7 +301,7 @@ class RealDependencies:
             },
         )
         try:
-            results, accumulated_assumptions = await self._sql_stage.run_sql(
+            sql_outcome = await self._sql_stage.run_sql(
                 message=request.message,
                 plan=context.plan,
                 history=history,
@@ -309,16 +309,22 @@ class RealDependencies:
                 temporal_scope=context.temporal_scope,
                 progress_callback=progress_callback,
             )
-            context.sql_assumptions = accumulated_assumptions
+            context.sql_interpretation_notes = list(sql_outcome.interpretation_notes)
+            context.sql_caveats = list(sql_outcome.caveats)
+            context.sql_assumptions = [
+                *context.sql_interpretation_notes,
+                *context.sql_caveats,
+                *sql_outcome.assumptions,
+            ][:8]
             logger.info(
                 "SQL stage returned results",
                 extra={
                     "event": "dependencies.run_sql.completed",
-                    "queryCount": len(results),
-                    "totalRows": sum(result.rowCount for result in results),
+                    "queryCount": len(sql_outcome.results),
+                    "totalRows": sum(result.rowCount for result in sql_outcome.results),
                 },
             )
-            return results
+            return sql_outcome.results
         finally:
             context.sql_retry_feedback = self._sql_stage.latest_retry_feedback
 
@@ -345,30 +351,8 @@ class RealDependencies:
             presentation_intent=context.presentation_intent,
             temporal_scope=context.temporal_scope,
             results=results,
-            prior_assumptions=context.sql_assumptions,
-            history=history,
-        )
-
-    async def build_fast_response(
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results: list[SqlExecutionResult],
-        history: list[str],
-    ) -> AgentResponse:
-        logger.info(
-            "Building draft response",
-            extra={
-                "event": "dependencies.build_fast_response.started",
-                "resultCount": len(results),
-            },
-        )
-        return await self._synthesis_stage.build_fast_response(
-            message=request.message,
-            plan=context.plan,
-            presentation_intent=context.presentation_intent,
-            temporal_scope=context.temporal_scope,
-            results=results,
+            prior_interpretation_notes=context.sql_interpretation_notes,
+            prior_caveats=context.sql_caveats,
             prior_assumptions=context.sql_assumptions,
             history=history,
         )

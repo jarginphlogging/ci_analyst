@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.config import settings
 from app.observability import bind_log_context, configure_logging
 from app.providers.anthropic_llm import chat_completion as anthropic_chat_completion
+from app.providers.azure_openai import chat_completion as azure_chat_completion
 from app.prompts.templates import sql_prompt
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 from app.services.llm_json import as_string_list, parse_json_object
@@ -183,20 +184,32 @@ def _preview_payload(value: Any, *, max_chars: int = 2000) -> str:
     return f"{rendered[: max_chars - 3]}..."
 
 
+def _sql_generation_llm() -> tuple[str, Any]:
+    if settings.provider_mode == "prod-sandbox":
+        return "azure_openai", azure_chat_completion
+    return "anthropic", anthropic_chat_completion
+
+
 def _to_analyst_payload(*, parsed: SqlGenerationResponsePayload) -> dict[str, Any]:
     response_type = parsed.generationType.strip().lower().replace("-", "_")
     sql = (parsed.sql or "").strip()
     light_response = parsed.rationale.strip()
+    interpretation_notes = as_string_list(parsed.interpretationNotes, max_items=2)
+    caveats = as_string_list(parsed.caveats, max_items=4)
     clarification_question = (parsed.clarificationQuestion or "").strip()
     clarification_kind = (parsed.clarificationKind or "").strip().lower().replace("-", "_")
     not_relevant_reason = (parsed.notRelevantReason or "").strip()
     assumptions = as_string_list(parsed.assumptions, max_items=4)
 
     assumptions = _clean_assumptions(assumptions, clarification_question=clarification_question)
+    interpretation_notes = _clean_assumptions(interpretation_notes, clarification_question=clarification_question)
+    caveats = _clean_assumptions(caveats, clarification_question=clarification_question)
     return {
         "type": response_type,
         "sql": sql,
         "lightResponse": light_response,
+        "interpretationNotes": interpretation_notes,
+        "caveats": caveats,
         "clarificationQuestion": clarification_question,
         "clarificationKind": clarification_kind,
         "notRelevantReason": not_relevant_reason,
@@ -223,7 +236,8 @@ async def _generate_sql_from_message(
         dependency_context=dependency_context,
     )
 
-    llm_text = await anthropic_chat_completion(
+    _provider_name, llm_chat_completion = _sql_generation_llm()
+    llm_text = await llm_chat_completion(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         temperature=0.0,
@@ -404,6 +418,14 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
     clarification_question = str(generated.get("clarificationQuestion", "")).strip()
     clarification_kind = str(generated.get("clarificationKind", "")).strip()
     not_relevant_reason = str(generated.get("notRelevantReason", "")).strip()
+    interpretation_notes = _clean_assumptions(
+        as_string_list(generated.get("interpretationNotes"), max_items=2),
+        clarification_question=clarification_question,
+    )
+    caveats = _clean_assumptions(
+        as_string_list(generated.get("caveats"), max_items=4),
+        clarification_question=clarification_question,
+    )
     assumptions = _clean_assumptions(
         as_string_list(generated.get("assumptions"), max_items=4),
         clarification_question=clarification_question,
@@ -416,6 +438,8 @@ async def message(payload: MessageRequest, authorization: Optional[str] = Header
         "conversationId": payload.conversationId,
         "sql": sql_text if response_type == "sql_ready" else "",
         "lightResponse": light_response,
+        "interpretationNotes": interpretation_notes,
+        "caveats": caveats,
         "clarificationQuestion": clarification_question,
         "clarificationKind": clarification_kind,
         "notRelevantReason": not_relevant_reason,

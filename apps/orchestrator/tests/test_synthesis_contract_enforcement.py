@@ -24,11 +24,13 @@ async def test_synthesis_sets_day_level_period_bounds_from_year_sql_filter() -> 
         )
     ]
 
-    response = await stage.build_fast_response(
+    response = await stage.build_response(
         message="Show me sales by state for 2025.",
         plan=[],
         presentation_intent=PresentationIntent(displayType="table", tableStyle="simple"),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -60,7 +62,7 @@ async def test_synthesis_enforces_dual_ranks_for_multi_objective_ranked_intent()
         )
     ]
 
-    response = await stage.build_fast_response(
+    response = await stage.build_response(
         message="For the last 8 weeks, which day of week and transaction time window drive the highest average ticket and transaction volume?",
         plan=[],
         presentation_intent=PresentationIntent(
@@ -69,6 +71,8 @@ async def test_synthesis_enforces_dual_ranks_for_multi_objective_ranked_intent()
             rankingObjectives=["average ticket", "transaction volume"],
         ),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )
@@ -127,6 +131,8 @@ async def test_synthesis_rewrites_contradictory_confidence_reason_for_dual_objec
             rankingObjectives=["average ticket", "transaction volume"],
         ),
         results=results,
+        prior_interpretation_notes=[],
+        prior_caveats=[],
         prior_assumptions=[],
         history=[],
     )

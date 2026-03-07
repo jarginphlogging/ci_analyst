@@ -218,7 +218,6 @@ export interface ChatMessage {
   text: string;
   createdAt: string;
   response?: AgentResponse;
-  draftResponse?: AgentResponse;
   hasAnswerDeltas?: boolean;
   isStreaming?: boolean;
   statusUpdates?: string[];
@@ -228,6 +227,6 @@ export interface ChatMessage {
 export type ChatStreamEvent =
   | { type: "status"; message: string }
   | { type: "answer_delta"; delta: string }
-  | { type: "response"; response: AgentResponse; phase?: "draft" | "final" }
+  | { type: "response"; response: AgentResponse }
   | { type: "done" }
   | { type: "error"; message: string };

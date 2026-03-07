@@ -66,3 +66,21 @@ def test_guard_sql_does_not_rewrite_qualified_table_names_in_prod_mode() -> None
             guard_sql(sql, model)
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
+
+
+def test_guard_sql_rewrites_qualified_table_names_in_prod_sandbox_mode() -> None:
+    model = load_semantic_model()
+    sql = (
+        "SELECT SUM(spend) AS total_sales "
+        "FROM prodexp_107618_db.ts_customer_insights.cia_sales_insights_cortex"
+    )
+
+    original_provider_mode_raw = settings.provider_mode_raw
+    try:
+        object.__setattr__(settings, "provider_mode_raw", "prod-sandbox")
+        guarded = guard_sql(sql, model)
+    finally:
+        object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
+
+    assert "from cia_sales_insights_cortex" in guarded.lower()
+    assert "prodexp_107618_db.ts_customer_insights" not in guarded.lower()

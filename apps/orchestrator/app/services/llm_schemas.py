@@ -34,6 +34,8 @@ class SqlGenerationResponsePayload(BaseModel):
     generationType: Literal["sql_ready", "clarification", "not_relevant"]
     sql: Optional[str] = None
     rationale: str = ""
+    interpretationNotes: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
     clarificationQuestion: Optional[str] = None
     clarificationKind: Optional[Literal["user_input_required", "technical_failure"]] = None
     notRelevantReason: Optional[str] = None
@@ -63,6 +65,8 @@ class AnalystResponsePayload(BaseModel):
     type: str
     sql: str = ""
     lightResponse: str = ""
+    interpretationNotes: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
     clarificationQuestion: str = ""
     clarificationKind: str = ""
     notRelevantReason: str = ""

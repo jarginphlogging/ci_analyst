@@ -82,7 +82,7 @@ def dependency_levels(plan: list[QueryPlanStep]) -> list[list[int]]:
 
 def execution_dispatch(analyst_fn: AnalystFn | None) -> ExecutionDispatch:
     mode = settings.provider_mode
-    if mode == "sandbox":
+    if mode in {"sandbox", "prod-sandbox"}:
         return ExecutionDispatch(
             target_label="SQLite sandbox warehouse",
             parallel_capable=True,

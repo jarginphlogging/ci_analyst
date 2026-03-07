@@ -100,16 +100,6 @@ class HistorySpyDependencies:
             ],
         )
 
-    async def build_fast_response(  # noqa: ARG002
-        self,
-        request: ChatTurnRequest,
-        context: TurnExecutionContext,
-        results: list[SqlExecutionResult],
-        history: list[str],
-    ) -> AgentResponse:
-        return await self.build_response(request, context, results, history)
-
-
 @pytest.mark.asyncio
 async def test_orchestrator_carries_prior_history_only() -> None:
     dependencies = HistorySpyDependencies()

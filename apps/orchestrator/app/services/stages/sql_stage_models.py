@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.config import settings
-from app.models import QueryPlanStep
+from app.models import QueryPlanStep, SqlExecutionResult
 
 OUT_OF_DOMAIN_MESSAGE = "I can only answer questions about Customer Insights."
 MAX_SQL_ATTEMPTS = max(1, settings.sql_max_attempts)
@@ -18,6 +18,8 @@ class GeneratedStep:
     status: Literal["sql_ready", "clarification", "not_relevant"]
     sql: str | None
     rationale: str
+    interpretation_notes: list[str]
+    caveats: list[str]
     assumptions: list[str]
     clarification_question: str
     not_relevant_reason: str
@@ -25,6 +27,14 @@ class GeneratedStep:
     attempted_sql: str | None = None
     rows: list[dict[str, Any]] | None = None
     generation_error_detail: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SqlStageOutcome:
+    results: list[SqlExecutionResult]
+    interpretation_notes: list[str]
+    caveats: list[str]
+    assumptions: list[str]
 
 
 class SqlGenerationBlockedError(RuntimeError):

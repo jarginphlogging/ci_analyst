@@ -26,6 +26,14 @@ def build_live_provider_bundle() -> ProviderBundle:
     )
 
 
+def build_prod_sandbox_provider_bundle() -> ProviderBundle:
+    return ProviderBundle(
+        llm_fn=chat_completion,
+        sql_fn=execute_sandbox_sql,
+        analyst_fn=analyze_message,
+    )
+
+
 def build_sandbox_provider_bundle() -> ProviderBundle:
     return ProviderBundle(
         llm_fn=anthropic_chat_completion,
@@ -38,6 +46,8 @@ def build_provider_bundle(mode: str | None = None) -> ProviderBundle:
     resolved_mode = (mode or settings.provider_mode).strip().lower()
     if resolved_mode == "prod":
         return build_live_provider_bundle()
+    if resolved_mode == "prod-sandbox":
+        return build_prod_sandbox_provider_bundle()
     if resolved_mode == "sandbox":
         return build_sandbox_provider_bundle()
     raise RuntimeError(f"Unsupported provider mode for real dependencies: {resolved_mode}")
