@@ -1,10 +1,22 @@
 import type { Metadata } from "next";
-import { Fraunces, Space_Grotesk, JetBrains_Mono } from "next/font/google";
+import localFont from "next/font/local";
+import { Space_Grotesk, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const displayFont = Fraunces({
+const displayFont = localFont({
   variable: "--font-display",
-  subsets: ["latin"],
+  src: [
+    {
+      path: "./fonts/fraunces-variable.ttf",
+      style: "normal",
+      weight: "100 900",
+    },
+    {
+      path: "./fonts/fraunces-variable-italic.ttf",
+      style: "italic",
+      weight: "100 900",
+    },
+  ],
 });
 
 const bodyFont = Space_Grotesk({
