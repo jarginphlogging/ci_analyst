@@ -753,7 +753,6 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                     className={`group relative flex animate-fade-up flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_8px_18px_rgba(14,44,68,0.08)] transition duration-200 hover:-translate-y-0.5 hover:border-cyan-500 hover:shadow-[0_14px_24px_rgba(14,44,68,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 active:translate-y-0 ${
                       isLastOddCard ? "sm:col-span-2" : ""
                     }`}
-                    style={{ animationDelay: `${index * 40}ms` }}
                     type="button"
                   >
                     <span className="rounded-full bg-white px-2 py-[2px] text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600">
