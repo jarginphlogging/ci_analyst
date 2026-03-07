@@ -76,6 +76,7 @@ This runs in the orchestrator workspace to ensure installs and runtime use the s
 
 On enterprise Windows machines, the orchestrator dependency set explicitly pins `cryptography` and `pyOpenSSL`
 to keep pip on a wheel-backed install path and avoid falling back to source builds during setup.
+It also pins `openai` because Azure access now uses the official Azure OpenAI client path used on the work machine.
 
 4. Edit runtime env files (already present in repo):
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/.env`
@@ -223,7 +224,8 @@ Protocol: `application/x-ndjson`
   - auth mode: `AZURE_OPENAI_AUTH_MODE=api_key` or `AZURE_OPENAI_AUTH_MODE=certificate`
   - `api_key` mode: set `AZURE_OPENAI_API_KEY`
   - `certificate` mode: set `AZURE_TENANT_ID`, `AZURE_SPN_CLIENT_ID`, `AZURE_SPN_CERT_PATH` (and optional `AZURE_SPN_CERT_PASSWORD`)
-  - optional gateway header support: `AZURE_OPENAI_GATEWAY_API_KEY`, `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
+  - deployment/model name: set `AZURE_OPENAI_DEPLOYMENT` or `AZURE_OPENAI_MODEL`
+  - optional gateway header support: `AZURE_OPENAI_GATEWAY_API_KEY` (alias: `AZURE_API_KEY`), `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
 - Snowflake variables (`SNOWFLAKE_CORTEX_*`)
 - optional semantic model override (`SEMANTIC_MODEL_PATH=/absolute/path/to/model.json`)
 - optional orchestration controls (`REAL_FAST_PLAN_STEPS`, `REAL_DEEP_PLAN_STEPS`, `REAL_LLM_*`)

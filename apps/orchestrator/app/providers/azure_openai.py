@@ -5,32 +5,41 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
-import httpx
+from openai import AsyncAzureOpenAI
 
 from app.config import settings
 from app.providers.azure_schema import compile_azure_strict_schema
 
 _TOKEN_CACHE: dict[str, int | str | None] = {"token": None, "expires_on": 0}
+_ORCHESTRATOR_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 logger = logging.getLogger(__name__)
 
 
-def _chat_endpoint() -> str:
+def _require_azure_settings() -> None:
     if not settings.has_azure_credentials():
         raise RuntimeError(
             "Azure OpenAI credentials are not configured. Set AZURE_OPENAI_ENDPOINT and "
-            "AZURE_OPENAI_DEPLOYMENT, plus auth-mode-specific credentials."
+            "AZURE_OPENAI_DEPLOYMENT or AZURE_OPENAI_MODEL, plus auth-mode-specific credentials."
         )
 
-    return (
-        f"{settings.azure_openai_endpoint}/openai/deployments/{settings.azure_openai_deployment}/chat/completions"
-        f"?api-version={settings.azure_openai_api_version}"
-    )
+
+def _resolve_certificate_path(cert_path_raw: str) -> Path:
+    candidate = Path(cert_path_raw).expanduser()
+    if candidate.is_absolute():
+        return candidate
+
+    search_roots = (Path.cwd(), _ORCHESTRATOR_ROOT, _REPO_ROOT)
+    for root in search_roots:
+        resolved = (root / candidate).resolve()
+        if resolved.exists():
+            return resolved
+    return candidate.resolve()
 
 
 def _get_certificate_token() -> str:
     cached_token = _TOKEN_CACHE.get("token")
     cached_expiry = int(_TOKEN_CACHE.get("expires_on") or 0)
-    # Refresh a little early to avoid mid-request expiration.
     if isinstance(cached_token, str) and cached_token and (cached_expiry - int(time.time()) > 120):
         return cached_token
 
@@ -46,16 +55,14 @@ def _get_certificate_token() -> str:
     if not cert_path_raw:
         raise RuntimeError("AZURE_SPN_CERT_PATH is required for certificate auth mode.")
 
-    cert_path = Path(cert_path_raw).expanduser()
+    cert_path = _resolve_certificate_path(cert_path_raw)
     if not cert_path.exists():
         raise RuntimeError(f"Certificate file not found at {cert_path}")
-
-    cert_bytes = cert_path.read_bytes()
 
     credential = CertificateCredential(
         tenant_id=str(settings.azure_tenant_id),
         client_id=str(settings.azure_spn_client_id),
-        certificate_data=cert_bytes,
+        certificate_data=cert_path.read_bytes(),
         password=settings.azure_spn_cert_password,
     )
     access_token = credential.get_token(settings.azure_openai_scope)
@@ -65,23 +72,35 @@ def _get_certificate_token() -> str:
     return access_token.token
 
 
-def _auth_headers() -> dict[str, str]:
-    headers: dict[str, str] = {"Content-Type": "application/json"}
-
+def _client_api_key() -> str:
     if settings.azure_openai_auth_mode == "certificate":
-        token = _get_certificate_token()
-        headers["Authorization"] = f"Bearer {token}"
-    else:
-        api_key = settings.azure_openai_api_key
-        if not api_key:
-            raise RuntimeError("AZURE_OPENAI_API_KEY is required for AZURE_OPENAI_AUTH_MODE=api_key.")
-        headers["api-key"] = api_key
+        return _get_certificate_token()
 
+    api_key = settings.azure_openai_api_key
+    if not api_key:
+        raise RuntimeError("AZURE_OPENAI_API_KEY is required for AZURE_OPENAI_AUTH_MODE=api_key.")
+    return api_key
+
+
+def _default_headers() -> dict[str, str] | None:
     gateway_key = settings.azure_openai_gateway_api_key
-    if gateway_key:
-        headers[settings.azure_openai_gateway_api_key_header] = gateway_key
+    if not gateway_key:
+        return None
+    return {settings.azure_openai_gateway_api_key_header: gateway_key}
 
-    return headers
+
+def _build_client() -> AsyncAzureOpenAI:
+    _require_azure_settings()
+    client_kwargs: dict[str, Any] = {
+        "azure_endpoint": str(settings.azure_openai_endpoint),
+        "api_version": settings.azure_openai_api_version,
+        "api_key": _client_api_key(),
+        "timeout": 30.0,
+    }
+    default_headers = _default_headers()
+    if default_headers:
+        client_kwargs["default_headers"] = default_headers
+    return AsyncAzureOpenAI(**client_kwargs)
 
 
 async def chat_completion(
@@ -97,9 +116,8 @@ async def chat_completion(
     if response_json and response_schema is not None:
         raise RuntimeError("response_json and response_schema cannot be combined.")
 
-    endpoint = _chat_endpoint()
-    started_at = time.perf_counter()
     payload: dict[str, Any] = {
+        "model": str(settings.azure_openai_deployment),
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -121,10 +139,12 @@ async def chat_completion(
     elif response_json:
         payload["response_format"] = {"type": "json_object"}
 
+    started_at = time.perf_counter()
     logger.info(
         "Azure OpenAI request started",
         extra={
             "event": "provider.azure_openai.request.started",
+            "authMode": settings.azure_openai_auth_mode,
             "responseJson": response_json,
             "responseSchema": response_schema is not None,
             "maxTokens": max_tokens,
@@ -133,13 +153,10 @@ async def chat_completion(
             "userPromptChars": len(user_prompt),
         },
     )
+
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                endpoint,
-                headers=_auth_headers(),
-                json=payload,
-            )
+        client = _build_client()
+        response = await client.chat.completions.create(**payload)
     except Exception:
         logger.exception(
             "Azure OpenAI request failed before response",
@@ -149,21 +166,11 @@ async def chat_completion(
             },
         )
         raise
+    finally:
+        if "client" in locals():
+            await client.close()
 
-    if response.status_code >= 400:
-        logger.error(
-            "Azure OpenAI request returned error",
-            extra={
-                "event": "provider.azure_openai.request.failed_http",
-                "statusCode": response.status_code,
-                "durationMs": round((time.perf_counter() - started_at) * 1000, 2),
-                "responsePreview": response.text[:500],
-            },
-        )
-        raise RuntimeError(f"Azure OpenAI request failed ({response.status_code}): {response.text}")
-
-    body = response.json()
-    choices = body.get("choices", [])
+    choices = list(getattr(response, "choices", []) or [])
     if not choices:
         logger.info(
             "Azure OpenAI request completed with empty choices",
@@ -183,18 +190,22 @@ async def chat_completion(
             "choices": len(choices),
         },
     )
-    message = choices[0].get("message", {})
-    content = message.get("content", "")
+
+    message = getattr(choices[0], "message", None)
+    content = getattr(message, "content", "")
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         text_parts: list[str] = []
         for part in content:
-            if not isinstance(part, dict):
-                continue
-            text_value = part.get("text")
+            text_value = getattr(part, "text", None)
             if isinstance(text_value, str):
                 text_parts.append(text_value)
+                continue
+            if isinstance(part, dict):
+                dict_text = part.get("text")
+                if isinstance(dict_text, str):
+                    text_parts.append(dict_text)
         return "".join(text_parts)
     return str(content)
 

@@ -48,7 +48,8 @@ Provider modes:
 Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=api_key` with `AZURE_OPENAI_API_KEY`
 - `AZURE_OPENAI_AUTH_MODE=certificate` with `AZURE_TENANT_ID`, `AZURE_SPN_CLIENT_ID`, `AZURE_SPN_CERT_PATH` (optional `AZURE_SPN_CERT_PASSWORD`)
-- optional enterprise gateway header via `AZURE_OPENAI_GATEWAY_API_KEY` and `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
+- `AZURE_OPENAI_DEPLOYMENT` or `AZURE_OPENAI_MODEL` for the Azure deployment/model name
+- optional enterprise gateway header via `AZURE_OPENAI_GATEWAY_API_KEY` (alias: `AZURE_API_KEY`) and `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
 
 Snowflake prod auth/config supports:
 - Analyst generation: `SNOWFLAKE_CORTEX_BASE_URL`, `SNOWFLAKE_CORTEX_API_KEY`, and one semantic model reference (`SNOWFLAKE_CORTEX_SEMANTIC_MODEL_FILE` or `SNOWFLAKE_CORTEX_SEMANTIC_MODEL` or `SNOWFLAKE_CORTEX_SEMANTIC_VIEW` or `SNOWFLAKE_CORTEX_SEMANTIC_MODELS_JSON`)
@@ -69,6 +70,7 @@ python -m pip install -r requirements.txt
 
 `requirements.txt` pins `cryptography` and `pyOpenSSL` explicitly because some enterprise Windows mirrors
 otherwise backtrack onto a source-only `cryptography` release, which triggers an avoidable Rust/bootstrap path.
+It also pins `openai` because the orchestrator uses the official Azure OpenAI client for enterprise auth flows.
 
 Environment templates:
 - `.env.sandbox`

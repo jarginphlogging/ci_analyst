@@ -62,9 +62,11 @@ class Settings:
     log_level: str = _as_nonempty(os.getenv("LOG_LEVEL"), "INFO").upper()
     provider_mode_raw: Optional[str] = os.getenv("PROVIDER_MODE")
 
-    azure_openai_endpoint: Optional[str] = os.getenv("AZURE_OPENAI_ENDPOINT")
-    azure_openai_api_key: Optional[str] = os.getenv("AZURE_OPENAI_API_KEY")
-    azure_openai_deployment: Optional[str] = os.getenv("AZURE_OPENAI_DEPLOYMENT")
+    azure_openai_endpoint: Optional[str] = _as_optional(os.getenv("AZURE_OPENAI_ENDPOINT"))
+    azure_openai_api_key: Optional[str] = _as_optional(os.getenv("AZURE_OPENAI_API_KEY"))
+    azure_openai_deployment: Optional[str] = _as_optional(
+        os.getenv("AZURE_OPENAI_DEPLOYMENT") or os.getenv("AZURE_OPENAI_MODEL")
+    )
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
     azure_openai_auth_mode: str = os.getenv("AZURE_OPENAI_AUTH_MODE", "api_key").strip().lower()
     azure_tenant_id: Optional[str] = os.getenv("AZURE_TENANT_ID")
@@ -72,7 +74,9 @@ class Settings:
     azure_spn_cert_path: Optional[str] = os.getenv("AZURE_SPN_CERT_PATH")
     azure_spn_cert_password: Optional[str] = os.getenv("AZURE_SPN_CERT_PASSWORD")
     azure_openai_scope: str = os.getenv("AZURE_OPENAI_SCOPE", "https://cognitiveservices.azure.com/.default")
-    azure_openai_gateway_api_key: Optional[str] = os.getenv("AZURE_OPENAI_GATEWAY_API_KEY")
+    azure_openai_gateway_api_key: Optional[str] = _as_optional(
+        os.getenv("AZURE_OPENAI_GATEWAY_API_KEY") or os.getenv("AZURE_API_KEY")
+    )
     azure_openai_gateway_api_key_header: str = os.getenv("AZURE_OPENAI_GATEWAY_API_KEY_HEADER", "Api-Key")
 
     anthropic_base_url: str = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
