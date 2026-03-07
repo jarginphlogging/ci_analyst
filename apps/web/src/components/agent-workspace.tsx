@@ -750,7 +750,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   <button
                     key={prompt.question}
                     onClick={() => setInput(prompt.question)}
-                    className={`group relative flex animate-fade-up flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_8px_18px_rgba(14,44,68,0.08)] transition duration-200 hover:-translate-y-0.5 hover:border-cyan-500 hover:shadow-[0_14px_24px_rgba(14,44,68,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 active:translate-y-0 ${
+                    className={`group relative flex animate-fade-up flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_8px_18px_rgba(14,44,68,0.08)] transition duration-200 hover:border-cyan-500 hover:shadow-[0_14px_24px_rgba(14,44,68,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
                       isLastOddCard ? "sm:col-span-2" : ""
                     }`}
                     type="button"
@@ -787,7 +787,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         <button
           aria-label={isLoading ? "Stop analysis" : "Send message"}
           disabled={!isLoading && !input.trim()}
-          className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition hover:-translate-y-0.5 disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
+          className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
             isLoading
               ? "border-rose-700 bg-[linear-gradient(145deg,#7f1d1d,#b91c1c)] hover:bg-[linear-gradient(145deg,#991b1b,#dc2626)]"
               : "border-slate-700 bg-slate-900 hover:bg-slate-800"
@@ -990,7 +990,6 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                       <div className="flex items-center gap-3">
                         <div className="signal-spinner" aria-hidden="true">
                           <span className="signal-spinner__ring signal-spinner__ring-a" />
-                          <span className="signal-spinner__ring signal-spinner__ring-b" />
                           <span className="signal-spinner__core" />
                         </div>
                         <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
@@ -1110,7 +1109,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                                 <button
                                   key={question}
                                   onClick={() => setInput(question)}
-                                  className="group flex w-full items-start gap-3 rounded-xl border border-slate-300/90 bg-white px-3 py-2.5 text-left transition hover:-translate-y-0.5 hover:border-cyan-500 hover:shadow-[0_10px_20px_rgba(14,44,68,0.10)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 active:translate-y-0"
+                                  className="group flex w-full items-start gap-3 rounded-xl border border-slate-300/90 bg-white px-3 py-2.5 text-left transition hover:border-cyan-500 hover:shadow-[0_10px_20px_rgba(14,44,68,0.10)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
                                   type="button"
                                 >
                                   <span className="mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1 text-[11px] font-semibold text-slate-700 group-hover:bg-cyan-100 group-hover:text-cyan-800">

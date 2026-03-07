@@ -37,7 +37,7 @@ pre {
 @keyframes fade-up {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: translateY(2px);
   }
 
   to {
@@ -47,7 +47,8 @@ pre {
 }
 
 .animate-fade-up {
-  animation: fade-up 280ms ease-out both;
+  animation: fade-up 160ms ease-out both;
+  will-change: opacity, transform;
 }
 
 @keyframes signal-ring-a {
@@ -60,21 +61,11 @@ pre {
   }
 }
 
-@keyframes signal-ring-b {
-  from {
-    transform: translate(-50%, -50%) rotate(360deg);
-  }
-
-  to {
-    transform: translate(-50%, -50%) rotate(0deg);
-  }
-}
-
 @keyframes signal-core {
   0%,
   100% {
-    transform: translate(-50%, -50%) scale(0.75);
-    opacity: 0.85;
+    transform: translate(-50%, -50%) scale(0.92);
+    opacity: 0.92;
   }
 
   50% {
@@ -85,9 +76,10 @@ pre {
 
 .signal-spinner {
   position: relative;
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   flex-shrink: 0;
+  will-change: transform, opacity;
 }
 
 .signal-spinner__ring {
@@ -100,34 +92,26 @@ pre {
 }
 
 .signal-spinner__ring-a {
-  width: 2rem;
-  height: 2rem;
+  width: 1.75rem;
+  height: 1.75rem;
   border: 2px solid rgba(8, 145, 178, 0.2);
   border-top-color: rgba(14, 116, 144, 0.95);
-  animation: signal-ring-a 1.3s linear infinite;
-}
-
-.signal-spinner__ring-b {
-  width: 1.375rem;
-  height: 1.375rem;
-  border: 2px solid rgba(14, 165, 233, 0.22);
-  border-bottom-color: rgba(2, 132, 199, 0.95);
-  animation: signal-ring-b 1.1s linear infinite;
+  animation: signal-ring-a 1.8s linear infinite;
 }
 
 .signal-spinner__core {
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 0.875rem;
-  height: 0.875rem;
+  width: 1rem;
+  height: 1rem;
   border-radius: 50%;
   clip-path: none;
   background: radial-gradient(circle at 34% 30%, #f0fdff 0%, #9be8fb 30%, #22d3ee 62%, #0284c7 100%);
   box-shadow:
-    0 0 0.75rem rgba(14, 165, 233, 0.45),
+    0 0 0.45rem rgba(14, 165, 233, 0.32),
     inset 0 0 0 1px rgba(186, 230, 253, 0.35);
-  animation: signal-core 0.9s ease-in-out infinite;
+  animation: signal-core 1.35s ease-in-out infinite;
 }
 
 .signal-spinner__core::before {
