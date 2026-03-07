@@ -803,9 +803,6 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
 
   return (
     <div className="relative min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_10%_10%,#d7f5ff_0,#f5f2e9_38%,#eff4f8_100%)] lg:h-screen lg:overflow-hidden">
-      <div className="pointer-events-none absolute -left-24 top-12 h-80 w-80 rounded-full bg-cyan-300/40 blur-3xl" />
-      <div className="pointer-events-none absolute right-10 top-36 h-72 w-72 rounded-full bg-orange-200/50 blur-3xl" />
-
       <div className={workspaceGridClassName}>
         {isLeftPaneVisible ? (
           <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
@@ -933,7 +930,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
             </div>
           </header>
 
-          <div className="relative mt-3 flex min-h-0 flex-1 flex-col rounded-[2rem] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(241,247,251,0.94))] p-4 pt-5 shadow-[0_18px_40px_rgba(14,44,68,0.13)] backdrop-blur lg:overflow-hidden lg:p-5 lg:pt-6">
+          <div className="relative mt-3 flex min-h-0 flex-1 flex-col rounded-[2rem] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(241,247,251,0.94))] p-4 pt-5 shadow-[0_18px_40px_rgba(14,44,68,0.13)] lg:overflow-hidden lg:p-5 lg:pt-6">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-[linear-gradient(180deg,rgba(243,247,251,0.92)_0%,rgba(243,247,251,0.72)_38%,rgba(243,247,251,0.28)_68%,rgba(243,247,251,0)_100%)]"
@@ -1186,7 +1183,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         </section>
 
         {isRightPaneVisible ? (
-          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] backdrop-blur lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <p className="text-xl font-bold text-slate-100">Current Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">
