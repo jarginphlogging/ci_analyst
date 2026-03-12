@@ -1,18 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ci-orchestrator"
 version = "0.1.0"
 description = "Python orchestrator for conversational analytics"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "fastapi==0.116.1",
   "uvicorn[standard]==0.35.0",
   "pydantic==2.11.7",
   "httpx==0.28.1",
+  "openai==1.109.1",
   "pandas==2.2.3",
+  "azure-identity==1.24.0",
   "cryptography==45.0.7",
   "pyOpenSSL==25.3.0",
   "python-dotenv==1.0.1",
+  "PyYAML==6.0.3",
   "sqlparse==0.5.3",
   "snowflake-connector-python==3.17.3",
 ]
@@ -22,6 +29,9 @@ dev = [
   "pytest==8.4.1",
   "pytest-asyncio==1.1.0",
 ]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

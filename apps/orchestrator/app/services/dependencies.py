@@ -24,6 +24,7 @@ from app.services.llm_schemas import (
 )
 from app.services.llm_trace import current_llm_trace_stage, record_llm_trace
 from app.services.semantic_model import SemanticModel, load_semantic_model
+from app.services.semantic_policy import SemanticPolicy, load_semantic_policy
 from app.services.stages import (
     PlannerBlockedError,
     PlannerStage,
@@ -45,6 +46,7 @@ class RealDependencies:
         sql_fn: Optional[SqlFn] = None,
         analyst_fn: Optional[AnalystFn] = None,
         model: Optional[SemanticModel] = None,
+        policy: Optional[SemanticPolicy] = None,
     ) -> None:
         provider_bundle = None
         if llm_fn is None or sql_fn is None or analyst_fn is None:
@@ -57,14 +59,16 @@ class RealDependencies:
         if self._llm_fn is None or self._sql_fn is None:
             raise RuntimeError("Provider wiring failed to initialize.")
         self._model = model or load_semantic_model()
+        self._policy = policy or load_semantic_policy()
         self._planner_stage = PlannerStage(model=self._model, ask_llm_json=self._ask_planner_payload)
         self._sql_stage = SqlExecutionStage(
             model=self._model,
+            policy=self._policy,
             ask_llm_json=self._ask_sql_generation_payload,
             sql_fn=self._sql_fn,
             analyst_fn=self._analyst_fn,
         )
-        self._validation_stage = ValidationStage(max_row_limit=self._model.policy.max_row_limit)
+        self._validation_stage = ValidationStage(max_row_limit=self._policy.max_row_limit)
         self._synthesis_stage = SynthesisStage(ask_llm_json=self._ask_synthesis_payload)
         self._llm_provider_label = self._resolve_llm_provider_label()
 

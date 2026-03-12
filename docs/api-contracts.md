@@ -1,5 +1,7 @@
 # API Contracts
 
+Use this file for request/response payload definitions, contract shapes, and boundary-level API expectations.
+
 ## Orchestrator Base
 
 Default: `http://localhost:8787`

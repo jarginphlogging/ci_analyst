@@ -65,20 +65,16 @@ python -m venv .venv
 source .venv/bin/activate
 # Windows (PowerShell)
 # .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+python -m pip install -e ".[dev]"
 ```
 
-`requirements.txt` pins `cryptography` and `pyOpenSSL` explicitly because some enterprise Windows mirrors
+`pyproject.toml` pins `cryptography` and `pyOpenSSL` explicitly because some enterprise Windows mirrors
 otherwise backtrack onto a source-only `cryptography` release, which triggers an avoidable Rust/bootstrap path.
-It also pins `openai` because the orchestrator uses the official Azure OpenAI client for enterprise auth flows.
+It also pins `openai` because the orchestrator uses the official Azure OpenAI client for enterprise auth flows,
+and `PyYAML` because semantic metadata now loads from `semantic_model.yaml` at runtime.
 
-Environment templates:
-- `.env.sandbox`
-- `.env.prod-sandbox`
-- `.env.prod`
-
-Runtime file:
-- `.env` (auto-loaded by orchestrator startup)
+Runtime env:
+- `.env` (single backend runtime file, auto-loaded by orchestrator startup)
 
 ## Run
 
@@ -130,6 +126,7 @@ npm --workspace @ci/orchestrator run test
 - prompt templates: `app/prompts/templates.py`
 - SQL policy checks: `app/services/sql_guardrails.py`
 - semantic model loader: `app/services/semantic_model.py`
+- semantic guardrails loader: `app/services/semantic_policy.py`
 
 ## SQL Execution Concurrency
 

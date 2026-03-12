@@ -1,0 +1,2 @@
+# This repo intentionally defines no local Codex overrides.
+# Effective defaults come from the global config at ~/.codex/config.toml.

@@ -11,6 +11,7 @@ from app.services.llm_json import as_string_list
 from app.services.llm_trace import llm_trace_stage, record_llm_trace
 from app.services.llm_schemas import AnalystResponsePayload
 from app.services.semantic_model import SemanticModel
+from app.services.semantic_policy import SemanticPolicy, load_semantic_policy
 from app.services.sql_guardrails import guard_sql
 from app.services.stages.sql_stage_models import GeneratedStep
 
@@ -116,10 +117,12 @@ class SqlStepGenerator:
         model: SemanticModel,
         ask_llm_json: AskLlmJsonFn,
         analyst_fn: AnalystFn | None = None,
+        policy: SemanticPolicy | None = None,
     ) -> None:
         self._model = model
         self._ask_llm_json = ask_llm_json
         self._analyst_fn = analyst_fn
+        self._policy = policy or load_semantic_policy()
 
     async def _generate_with_analyst(
         self,
@@ -296,7 +299,7 @@ class SqlStepGenerator:
         guarded_sql = None
         if generation_type == "sql_ready" and candidate_sql:
             try:
-                guarded_sql = guard_sql(candidate_sql, self._model)
+                guarded_sql = guard_sql(candidate_sql, self._policy)
             except Exception as error:  # noqa: BLE001
                 raise AnalystGenerationError(
                     f"SQL guardrail validation failed for step {step.id}: {error}",
@@ -433,7 +436,7 @@ class SqlStepGenerator:
         guarded_sql = None
         if generation_type == "sql_ready":
             try:
-                guarded_sql = guard_sql(sql_text, self._model)
+                guarded_sql = guard_sql(sql_text, self._policy)
             except Exception as error:  # noqa: BLE001
                 generation_type = "clarification"
                 clarification_kind = "technical_failure"

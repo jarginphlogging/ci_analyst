@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Optional
 from app.config import settings
 from app.models import QueryPlanStep, SqlExecutionResult, TemporalScope
 from app.services.semantic_model import SemanticModel
+from app.services.semantic_policy import SemanticPolicy, load_semantic_policy
 from app.services.stages.sql_stage_generation import SqlStepGenerator
 from app.services.stages.sql_stage_models import (
     MAX_SQL_ATTEMPTS,
@@ -181,6 +182,7 @@ class SqlExecutionStage:
         self,
         *,
         model: SemanticModel,
+        policy: SemanticPolicy | None = None,
         ask_llm_json: AskLlmJsonFn,
         sql_fn: SqlFn,
         analyst_fn: AnalystFn | None = None,
@@ -188,8 +190,10 @@ class SqlExecutionStage:
         self._sql_fn = sql_fn
         self._analyst_fn = analyst_fn
         self._latest_retry_feedback: list[dict[str, Any]] = []
+        resolved_policy = policy or load_semantic_policy()
         self._generator = SqlStepGenerator(
             model=model,
+            policy=resolved_policy,
             ask_llm_json=ask_llm_json,
             analyst_fn=analyst_fn,
         )

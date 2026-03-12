@@ -45,5 +45,5 @@ async def test_sql_step_generator_falls_back_to_llm_when_sandbox_analyst_fails()
     assert generated.provider == "llm"
     assert generated.status == "sql_ready"
     assert generated.sql is not None
-    assert "Sandbox analyst provider unavailable" in " ".join(generated.assumptions)
+    assert "LLM fallback path used" in " ".join(generated.assumptions)
     assert isinstance(generated.generation_error_detail, dict)

@@ -123,6 +123,7 @@ class Settings:
     )
     sandbox_seed_reset: bool = _as_bool(os.getenv("SANDBOX_SEED_RESET"), False)
     semantic_model_path: Optional[str] = os.getenv("SEMANTIC_MODEL_PATH")
+    semantic_policy_path: Optional[str] = os.getenv("SEMANTIC_POLICY_PATH")
     real_fast_plan_steps: int = _as_int(os.getenv("REAL_FAST_PLAN_STEPS"), 2)
     real_deep_plan_steps: int = _as_int(os.getenv("REAL_DEEP_PLAN_STEPS"), 4)
     plan_max_steps: int = max(1, _as_int(os.getenv("PLAN_MAX_STEPS"), 5))

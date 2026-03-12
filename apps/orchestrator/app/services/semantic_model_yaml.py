@@ -4,6 +4,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
+from app.config import settings
+
 
 _STOPWORDS = {
     "about",
@@ -67,6 +69,10 @@ class SemanticModelYaml:
 
 
 def _default_yaml_path() -> Path:
+    env_path = settings.semantic_model_path
+    if env_path:
+        return Path(env_path).expanduser()
+
     current = Path(__file__).resolve()
     for parent in current.parents:
         candidate = parent / "semantic_model.yaml"

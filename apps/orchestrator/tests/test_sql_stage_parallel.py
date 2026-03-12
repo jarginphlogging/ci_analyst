@@ -62,7 +62,7 @@ async def test_parallel_sql_execution_preserves_plan_order() -> None:
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
         object.__setattr__(settings, "real_max_parallel_queries", 2)
-        results, assumptions = await stage.run_sql(
+        outcome = await stage.run_sql(
             message="run parallel query steps",
             plan=plan,
             history=[],
@@ -72,8 +72,8 @@ async def test_parallel_sql_execution_preserves_plan_order() -> None:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
 
     assert peak_active_calls > 1
-    assert [row.rows[0]["segment"] for row in results] == ["step-a", "step-b", "step-c"]
-    assert assumptions == [
+    assert [row.rows[0]["segment"] for row in outcome.results] == ["step-a", "step-b", "step-c"]
+    assert outcome.assumptions == [
         "assumption for step-a",
         "assumption for step-b",
         "assumption for step-c",
@@ -103,16 +103,16 @@ async def test_sql_stage_does_not_run_hardcoded_repair_queries() -> None:
     stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
     plan = [QueryPlanStep(id="step-1", goal="Show state sales")]
 
-    results, assumptions = await stage.run_sql(
+    outcome = await stage.run_sql(
         message="Show me sales by state",
         plan=plan,
         history=[],
     )
 
-    assert results
-    assert results[0].rows[0]["transaction_state"] == "TX"
+    assert outcome.results
+    assert outcome.results[0].rows[0]["transaction_state"] == "TX"
     assert len(executed_sql) == 1
-    assert not any("Auto-repaired SQL output" in item for item in assumptions)
+    assert not any("Auto-repaired SQL output" in item for item in outcome.assumptions)
 
 
 @pytest.mark.asyncio
@@ -280,7 +280,7 @@ async def test_sql_stage_retries_on_temporal_scope_mismatch_for_last_6_months() 
     plan = [QueryPlanStep(id="step-1", goal="Show new vs repeat customers by month for the last 6 months.")]
     temporal_scope = TemporalScope(unit="month", count=6, granularity="month")
 
-    results, _ = await stage.run_sql(
+    outcome = await stage.run_sql(
         message="Show new vs repeat customers by month for the last 6 months.",
         plan=plan,
         history=[],
@@ -288,7 +288,7 @@ async def test_sql_stage_retries_on_temporal_scope_mismatch_for_last_6_months() 
     )
 
     assert ask_calls == 2
-    assert results[0].rowCount == 6
+    assert outcome.results[0].rowCount == 6
 
 
 @pytest.mark.asyncio
@@ -345,14 +345,14 @@ async def test_sql_stage_passes_planner_task_verbatim_to_analyst() -> None:
     planner_task = "Calculate the total sales for last month. Return the aggregate sales amount for the complete prior calendar month."
     plan = [QueryPlanStep(id="step-1", goal=planner_task)]
 
-    results, _ = await stage.run_sql(
+    outcome = await stage.run_sql(
         message="what were my total sales for last month",
         plan=plan,
         history=[],
         conversation_id="conv-verbatim",
     )
 
-    assert results
+    assert outcome.results
     assert analyst_messages == [planner_task]
     assert "Global user request" not in analyst_messages[0]
     assert "Respond with SQL" not in analyst_messages[0]
@@ -534,7 +534,7 @@ async def test_sql_stage_uses_dependency_context_to_retry_user_clarification() -
         QueryPlanStep(id="step-2", goal="Show new vs repeat mix for those stores", dependsOn=["step-1"], independent=False),
     ]
 
-    results, _ = await stage.run_sql(
+    outcome = await stage.run_sql(
         message=(
             "What were my top and bottom performing stores for 2025, what was the new vs repeat customer mix "
             "for each one, and how does that compare to the prior period?"
@@ -544,7 +544,7 @@ async def test_sql_stage_uses_dependency_context_to_retry_user_clarification() -
         conversation_id="conv-dependency-context",
     )
 
-    assert len(results) == 2
+    assert len(outcome.results) == 2
     assert step_two_attempts == 2
     step_two_calls = [item for item in analyst_calls if str(item.get("step_id", "")).lower() == "step-2"]
     assert len(step_two_calls) == 2
@@ -660,7 +660,7 @@ async def test_sql_stage_parallel_dispatch_on_prod_target() -> None:
     original_provider_mode_raw = settings.provider_mode_raw
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod")
-        results, _ = await stage.run_sql(
+        outcome = await stage.run_sql(
             message="run independent query steps",
             plan=plan,
             history=[],
@@ -669,7 +669,7 @@ async def test_sql_stage_parallel_dispatch_on_prod_target() -> None:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
 
     assert peak_active_calls > 1
-    assert [row.rows[0]["segment"] for row in results] == ["step-a", "step-b", "step-c"]
+    assert [row.rows[0]["segment"] for row in outcome.results] == ["step-a", "step-b", "step-c"]
 
 
 @pytest.mark.asyncio
@@ -721,7 +721,7 @@ async def test_sql_stage_retries_analyst_generation_without_llm_fallback() -> No
     stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql, analyst_fn=fake_analyst)
     plan = [QueryPlanStep(id="step-1", goal="Identify top and bottom stores")]
 
-    results, assumptions = await stage.run_sql(
+    outcome = await stage.run_sql(
         message="Identify top and bottom stores",
         plan=plan,
         history=[],
@@ -730,9 +730,10 @@ async def test_sql_stage_retries_analyst_generation_without_llm_fallback() -> No
 
     assert analyst_calls == 2
     assert llm_calls == 0
-    assert results
-    assert results[0].rows[0]["segment"] == "step-1"
-    assert any("SQL generation retry 1 failed" in item for item in assumptions)
+    assert outcome.results
+    assert outcome.results[0].rows[0]["segment"] == "step-1"
+    assert stage.latest_retry_feedback
+    assert stage.latest_retry_feedback[-1].get("phase") == "sql_generation"
 
 
 @pytest.mark.asyncio
@@ -767,7 +768,7 @@ async def test_sql_stage_retries_generation_after_execution_failure() -> None:
     stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
     plan = [QueryPlanStep(id="step-1", goal="Calculate total spend")]
 
-    results, assumptions = await stage.run_sql(
+    outcome = await stage.run_sql(
         message="What is my total spend?",
         plan=plan,
         history=[],
@@ -775,13 +776,15 @@ async def test_sql_stage_retries_generation_after_execution_failure() -> None:
 
     assert llm_calls == 2
     assert len(sql_calls) == 2
-    assert results
-    assert results[0].rows[0]["total_spend"] == 123.45
-    assert "bogus_col" not in results[0].sql.lower()
+    assert outcome.results
+    assert outcome.results[0].rows[0]["total_spend"] == 123.45
+    assert "bogus_col" not in outcome.results[0].sql.lower()
     assert len(user_prompts) == 2
     assert "Retry feedback" in user_prompts[1]
     assert "invalid identifier BOGUS_COL" in user_prompts[1]
-    assert any("SQL execution retry 1 failed" in item for item in assumptions)
+    assert stage.latest_retry_feedback
+    assert stage.latest_retry_feedback[-1].get("phase") == "sql_execution"
+    assert "BOGUS_COL" in str(stage.latest_retry_feedback[-1].get("error", ""))
 
 
 @pytest.mark.asyncio
@@ -857,7 +860,7 @@ async def test_sql_stage_retries_when_sql_returns_all_null_rows() -> None:
     stage = SqlExecutionStage(model=model, ask_llm_json=fake_ask_llm_json, sql_fn=fake_sql)
     plan = [QueryPlanStep(id="step-1", goal="Calculate total sales")]
 
-    results, assumptions = await stage.run_sql(
+    outcome = await stage.run_sql(
         message="What is my total sales?",
         plan=plan,
         history=[],
@@ -865,8 +868,9 @@ async def test_sql_stage_retries_when_sql_returns_all_null_rows() -> None:
 
     assert llm_calls == 2
     assert len(sql_calls) == 2
-    assert results[0].rows[0]["total_sales"] == 123.45
-    assert any("only null values" in item.lower() for item in assumptions)
+    assert outcome.results[0].rows[0]["total_sales"] == 123.45
+    assert stage.latest_retry_feedback
+    assert stage.latest_retry_feedback[-1].get("errorCode") == "execution_all_null_rows"
 
 
 @pytest.mark.asyncio

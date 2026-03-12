@@ -1,0 +1,14 @@
+{
+  "allowlistedTables": [
+    "cia_sales_insights_cortex"
+  ],
+  "restrictedColumns": [
+    "customer_id",
+    "ssn",
+    "account_number",
+    "card_number",
+    "email"
+  ],
+  "defaultRowLimit": 1000,
+  "maxRowLimit": 5000
+}

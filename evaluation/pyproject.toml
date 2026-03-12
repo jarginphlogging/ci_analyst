@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ci-evaluation"
+version = "0.1.0"
+description = "Evaluation tooling for the conversational analytics repo"
+requires-python = ">=3.10"
+dependencies = [
+  "arize-phoenix==12.15.1",
+  "arize-phoenix-otel==0.14.0",
+  "arize-phoenix-evals==2.11.0",
+  "openinference-instrumentation-openai==0.1.41",
+  "opentelemetry-api==1.39.1",
+  "opentelemetry-sdk==1.39.1",
+  "pandas==2.2.3",
+  "sqlparse==0.5.3",
+  "PyYAML==6.0.3",
+  "python-dotenv==1.0.1",
+  "datacompy==0.15.0",
+  "scikit-learn==1.6.1",
+  "openai==1.109.1",
+  "anthropic==0.84.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["evaluation*"]

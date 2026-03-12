@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 
 from app.config import settings
-from app.services.semantic_model import SemanticModel
+from app.services.semantic_policy import SemanticPolicy, load_semantic_policy
 
 
 FORBIDDEN_SQL_PATTERNS = [
@@ -44,8 +44,8 @@ def _canonical_table_name(raw_ref: str) -> str:
     return parts[-1] if parts else cleaned
 
 
-def _rewrite_qualified_table_refs_for_sandbox(sql: str, model: SemanticModel) -> str:
-    allowed = {table.name.lower() for table in model.tables}
+def _rewrite_qualified_table_refs_for_sandbox(sql: str, policy: SemanticPolicy) -> str:
+    allowed = set(policy.allowlisted_tables)
 
     def _replace(match: re.Match[str]) -> str:
         keyword = match.group(1)
@@ -71,8 +71,8 @@ def _enforce_select_only(sql: str) -> None:
             raise ValueError("Generated SQL contains forbidden statement.")
 
 
-def _enforce_allowed_tables(sql: str, model: SemanticModel) -> None:
-    allowed = {table.name.lower() for table in model.tables}
+def _enforce_allowed_tables(sql: str, policy: SemanticPolicy) -> None:
+    allowed = set(policy.allowlisted_tables)
     cte_names = _extract_cte_names(sql)
     found = _extract_table_references(sql)
     if not found:
@@ -82,36 +82,37 @@ def _enforce_allowed_tables(sql: str, model: SemanticModel) -> None:
         raise ValueError(f"Generated SQL referenced non-allowlisted table(s): {', '.join(blocked)}")
 
 
-def _enforce_restricted_columns(sql: str, model: SemanticModel) -> None:
+def _enforce_restricted_columns(sql: str, policy: SemanticPolicy) -> None:
     lowered = sql.lower()
-    for column in model.policy.restricted_columns:
+    for column in policy.restricted_columns:
         token = column.lower()
         if re.search(rf"\b{re.escape(token)}\b", lowered):
             raise ValueError(f"Generated SQL referenced restricted column: {column}")
 
 
-def _enforce_limit(sql: str, model: SemanticModel) -> str:
+def _enforce_limit(sql: str, policy: SemanticPolicy) -> str:
     stripped = sql.strip().rstrip(";")
     limit_match = LIMIT_PATTERN.search(stripped)
 
     if not limit_match:
-        return f"{stripped}\nLIMIT {model.policy.default_row_limit}"
+        return f"{stripped}\nLIMIT {policy.default_row_limit}"
 
     current = int(limit_match.group(1))
-    if current <= model.policy.max_row_limit:
+    if current <= policy.max_row_limit:
         return stripped
 
     start, end = limit_match.span(1)
-    return f"{stripped[:start]}{model.policy.max_row_limit}{stripped[end:]}"
+    return f"{stripped[:start]}{policy.max_row_limit}{stripped[end:]}"
 
 
-def guard_sql(sql: str, model: SemanticModel) -> str:
+def guard_sql(sql: str, policy: SemanticPolicy | None = None) -> str:
+    resolved_policy = policy or load_semantic_policy()
     canonical_sql = sql
     # Sandbox-style SCA modes may emit fully qualified table refs (db.schema.table)
-    # while the semantic-model allowlist stores canonical table names.
+    # while the guardrail allowlist stores canonical table names.
     if settings.provider_mode in {"sandbox", "prod-sandbox"}:
-        canonical_sql = _rewrite_qualified_table_refs_for_sandbox(sql, model)
+        canonical_sql = _rewrite_qualified_table_refs_for_sandbox(sql, resolved_policy)
     _enforce_select_only(canonical_sql)
-    _enforce_allowed_tables(canonical_sql, model)
-    _enforce_restricted_columns(canonical_sql, model)
-    return _enforce_limit(canonical_sql, model)
+    _enforce_allowed_tables(canonical_sql, resolved_policy)
+    _enforce_restricted_columns(canonical_sql, resolved_policy)
+    return _enforce_limit(canonical_sql, resolved_policy)

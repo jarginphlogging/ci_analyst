@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
+import yaml
 
 from app.config import settings
+from app.services.semantic_model_yaml import load_semantic_model_yaml
 
 
 @dataclass(frozen=True)
@@ -17,26 +19,10 @@ class SemanticTable:
 
 
 @dataclass(frozen=True)
-class JoinRule:
-    left: str
-    right: str
-    keys: list[str]
-
-
-@dataclass(frozen=True)
-class SemanticPolicy:
-    restricted_columns: list[str]
-    default_row_limit: int
-    max_row_limit: int
-
-
-@dataclass(frozen=True)
 class SemanticModel:
-    version: str
+    name: str
     description: str
     tables: list[SemanticTable]
-    join_rules: list[JoinRule]
-    policy: SemanticPolicy
 
 
 def _default_model_path() -> Path:
@@ -44,64 +30,63 @@ def _default_model_path() -> Path:
     if env_path:
         return Path(env_path).expanduser()
 
-    current = Path(__file__).resolve()
-    for parent in current.parents:
-        candidate = parent / "packages" / "semantic-model" / "models" / "banking-core.v1.json"
-        if candidate.exists():
-            return candidate
+    return load_semantic_model_yaml().path
 
-    raise RuntimeError(
-        "Could not locate semantic model file. Set SEMANTIC_MODEL_PATH to an absolute path."
-    )
+
+def _named_fields(items: Any) -> list[str]:
+    names: list[str] = []
+    if not isinstance(items, list):
+        return names
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", "")).strip()
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 def _as_semantic_model(payload: dict[str, Any]) -> SemanticModel:
-    tables = [
-        SemanticTable(
-            name=str(table["name"]),
-            description=str(table.get("description", "")),
-            dimensions=[str(value) for value in table.get("dimensions", [])],
-            metrics=[str(value) for value in table.get("metrics", [])],
-        )
-        for table in payload.get("tables", [])
-    ]
-
-    join_rules = [
-        JoinRule(
-            left=str(rule["left"]),
-            right=str(rule["right"]),
-            keys=[str(value) for value in rule.get("keys", [])],
-        )
-        for rule in payload.get("joinRules", [])
-    ]
-
-    policy_raw = payload.get("policy", {})
-    policy = SemanticPolicy(
-        restricted_columns=[str(value) for value in policy_raw.get("restrictedColumns", [])],
-        default_row_limit=int(policy_raw.get("defaultRowLimit", 1000)),
-        max_row_limit=int(policy_raw.get("maxRowLimit", 5000)),
-    )
+    tables: list[SemanticTable] = []
+    raw_tables = payload.get("tables", [])
+    if isinstance(raw_tables, list):
+        for table in raw_tables:
+            if not isinstance(table, dict):
+                continue
+            dimensions = _named_fields(table.get("dimensions"))
+            time_dimensions = _named_fields(table.get("time_dimensions"))
+            combined_dimensions = dimensions[:]
+            for field in time_dimensions:
+                if field not in combined_dimensions:
+                    combined_dimensions.append(field)
+            tables.append(
+                SemanticTable(
+                    name=str(table.get("name", "")).strip(),
+                    description=str(table.get("description", "")).strip(),
+                    dimensions=combined_dimensions,
+                    metrics=_named_fields(table.get("measures")),
+                )
+            )
+    tables = [table for table in tables if table.name]
 
     if not tables:
         raise RuntimeError("Semantic model has no tables defined.")
 
     return SemanticModel(
-        version=str(payload.get("version", "unknown")),
-        description=str(payload.get("description", "")),
+        name=str(payload.get("name", "unknown")).strip() or "unknown",
+        description=str(payload.get("description", "")).strip(),
         tables=tables,
-        join_rules=join_rules,
-        policy=policy,
     )
 
 
-def load_semantic_model(path: Optional[str] = None) -> SemanticModel:
+def load_semantic_model(path: str | None = None) -> SemanticModel:
     model_path = Path(path).expanduser() if path else _default_model_path()
     if not model_path.exists():
         raise RuntimeError(f"Semantic model not found at {model_path}")
 
-    payload = json.loads(model_path.read_text(encoding="utf-8"))
+    payload = yaml.safe_load(model_path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
-        raise RuntimeError("Semantic model file is not a JSON object.")
+        raise RuntimeError("Semantic model file is not a YAML object.")
     return _as_semantic_model(payload)
 
 
@@ -116,24 +101,11 @@ def semantic_model_summary(model: SemanticModel) -> str:
             f"  metrics: {metrics}"
         )
 
-    join_lines = [
-        f"- {rule.left} <-> {rule.right} on ({', '.join(rule.keys)})" for rule in model.join_rules
-    ]
-
-    if not join_lines:
-        join_lines = ["- no cross-table joins defined; prefer single-table queries"]
-
     return (
-        f"Semantic model version: {model.version}\n"
+        f"Semantic model name: {model.name}\n"
         f"Description: {model.description}\n"
         "Tables:\n"
-        f"{chr(10).join(table_lines)}\n"
-        "Join rules:\n"
-        f"{chr(10).join(join_lines)}\n"
-        "Policy:\n"
-        f"- Restricted columns: {', '.join(model.policy.restricted_columns) or 'none'}\n"
-        f"- Default row limit: {model.policy.default_row_limit}\n"
-        f"- Max row limit: {model.policy.max_row_limit}"
+        f"{chr(10).join(table_lines)}"
     )
 
 
@@ -163,8 +135,6 @@ def _collect_business_concepts(model: SemanticModel, *, max_concepts: int = 14) 
         concepts.append("repeat vs new behavior")
     if any(token in corpus for token in ["state", "city", "location", "store"]):
         concepts.append("geographic breakdowns")
-    if "household" in corpus:
-        concepts.append("household/store relationships")
     if "consumer" in corpus or "commercial" in corpus:
         concepts.append("consumer vs commercial mix")
     if any(token in corpus for token in ["cnp", "card not present", "card-not-present", "cp_spend", "cp_transactions"]):

@@ -1,5 +1,7 @@
 # Frontend UX Specification
 
+Use this file for frontend UX intent, layout expectations, and higher-level visual/product interaction direction.
+
 ## UX Vision
 
 The interface is a decision cockpit, not a generic chat app.

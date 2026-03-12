@@ -90,6 +90,8 @@ async def test_azure_chat_completion_compiles_response_schema(monkeypatch: pytes
     assert captured_client_kwargs["api_key"] == "test-key"
     assert captured_client_kwargs["default_headers"] == {"Api-Key": "gateway-key"}
     assert captured_payload["model"] == "test-deployment"
+    assert captured_payload["max_completion_tokens"] == 1000
+    assert "max_tokens" not in captured_payload
     assert schema["required"] == ["answer", "confidence"]
     assert schema["additionalProperties"] is False
     assert "default" not in schema["properties"]["answer"]

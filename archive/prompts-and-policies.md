@@ -1,6 +1,4 @@
-# Prompts and Policies
-
-Use this file for implemented prompt-stage behavior, parser/output constraints, SQL guardrails, and runtime prompt-policy notes.
+# Prompts and Policies (Implemented)
 
 ## 1) Prompt Stages
 
@@ -38,11 +36,12 @@ Rules:
 
 ## 4) Semantic Policy Source
 
-Loaded from the canonical semantic model YAML:
-- `/Users/joe/Code/ci_analyst/semantic_model.yaml`
-- optional override via `SEMANTIC_MODEL_PATH` pointing to a semantic-model YAML file
+Loaded from separate semantic guardrails config:
+- `/Users/joe/Code/ci_analyst/semantic_guardrails.json`
+- optional override via `SEMANTIC_POLICY_PATH`
 
 Policy fields used in runtime:
+- `allowlistedTables`
 - `restrictedColumns`
 - `defaultRowLimit`
 - `maxRowLimit`

@@ -1,104 +1,226 @@
+> Original file `AGENTS.md` already existed.
+> This is a proposed version for manual merge.
+> No overwrite was performed in this pass.
+
 # AGENTS.md
 
-## Product
-I am building the best conversational analytics (aka chat with data aka natural language querying) agent the world has ever seen - this means taking queries from nontechnical users, exploring a handful of curated tables to retrieve the proper data, structuring the data in an intuitive way, and highlighting the information most important to the user based on their query, while also anticipating new insights the user may not have known they needed. The agent should be able to handle complex multi-step questions and multi-turn conversation. The main objective functions are minimal latency, and maximum insight/data quality.
+## Project overview
 
-## Regulatory Context
+This repository should be optimized for reliable agent-assisted development.
+It builds a conversational analytics agent for nontechnical users that should handle complex multi-step and multi-turn questions while optimizing for low latency and high insight/data quality.
 
-This product operates in a governed corporate banking environment. This is not optional context — it shapes every architectural decision.
+The purpose of this file is to provide:
+- repo-wide policy
+- routing guidance
+- key commands
+- definition of done
 
-- **Never be prescriptive.** The system describes what the data shows. It does not recommend actions, suggest strategies, or tell the user what to do. This is a legal requirement.
-- **Auditability is mandatory.** Every numeric claim in a synthesized response must be traceable through a deterministic provenance chain back to the step and time window that produced it.
+This file is intentionally thin.
+Detailed task procedures belong in `.agents/skills/`.
+Durable project knowledge belongs in `docs/`.
 
-## Data Foundation
+---
 
-The pipeline is built on Snowflake Cortex Analyst with a semantic model YAML as the single source of truth for the data domain. The semantic model defines dimensions, measures, time dimensions, co-display rules, query guidance, and verified query patterns.
+## Core product policy
 
-- **Relevance classification is a two-layer filter.** The Planner does a first pass using a semantic model summary to catch clearly out-of-domain questions before any SQL generation. The SQL agent can independently classify a step as not relevant using the full semantic model — catching edge cases the summary-level check missed.
-- The **SQL agent** is the domain expert — it receives the full semantic model YAML and resolves ambiguous business terms (e.g., "performing," "recent," "customer split") against its descriptions, measures, and verified queries.
-- The **Planner** receives a semantic model summary for relevance classification, but does not use it to interpret business terms — it preserves the user's original language and passes ambiguity through to the SQL agent.
-- The **Synthesizer** does not have access to the semantic model. It works exclusively from the synthesis context package produced by the summary engine.
-- No stage should hardcode business logic that belongs in the semantic model. If a metric definition, co-display rule, or query pattern needs to change, it should change in the YAML — not in Python or prompt strings.
+This product operates in a governed corporate banking environment.
 
-## Best Practices
+- Never be prescriptive. Describe what the data shows; do not recommend actions, strategies, or decisions.
+- Auditability is mandatory. Numeric claims in synthesized responses must be traceable back to deterministic evidence.
 
-NEVER hardcode.
+- This application currently has no external installed user base; optimize for one canonical current-state implementation.
+- Do not preserve or introduce compatibility bridges, migration shims, fallback codepaths, adapter layers, silent degraded behavior, or dual old/new behavior unless explicitly requested.
 
-Our agent is a generalist, prompts and logic should not be overfit to specific problems.
+Prefer:
+- one canonical codepath
+- fail-fast diagnostics
+- explicit recovery steps
+- deletion of obsolete code rather than carrying it forward
 
-Think critically about all decisions, ask yourself how this will impact the final product and user experience. 
+Avoid:
+- automatic migration logic unless explicitly requested
+- compatibility glue
+- silent fallback behavior
+- "temporary" second codepaths that become permanent
 
-Decision making should be handled by the llm as much as possible, not complex python logic.
+If temporary compatibility code is truly necessary for debugging or a tightly scoped transition, it must be explicitly called out with:
+  - why it exists
+  - why the canonical path is insufficient
+  - exact deletion criteria
+  - the task / ADR / issue tracking its removal
 
-LLM decides semantics; Python enforces contracts/safety and compresses data context.
+Default stance: **delete old-state compatibility code rather than carrying it forward.**
 
-Planner handles first relevance classification attempt, query decomposition, and presentation intent.
+---
 
-SQL Generator only writes SQL based on the Planner's plan, it may also ask for clarification or classify query as irrelevant.
+## Layering rules
 
-Synthesizer narrates the story using the synthesis context package and fills out the UI contract.
+Use the repo with the following boundaries:
 
-## Pipeline Boundaries
+- `AGENTS.md`
+  - repo-wide policy
+  - routing
+  - key commands
+  - definition of done
+- `docs/`
+  - durable project knowledge
+  - architecture
+  - testing/evals
+  - product behavior
+  - cross-cutting lessons
+- `.agents/skills/`
+  - detailed task recipes
+  - validation workflows
+  - examples
+  - troubleshooting
 
-Each stage has strict, non-overlapping responsibilities. Violations of these boundaries are bugs.
+Do not bloat this file with long procedures.
+Do not duplicate detailed workflows here if they belong in a skill.
 
-**Planner:**
-- Does: first-pass relevance classification (using semantic model summary), task decomposition, presentation intent selection.
-- Does not: resolve business terms, interpret what metrics mean, write SQL, add specificity the user didn't ask for. It preserves the user's original language and passes ambiguity through to the SQL agent.
+---
 
-**SQL Agent:**
-- Does: resolve business terms against the full semantic model, generate read-only SQL, make reasonable assumptions and log them, handle retries, second-pass relevance classification for individual steps.
-- Does not: decompose multi-step questions (planner's job), narrate results (synthesizer's job), alter the step goal it receives.
+## Universal working rules
 
-**Synthesizer:**
-- Does: narrate findings using the evidence layer (facts, comparisons, headline), build visual config from presentation intent, produce summary cards, insights, follow-ups, confidence, and assumptions.
-- Does not: access the semantic model, reference SQL or pipeline internals, or recommend actions (legal requirement).
+- Plan first for medium and hard tasks.
+- Prefer incremental edits over broad rewrites.
+- Separate research from implementation when the implementation approach is not already fixed.
+- Never claim success without validation.
+- Use the most specific relevant skill instead of improvising a workflow.
+- Prefer existing local patterns before inventing a new one.
+- If a similar implementation likely exists elsewhere in this repo, inspect it first.
+- If a similar implementation likely exists in a nearby known sibling repo, inspect it before inventing a new pattern.
+- Treat the work machine as a primary target environment.
+- No code, data, or keys should be pushed from the work machine.
+- Prefer cross-platform scripts (`python`, `py -3`, `python3`) and deterministic low-friction setup.
+- Keep `npm ci` as the canonical install path and document setup changes in `README.md`.
+- Prefer long-term enterprise stability over short-term local optimization.
+- Treat `semantic_model.yaml` as the semantic-model source of truth; runtime consumers and summaries should derive from YAML rather than acting as independent authorities.
+- Be explicit about uncertainty. Do not invent commands, architecture details, or workflows.
+- Do not solve problems by adding fallback glue or compatibility layers unless explicitly requested.
+- Keep changes easy to review and easy to revert.
 
-## Strategic Principles
+---
 
-1. Architecture is policy: Planner, SQL Generator, and Synthesizer have strict, non-overlapping responsibilities.
-2. Semantics vs contracts: LLMs decide meaning; deterministic code enforces safety, validity, and interface contracts.
-3. Generalize by default: Build reusable capabilities and avoid hardcoded or overfit logic.
-4. State is explicit: Cross-stage context must be structured, portable, and machine-readable.
-5. Single source of truth: Resolve intent, scope, and entities once, then propagate without reinterpretation.
-6. Deterministic core, probabilistic edge: Core execution and validation are deterministic; model creativity is bounded by contracts.
-7. Composable over clever: Prefer simple, composable interfaces over hidden coupling.
-8. Trustworthiness over fluency: Correctness and consistency outrank narrative polish.
-9. Latency is a product feature: Preserve responsiveness while maintaining quality.
-10. Evolve without rewrite: Extend contracts and interfaces instead of replacing architecture.
+## Resumption rule
 
-## Testing Philosophy
+After long chains, resumed work, context compaction, or partial progress:
+- re-read the active task plan
+- re-read the relevant files
+- restate what is known vs assumed
+- do not rely on stale assumptions
 
-- **Prompts are code.** Changes to system prompts are behavioral changes. Test them against the golden dataset before merging.
-- **Deterministic before AI-judged.** Prefer mechanical checks (provenance chain validation, column existence, enum correctness) over LLM judges. Add LLM judges only for qualities that can't be checked deterministically (narrative quality, insight relevance).
-- **Regression is the priority.** Every prompt or pipeline change should be validated against existing golden dataset examples to confirm it doesn't degrade known-good outputs.
-- **Test the boundaries.** Pipeline stage violations (planner interpreting business terms, synthesizer doing arithmetic, SQL agent overstepping its step goal) are the highest-priority test cases because they cause the subtlest bugs.
+If context is weak, inspect the code and docs again before continuing.
 
-## Design Best Practices
-Create distinctive, production-grade frontend interfaces that avoid generic "AI slop" aesthetics. Implement real working code with exceptional attention to aesthetic details and creative choices.
+---
 
-## Work Machine Priority
+## Research vs implementation
 
-All future development must treat the user work machine as the primary target environment:
+When the implementation approach is not already fixed:
 
-- Windows corporate environment with internal package mirrors and strict security controls.
-- No code/data/keys can be pushed from the work machine.
-- Setup and runtime must be deterministic and low-friction.
+1. research and choose the approach first
+2. then implement in a narrower context
 
-## Engineering Constraints
+Do not mix broad exploration with implementation unless the task is trivially small.
 
-- Prefer cross-platform scripts (`python`, `py -3`, `python3`) and avoid shell assumptions that break on Windows.
-- Avoid dependencies that require fragile native binaries when practical (especially in frontend build pipelines).
-- Keep `npm ci` as the canonical install path; do not rely on ad-hoc `npm install` behavior.
-- Minimize install churn: only introduce dependencies when necessary and justify them.
-- Ensure orchestrator setup and runtime use the same Python interpreter path.
-- Document exact step-by-step setup commands in `README.md` whenever scripts or dependencies change.
+Use `docs-research` for framework/library/tooling investigation and implementation recommendation.
+Use `feature-implementation` once the implementation target is clear.
 
-## Delivery Rules
+---
 
-- Before merging changes that affect setup/build tooling, validate:
-  - `npm ci`
-  - `npm run setup:orchestrator`
-  - `npm run dev:orchestrator`
-  - `npm run dev:web`
-- Prefer solutions that are stable long term in enterprise environments over short-term local optimizations.
+## Definition of done
+
+A task is not done just because code was written.
+
+A task is complete only when the relevant completion criteria are satisfied.
+
+Use the applicable checks below:
+
+- relevant tests pass
+- lint/typecheck/build checks pass if relevant
+- Playwright / browser / product-flow checks pass for user-facing changes
+- golden dataset / benchmark / eval checks pass for logic, model, or answer-quality changes
+- screenshots or visible verification are used when product behavior matters
+- no forbidden fallback / compatibility creep was introduced
+- setup/build tooling changes were validated with repo-standard setup and dev commands if relevant
+- summary states:
+  - what changed
+  - what was validated
+  - what remains uncertain
+  - any follow-up risks
+
+Do not edit tests only to make a broken implementation appear complete unless the test itself is wrong and that is explicitly justified.
+
+---
+
+## Skill routing
+
+Use the most specific relevant skill instead of improvising.
+
+- `feature-implementation`
+  - scoped feature work or enhancements after the approach is chosen
+- `bug-triage`
+  - reproducing, isolating, and diagnosing defects or regressions before implementation
+- `pr-review`
+  - reviewing diffs for correctness, regressions, missing validation, and fallback creep
+- `docs-research`
+  - choosing or verifying implementation approaches before coding
+- `playwright-product-test`
+  - browser testing, E2E testing, broken user flows, Playwright regressions, product smoke checks
+- `golden-dataset-eval`
+  - golden datasets, benchmark runs, expected-vs-actual comparisons, regression evaluation, accuracy checks
+
+If a task clearly matches one of these, load and follow that skill.
+
+---
+
+## Key commands
+
+### Dev / run
+- `npm run dev:orchestrator`
+- `npm run dev:web`
+- `npm run dev:sandbox-cortex`
+
+### Build
+- `npm run build`
+
+### Lint
+- `npm run lint`
+
+### Tests
+- `npm run test`
+
+### Playwright
+- No canonical npm Playwright command is defined in this repo.
+- Current ad hoc local config: `npx playwright test -c .tmp-playwright/playwright.config.cjs`
+
+### Evals / golden dataset
+- `npm run eval`
+- `python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local eval run"`
+
+If a command is unknown, inspect the repo and docs first rather than inventing one.
+
+---
+
+## Project knowledge locations
+
+Read these when relevant:
+- `docs/architecture.md`
+- `docs/testing.md`
+- `docs/evals.md`
+- `docs/user-journeys.md`
+- `docs/learnings.md`
+
+Detailed task workflows live in:
+- `.agents/skills/*/SKILL.md`
+
+---
+
+## Maintenance rule
+
+When the instruction system becomes noisy, overlapping, or contradictory:
+- simplify
+- consolidate
+- remove stale guidance
+- keep this file thin
+- keep skills sharp
+- keep docs durable
