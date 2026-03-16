@@ -7,7 +7,7 @@ from typing import Any
 
 import pandas as pd
 
-from evaluation.llm_evaluators_v2_1 import (
+from evaluation.llm_evaluators import (
     build_judge,
     classify_decomposition,
     classify_hallucination,
@@ -107,7 +107,7 @@ def _normalize_span_eval_df(result_df: pd.DataFrame, *, span_ids: pd.Series) -> 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run async Phoenix production evals (v2.1).")
+    parser = argparse.ArgumentParser(description="Run async Phoenix production evals.")
     parser.add_argument("--hours", type=int, default=1, help="Lookback window in hours")
     args = parser.parse_args()
 
@@ -147,7 +147,7 @@ def main() -> None:
                     decomp_results,
                     span_ids=decomp_df["context.span_id"],
                 ),
-                eval_name="Decomposition Quality v2.1",
+                eval_name="Decomposition Quality",
             )
         )
 
@@ -159,7 +159,7 @@ def main() -> None:
                     sql_results,
                     span_ids=sql_df["context.span_id"],
                 ),
-                eval_name="SQL Correctness v2.1",
+                eval_name="SQL Correctness",
             )
         )
 
@@ -176,14 +176,14 @@ def main() -> None:
                         hallucination_results,
                         span_ids=synth_df["context.span_id"],
                     ),
-                    eval_name="Hallucination v2.1",
+                    eval_name="Hallucination",
                 ),
                 SpanEvaluations(
                     dataframe=_normalize_span_eval_df(
                         synthesis_results,
                         span_ids=synth_df["context.span_id"],
                     ),
-                    eval_name="Synthesis Quality v2.1",
+                    eval_name="Synthesis Quality",
                 ),
             ]
         )

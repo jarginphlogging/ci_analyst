@@ -174,7 +174,8 @@ async def test_planner_prompt_includes_general_step_minimization_policy() -> Non
     assert decision.stop_reason == "none"
     assert "Output exactly one task when the question targets a single result set" in captured_system_prompt
     assert "Split when any of these apply" in captured_system_prompt
-    assert "Counterexample: when the same metric set is requested at the same grain across two periods" in captured_system_prompt
+    assert "Incompatible time windows" in captured_system_prompt
+    assert '"this year vs same period last year"' in captured_system_prompt
 
 
 @pytest.mark.asyncio

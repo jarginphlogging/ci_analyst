@@ -6,7 +6,6 @@ on:
       - "apps/orchestrator/**"
       - "evaluation/**"
       - "apps/orchestrator/app/prompts/**"
-      - "packages/semantic-model/**"
       - "apps/orchestrator/pyproject.toml"
       - "evaluation/pyproject.toml"
       - ".github/workflows/eval_v2_1.yml"

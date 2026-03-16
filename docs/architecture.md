@@ -46,6 +46,27 @@ Example maintenance prompt:
 
 ---
 
+## Data foundation
+
+The pipeline is built around Snowflake Cortex Analyst with `semantic_model.yaml` as the single source of truth for the governed data domain.
+
+The semantic model owns:
+- dimensions, measures, and time dimensions
+- co-display rules
+- query guidance
+- verified query patterns
+
+Durable rules:
+- no stage should hardcode business logic that belongs in the semantic model
+- if a metric definition, co-display rule, or query pattern needs to change, change the YAML rather than patching Python or prompt strings
+- derived runtime summaries are consumers of YAML, not competing semantic authorities
+
+Relevance classification is intentionally a two-layer filter:
+- the planner does a first-pass relevance classification using a semantic-model summary to catch clearly out-of-domain questions before SQL generation
+- the SQL stage can independently classify an individual step as not relevant using the full semantic model, catching edge cases the summary-level pass missed
+
+---
+
 ## Major boundaries
 
 ### Frontend / UI
@@ -94,6 +115,17 @@ Example maintenance prompt:
   - synthesis inventing semantics or operating beyond evidence
   - stage outputs drifting from contracts
 
+Planner, SQL, and synthesizer boundaries are strict:
+- Planner:
+  - does first-pass relevance classification, task decomposition, and presentation-intent selection
+  - does not resolve business terms, interpret metric meaning, write SQL, or add specificity the user did not ask for
+- SQL stage:
+  - does resolve business terms against the full semantic model, generate governed read-only SQL, make reasonable assumptions, and classify step-level irrelevance
+  - does not decompose multi-step questions, narrate results, or alter the received step goal
+- Synthesizer:
+  - does narrate findings from the evidence layer, build visual configuration from presentation intent, and produce summaries, insights, follow-ups, confidence, and assumptions
+  - does not access the semantic model, expose pipeline internals, or recommend actions
+
 ### Data access / query generation
 
 - Responsibility: business-term resolution, SQL generation, SQL guardrails, execution, and provider-specific query access
@@ -115,9 +147,9 @@ Example maintenance prompt:
 - Key files:
   - `packages/eval-harness/src/run-eval.mjs`
   - `packages/eval-harness/datasets/golden-v1.json`
-  - `evaluation/golden_examples_v2_1.yaml`
-  - `evaluation/run_experiment_v2_1.py`
-  - `evaluation/quality_gate_v2_1.py`
+  - `evaluation/golden_examples.yaml`
+  - `evaluation/run_experiment.py`
+  - `evaluation/quality_gate.py`
 - Important constraints:
   - evals should compare expected versus actual outputs
   - prompt and pipeline changes are regression-sensitive
@@ -142,10 +174,9 @@ Example maintenance prompt:
 
 ### Shared utilities
 
-- Responsibility: shared contracts and shared semantic-model packaging
+- Responsibility: shared contracts and shared semantic-model consumers
 - Key files:
   - `packages/contracts/src/index.ts`
-  - `packages/semantic-model/src/index.ts`
   - `semantic_model.yaml`
 - Important constraints:
   - contracts should stay aligned across web, orchestrator, and eval surfaces
@@ -216,7 +247,7 @@ Example maintenance prompt:
 - Important dependencies:
   - `apps/orchestrator/app/services/dependencies.py`
   - `apps/orchestrator/app/services/stages/`
-  - `apps/orchestrator/app/evaluation/inline_checks_v2_1.py`
+  - `apps/orchestrator/app/evaluation/inline_checks.py`
 - Typical changes made here:
   - orchestration sequencing
   - status messages
@@ -339,11 +370,17 @@ Where failures commonly surface:
 - Planner, SQL, validation, and synthesis responsibilities remain separate.
 - Semantic-model artifacts should own business-domain meaning.
 - `semantic_model.yaml` is the canonical semantic source of truth; runtime helpers may derive consumable views from it but should not become competing authorities.
+- LLMs should decide semantics; deterministic code should enforce safety, validity, and interface contracts.
+- Resolve intent, scope, and entities once, then propagate them without stage-by-stage reinterpretation.
+- Cross-stage context should stay explicit, structured, portable, and machine-readable.
 - Preserve the canonical request flow rather than introducing alternate hidden paths.
 - Prefer one canonical current-state implementation over compatibility layers.
 - Prefer fail-fast diagnostics and explicit recovery steps over silent degraded behavior.
+- Prefer reusable general capabilities over hardcoded or overfit logic.
+- Core execution and validation should remain deterministic even when model reasoning is probabilistic at the edges.
+- Trustworthiness and correctness outrank narrative polish.
 - Latency is a real product constraint, especially for streamed responses.
-- Cross-stage context should stay structured and portable.
+- Extend contracts and interfaces where possible instead of rewriting stage architecture.
 
 ---
 
@@ -353,7 +390,6 @@ Before inventing a new pattern:
 - search for an existing implementation in this repo
 - prefer consistency over novelty
 - inspect adjacent files in the same subsystem first
-- inspect nearby known sibling repos if repo-local patterns are missing and the comparison is likely relevant
 
 Local canonical patterns already visible in this repo:
 - web routes proxy to orchestrator rather than re-implementing backend logic
@@ -399,7 +435,7 @@ Local canonical patterns already visible in this repo:
   - streamed and final payload rendering mismatch
 - What must be validated:
   - frontend tests
-  - focused browser/product-flow checks
+  - focused browser/user-journey checks
 
 ### Evaluation surfaces
 

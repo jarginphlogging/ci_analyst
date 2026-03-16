@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from evaluation.common_v2_1 import repo_root
+from evaluation.common import repo_root
 
 
 @dataclass(frozen=True)
-class GoldenExampleV21:
+class GoldenExample:
     input: str
     expected_plan: list[str]
     expected_sql_steps: list[str]
@@ -24,8 +24,8 @@ def _as_list_of_str(value: Any) -> list[str]:
     return [str(item).strip() for item in value if str(item).strip()]
 
 
-def load_golden_examples(path: str | None = None) -> list[GoldenExampleV21]:
-    dataset_path = Path(path).expanduser() if path else repo_root() / "evaluation" / "golden_examples_v2_1.yaml"
+def load_golden_examples(path: str | None = None) -> list[GoldenExample]:
+    dataset_path = Path(path).expanduser() if path else repo_root() / "evaluation" / "golden_examples.yaml"
     if not dataset_path.exists():
         raise RuntimeError(f"Golden dataset file not found: {dataset_path}")
     try:
@@ -36,12 +36,12 @@ def load_golden_examples(path: str | None = None) -> list[GoldenExampleV21]:
     if not isinstance(payload, list):
         raise RuntimeError("Golden dataset YAML must be a list of examples.")
 
-    examples: list[GoldenExampleV21] = []
+    examples: list[GoldenExample] = []
     for item in payload:
         if not isinstance(item, dict):
             continue
         examples.append(
-            GoldenExampleV21(
+            GoldenExample(
                 input=str(item.get("input", "")).strip(),
                 expected_plan=_as_list_of_str(item.get("expected_plan")),
                 expected_sql_steps=_as_list_of_str(item.get("expected_sql_steps")),
@@ -54,7 +54,7 @@ def load_golden_examples(path: str | None = None) -> list[GoldenExampleV21]:
     return [example for example in examples if example.input]
 
 
-def to_dataset_records(examples: list[GoldenExampleV21]) -> list[dict[str, Any]]:
+def to_dataset_records(examples: list[GoldenExample]) -> list[dict[str, Any]]:
     return [
         {
             "input": example.input,
@@ -67,4 +67,3 @@ def to_dataset_records(examples: list[GoldenExampleV21]) -> list[dict[str, Any]]
         }
         for example in examples
     ]
-

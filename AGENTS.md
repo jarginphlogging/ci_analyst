@@ -1,7 +1,3 @@
-> Original file `AGENTS.md` already existed.
-> This is a proposed version for manual merge.
-> No overwrite was performed in this pass.
-
 # AGENTS.md
 
 ## Project overview
@@ -88,7 +84,6 @@ Do not duplicate detailed workflows here if they belong in a skill.
 - Use the most specific relevant skill instead of improvising a workflow.
 - Prefer existing local patterns before inventing a new one.
 - If a similar implementation likely exists elsewhere in this repo, inspect it first.
-- If a similar implementation likely exists in a nearby known sibling repo, inspect it before inventing a new pattern.
 - Treat the work machine as a primary target environment.
 - No code, data, or keys should be pushed from the work machine.
 - Prefer cross-platform scripts (`python`, `py -3`, `python3`) and deterministic low-friction setup.
@@ -137,7 +132,7 @@ Use the applicable checks below:
 
 - relevant tests pass
 - lint/typecheck/build checks pass if relevant
-- Playwright / browser / product-flow checks pass for user-facing changes
+- Playwright / browser / user-journey checks pass for user-facing changes
 - golden dataset / benchmark / eval checks pass for logic, model, or answer-quality changes
 - screenshots or visible verification are used when product behavior matters
 - no forbidden fallback / compatibility creep was introduced
@@ -195,7 +190,7 @@ If a task clearly matches one of these, load and follow that skill.
 
 ### Evals / golden dataset
 - `npm run eval`
-- `python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local eval run"`
+- `python -m evaluation.run_experiment --name "local-eval" --description "local eval run"`
 
 If a command is unknown, inspect the repo and docs first rather than inventing one.
 
@@ -205,10 +200,25 @@ If a command is unknown, inspect the repo and docs first rather than inventing o
 
 Read these when relevant:
 - `docs/architecture.md`
-- `docs/testing.md`
-- `docs/evals.md`
+  - repo-wide system boundaries, major modules, and cross-cutting data flow
+- `docs/frontend.md`
+  - web app structure, stream handling, UI state, and frontend change points
+- `docs/backend.md`
+  - orchestrator runtime flow, stage boundaries, provider wiring, and backend change points
+- `docs/api-contracts.md`
+  - request/response payload shapes and boundary-level API expectations
+- `docs/frontend-ux-spec.md`
+  - frontend interaction direction, layout expectations, and UX constraints
 - `docs/user-journeys.md`
+  - critical visible product flows and high-priority regressions
+- `docs/testing.md`
+  - test surfaces, validation expectations, and repo-backed test commands
+- `docs/evals.md`
+  - eval assets, benchmark workflows, and result interpretation
 - `docs/learnings.md`
+  - durable cross-cutting lessons and repeated failure modes
+- `docs/skills-evals.md`
+  - skill-trigger examples for refining skill discovery and overlap boundaries
 
 Detailed task workflows live in:
 - `.agents/skills/*/SKILL.md`

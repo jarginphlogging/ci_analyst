@@ -27,7 +27,6 @@ The product is optimized for:
   packages/
     contracts/           Shared request/response and stream contracts
     eval-harness/        Fast local eval runner
-    semantic-model/      Retired fail-fast package; YAML is the source of truth
   evaluation/            Broader Python/Phoenix eval tooling and datasets
   docs/                  Durable project docs
   semantic_model.yaml    Canonical semantic model

@@ -29,7 +29,7 @@ def _cohen_kappa(lhs: list[str], rhs: list[str]) -> float:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Eval-the-evals calibration report v2.1")
+    parser = argparse.ArgumentParser(description="Eval-the-evals calibration report")
     parser.add_argument("--min-agreement", type=float, default=0.80)
     args = parser.parse_args()
 

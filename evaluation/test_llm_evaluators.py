@@ -3,7 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from evaluation import llm_evaluators_v2_1 as evals
+from evaluation import llm_evaluators as evals
 
 
 def _clear_judge_env(monkeypatch: pytest.MonkeyPatch) -> None:

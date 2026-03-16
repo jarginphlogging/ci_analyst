@@ -7,13 +7,13 @@ from typing import Any
 
 import pandas as pd
 
-from evaluation.common_v2_1 import ensure_orchestrator_path
+from evaluation.common import ensure_orchestrator_path
 
 ensure_orchestrator_path()
 
 from app.config import settings  # noqa: E402
 from app.providers.factory import build_provider_bundle  # noqa: E402
-from app.evaluation.inline_checks_v2_1 import check_sql_syntax  # noqa: E402
+from app.evaluation.inline_checks import check_sql_syntax  # noqa: E402
 
 try:
     from phoenix.evals import create_evaluator

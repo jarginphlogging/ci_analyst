@@ -14,7 +14,7 @@ THRESHOLDS = {
     "SQL Correctness": 0.80,
     "Hallucination": 0.85,
     "QA Correctness": 0.80,
-    "Summarization": 0.80,
+    "Synthesis Quality": 0.80,
 }
 
 
@@ -24,7 +24,7 @@ def _normalize_metric_name(name: str) -> str:
         "sql correctness v2.1": "SQL Correctness",
         "hallucination v2.1": "Hallucination",
         "qa correctness v2.1": "QA Correctness",
-        "synthesis quality v2.1": "Summarization",
+        "synthesis quality v2.1": "Synthesis Quality",
         "decomposition quality v2.1": "decomposition_coverage",
         "execution_accuracy": "execution_accuracy",
         "decomposition_coverage": "decomposition_coverage",
@@ -33,7 +33,8 @@ def _normalize_metric_name(name: str) -> str:
         "sql correctness": "SQL Correctness",
         "hallucination": "Hallucination",
         "qa correctness": "QA Correctness",
-        "summarization": "Summarization",
+        "synthesis quality": "Synthesis Quality",
+        "summarization": "Synthesis Quality",
     }
     return alias_map.get(lowered, name)
 
@@ -126,7 +127,7 @@ def _fetch_metrics(client: Any, experiment_name: str | None = None) -> dict[str,
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Phoenix quality gate v2.1")
+    parser = argparse.ArgumentParser(description="Phoenix quality gate")
     parser.add_argument("--experiment-name", default=None, help="Optional Phoenix experiment name")
     args = parser.parse_args()
 

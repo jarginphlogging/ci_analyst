@@ -21,7 +21,7 @@ from app.models import (
 )
 from app.observability import bind_log_context
 from app.tracing import add_check_event, set_stage_output, stage_span, turn_span
-from app.evaluation.inline_checks_v2_1 import (
+from app.evaluation.inline_checks import (
     check_answer_sanity,
     check_pii,
     check_plan_sanity,

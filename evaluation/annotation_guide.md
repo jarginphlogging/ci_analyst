@@ -1,11 +1,11 @@
-# Annotation Guide v2.1
+# Annotation Guide
 
 ## Weekly Loop
 
 1. Run async production eval:
 
 ```bash
-python -m evaluation.async_production_eval_v2_1 --hours 24
+python -m evaluation.async_production_eval --hours 24
 ```
 
 2. Open latest flagged file:
@@ -38,11 +38,11 @@ Stage targets:
 
 5. Promote confirmed failures to golden dataset:
 
-- append new case to `evaluation/golden_examples_v2_1.yaml`
+- append new case to `evaluation/golden_examples.yaml`
 - upload dataset:
 
 ```bash
-python -m evaluation.upload_golden_dataset_v2_1
+python -m evaluation.upload_golden_dataset
 ```
 
 ## Monthly Calibration
@@ -50,7 +50,7 @@ python -m evaluation.upload_golden_dataset_v2_1
 Run:
 
 ```bash
-python -m evaluation.eval_the_evals_v2_1 --min-agreement 0.80
+python -m evaluation.eval_the_evals --min-agreement 0.80
 ```
 
 If agreement is below threshold for any evaluator:

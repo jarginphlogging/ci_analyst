@@ -35,9 +35,12 @@ Do not:
 
 Additional repo-specific guidance:
 - prompts are code, so prompt changes should be validated like code changes
+- prefer deterministic checks before AI-judged ones whenever the quality being tested can be verified mechanically
 - regression protection outranks isolated one-off wins
 - planner / SQL / synthesis boundary tests are especially valuable in this repo
 - semantic-model meaning changes should start in `semantic_model.yaml`, then be validated through the affected planner, SQL, and eval surfaces
+- stage-boundary violations are high-priority regressions because they create subtle correctness and trust failures
+- work-machine setup should stay deterministic, low-friction, and cross-platform where practical
 
 ---
 
@@ -89,7 +92,7 @@ Additional repo-specific guidance:
 ### Benchmark / golden dataset / eval tests
 
 - Purpose:
-  - compare actual versus expected answer behavior, numeric assertions, and latency
+  - compare actual versus expected answer behavior, numeric assertions, latency, and prompt-driven behavioral changes
 - When to run it:
   - orchestration changes
   - prompt changes
@@ -97,7 +100,7 @@ Additional repo-specific guidance:
   - logic changes that affect outputs
 - Command(s):
   - `npm run eval`
-  - `python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local eval run"`
+  - `python -m evaluation.run_experiment --name "local-eval" --description "local eval run"`
   - see `docs/evals.md` for broader eval stack commands
 - Typical speed / scope:
   - `npm run eval` is the fast local path
@@ -161,7 +164,7 @@ Additional repo-specific guidance:
 
 ### Eval / benchmark
 - `npm run eval`
-- `python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local eval run"`
+- `python -m evaluation.run_experiment --name "local-eval" --description "local eval run"`
 
 If a command is unknown, inspect package/config files rather than guessing.
 
@@ -196,6 +199,7 @@ If a command is unknown, inspect package/config files rather than guessing.
   - `npm run setup:orchestrator`
   - `npm run dev:orchestrator`
   - `npm run dev:web`
+- prefer enterprise-stable changes over local-only optimizations
 
 ---
 

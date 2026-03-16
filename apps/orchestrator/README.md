@@ -32,7 +32,7 @@ Provider modes:
 `sandbox` mode uses:
 - Anthropic Messages API for routing/planning/sql/synthesis
 - Local pseudo-Cortex Analyst REST service with:
-  - `message` endpoint (NL question -> SQL + light response + rows)
+  - `message` endpoint (NL question -> SQL-generation payload + light response metadata)
   - clarification handling for vague questions
   - conversation memory by `conversationId`
   - raw `/query` endpoint for direct SQL execution
@@ -59,13 +59,8 @@ Snowflake prod auth/config supports:
 ## Local Setup
 
 ```bash
-cd /Users/joe/Code/ci_analyst/apps/orchestrator
-python -m venv .venv
-# macOS/Linux
-source .venv/bin/activate
-# Windows (PowerShell)
-# .\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
+cd /Users/joe/Code/ci_analyst
+npm run setup:orchestrator
 ```
 
 `pyproject.toml` pins `cryptography` and `pyOpenSSL` explicitly because some enterprise Windows mirrors
@@ -85,7 +80,7 @@ npm run dev:orchestrator
 
 The npm scripts auto-detect Python (`python`, `py -3`, or `python3`).
 
-For `sandbox` mode, run local Cortex shim in a second terminal:
+For `sandbox` and `prod-sandbox` modes, run the local Cortex shim in a second terminal:
 
 ```bash
 cd /Users/joe/Code/ci_analyst
@@ -95,7 +90,7 @@ npm run dev:sandbox-cortex
 Direct command:
 ```bash
 cd /Users/joe/Code/ci_analyst/apps/orchestrator
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
+node ../../scripts/run-python.mjs -m uvicorn app.main:app --host 0.0.0.0 --port 8787 --reload
 ```
 
 ## Test
@@ -125,13 +120,13 @@ npm --workspace @ci/orchestrator run test
   - `app/services/stages/synthesis_stage.py`
 - prompt templates: `app/prompts/templates.py`
 - SQL policy checks: `app/services/sql_guardrails.py`
-- semantic model loader: `app/services/semantic_model.py`
+- semantic model source + loader path: `semantic_model.yaml`, `app/services/semantic_model_yaml.py`, `app/services/semantic_model.py`
 - semantic guardrails loader: `app/services/semantic_policy.py`
 
 ## SQL Execution Concurrency
 
 Execution behavior:
-- Independent step levels execute in parallel on sandbox/prod warehouse targets.
+- Independent step levels execute in parallel in `sandbox`, `prod-sandbox`, and `prod`.
 - Dependent step levels execute serially.
 - Final result ordering remains deterministic by plan step index.
 

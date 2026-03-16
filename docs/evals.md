@@ -84,26 +84,26 @@ Repo-specific guidance:
   - despite the filename, this is a product eval dataset, not a semantic-model artifact
   - supported case fields include `id`, `question`, `mustContainAny`, optional `minTokenHits`, optional `maxLatencyMs`, and optional `numericAssertions`
 
-### `evaluation/golden_examples_v2_1.yaml`
+### `evaluation/golden_examples.yaml`
 - Role: canonical YAML golden dataset for the broader Python/Phoenix eval stack
 - Inputs:
   - curated examples and expected outputs
 - Outputs:
-  - dataset records via `evaluation/golden_dataset_v2_1.py`
+  - dataset records via `evaluation/golden_dataset.py`
 - Notes:
-  - this is the repo’s broader golden dataset source for the v2.1 Python eval flow
+  - this is the repo’s broader golden dataset source for the Python eval flow
 
-### `evaluation/golden_dataset_v2_1.py`
+### `evaluation/golden_dataset.py`
 - Role: load and normalize the YAML golden dataset
 - Inputs:
   - optional `--dataset-path`
-  - `evaluation/golden_examples_v2_1.yaml` by default
+  - `evaluation/golden_examples.yaml` by default
 - Outputs:
   - dataset records suitable for upload or experiment runs
 - Notes:
   - this is the fallback path used when the Phoenix dataset is not already present
 
-### `evaluation/run_experiment_v2_1.py`
+### `evaluation/run_experiment.py`
 - Role: broader Phoenix-backed experiment runner
 - Inputs:
   - `--name`
@@ -117,7 +117,7 @@ Repo-specific guidance:
   - uses both code evaluators and judge-backed evaluators
   - `python -m evaluation.*` entrypoints auto-load `apps/orchestrator/.env`
 
-### `evaluation/quality_gate_v2_1.py`
+### `evaluation/quality_gate.py`
 - Role: result-summary and gate decision for Phoenix experiment metrics
 - Inputs:
   - optional `--experiment-name`
@@ -128,7 +128,7 @@ Repo-specific guidance:
 - Notes:
   - this is the closest thing to a canonical result-summary command in the broader eval stack
 
-### `evaluation/eval_the_evals_v2_1.py`
+### `evaluation/eval_the_evals.py`
 - Role: calibration report for judge agreement quality
 - Inputs:
   - annotation/review data
@@ -138,7 +138,7 @@ Repo-specific guidance:
 - Notes:
   - use when the evaluator quality itself is in doubt
 
-### `evaluation/async_production_eval_v2_1.py`
+### `evaluation/async_production_eval.py`
 - Role: async production-style Phoenix eval workflow
 - Inputs:
   - recent production traces
@@ -165,16 +165,16 @@ EVAL_DATASET_PATH=/absolute/path/to/subset.json npm run eval
 ```
 
 ### Result summary command
-- `python -m evaluation.quality_gate_v2_1 --experiment-name "local-v2.1"`
+- `python -m evaluation.quality_gate --experiment-name "local-eval"`
 
 Additional repo-backed commands:
 
 ```bash
 EVAL_BASE_URL=http://localhost:8787 npm run eval
-python -m evaluation.upload_golden_dataset_v2_1 --name cortex-analyst-golden-v2-1
-python -m evaluation.run_experiment_v2_1 --name "local-v2.1" --description "local eval run"
-python -m evaluation.eval_the_evals_v2_1 --min-agreement 0.80
-python -m evaluation.async_production_eval_v2_1 --hours 1
+python -m evaluation.upload_golden_dataset --name cortex-analyst-golden
+python -m evaluation.run_experiment --name "local-eval" --description "local eval run"
+python -m evaluation.eval_the_evals --min-agreement 0.80
+python -m evaluation.async_production_eval --hours 1
 ```
 
 If these commands are not obvious, inspect scripts/configs rather than inventing them.
@@ -240,7 +240,7 @@ Practical repo order:
 3. broader Phoenix experiment run for deeper quality evaluation
 4. quality gate after a Phoenix-backed experiment
 
-Phoenix v2.1 role in the broader eval stack:
+Phoenix role in the broader eval stack:
 - runtime inline checks on orchestrator stages
 - async production LLM-as-judge scoring for decomposition, SQL correctness, hallucination, and synthesis quality
 - Tier 2 intentionally excludes QA correctness scoring because production traces do not carry ground-truth reference answers

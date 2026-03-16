@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.evaluation.inline_checks_v2_1 import (
+from app.evaluation.inline_checks import (
     check_answer_sanity,
     check_pii,
     check_plan_sanity,

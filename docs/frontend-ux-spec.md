@@ -6,6 +6,12 @@ Use this file for frontend UX intent, layout expectations, and higher-level visu
 
 The interface is a decision cockpit, not a generic chat app.
 
+Design principles:
+- avoid generic "AI slop" presentation and default chatbot aesthetics
+- build production-grade interfaces with deliberate visual hierarchy
+- prioritize clarity, evidence visibility, and trust over decorative flourish
+- keep the experience approachable for nontechnical users asking natural-language questions
+
 1. Direct answer first.
 2. Evidence and insight immediately visible.
 3. Governed transparency through analysis trace summaries.
@@ -27,12 +33,17 @@ The interface is a decision cockpit, not a generic chat app.
 ## Interaction Model
 
 - Suggested questions are one-click prompt injectors.
-- Driver table supports sort pivots by impact and delta.
+- Primary evidence display should adapt cleanly between chart, comparison, and table-oriented views.
 - Trace panel is collapsed by default; expandable for audit.
 - Retrieved Data panel supports:
   - selecting returned datasets
   - viewing full rows/columns in-table
   - exporting current dataset as CSV or JSON
+
+Presentation constraints:
+- the UI should help users understand what the data shows without becoming prescriptive
+- numeric claims should remain inspectable through evidence and trace surfaces
+- visible state should stay coherent across streaming, completion, and error transitions
 
 ## Chain-of-thought Handling
 

@@ -6,15 +6,15 @@ import json
 from typing import Any
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-from evaluation.code_evaluators_v2_1 import (
+from evaluation.code_evaluators import (
     decomposition_coverage,
     execution_accuracy,
     key_value_presence,
     sql_syntax_valid,
 )
-from evaluation.common_v2_1 import ensure_orchestrator_path
-from evaluation.golden_dataset_v2_1 import load_golden_examples, to_dataset_records
-from evaluation.llm_evaluators_v2_1 import (
+from evaluation.common import ensure_orchestrator_path
+from evaluation.golden_dataset import load_golden_examples, to_dataset_records
+from evaluation.llm_evaluators import (
     build_judge,
     classify_decomposition,
     classify_hallucination,
@@ -184,10 +184,10 @@ def _normalize_trace_eval_df(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run Phoenix Tier 3 experiment v2.1.")
+    parser = argparse.ArgumentParser(description="Run Phoenix Tier 3 experiment.")
     parser.add_argument("--name", required=True, help="Experiment name")
     parser.add_argument("--description", default="", help="Experiment description")
-    parser.add_argument("--dataset", default="cortex-analyst-golden-v2-1", help="Phoenix dataset name")
+    parser.add_argument("--dataset", default="cortex-analyst-golden", help="Phoenix dataset name")
     parser.add_argument("--dataset-path", default=None, help="Optional local YAML fallback")
     args = parser.parse_args()
 
@@ -270,15 +270,15 @@ def main() -> None:
         trace_ids = run_df["context.trace_id"].astype(str)
         client.log_evaluations(
             TraceEvaluations(
-                eval_name="Decomposition Quality v2.1",
+                eval_name="Decomposition Quality",
                 dataframe=_normalize_trace_eval_df(decomp_results, trace_ids=trace_ids),
             ),
             TraceEvaluations(
-                eval_name="SQL Correctness v2.1",
+                eval_name="SQL Correctness",
                 dataframe=_normalize_trace_eval_df(sql_results, trace_ids=trace_ids),
             ),
             TraceEvaluations(
-                eval_name="Hallucination v2.1",
+                eval_name="Hallucination",
                 dataframe=_normalize_trace_eval_df(
                     hallucination_results,
                     trace_ids=trace_ids,
@@ -286,11 +286,11 @@ def main() -> None:
                 ),
             ),
             TraceEvaluations(
-                eval_name="QA Correctness v2.1",
+                eval_name="QA Correctness",
                 dataframe=_normalize_trace_eval_df(qa_results, trace_ids=trace_ids),
             ),
             TraceEvaluations(
-                eval_name="Synthesis Quality v2.1",
+                eval_name="Synthesis Quality",
                 dataframe=_normalize_trace_eval_df(synthesis_results, trace_ids=trace_ids),
             ),
         )

@@ -73,11 +73,22 @@ Response:
 {
   "status": "ok",
   "timestamp": "...",
-  "providerMode": "sandbox|prod"
+  "providerMode": "sandbox|prod-sandbox|prod"
 }
 ```
 
 ## Sandbox Pseudo-Cortex API (Local, default `http://localhost:8788`)
+
+### GET `/health`
+
+Response:
+```json
+{
+  "status": "ok",
+  "database": "/absolute/path/to/sqlite.db",
+  "conversationCount": 3
+}
+```
 
 ### POST `/api/v2/cortex/analyst/message`
 
@@ -87,26 +98,34 @@ Request:
   "conversationId": "session-123",
   "message": "What were my sales by state in Q4 2025?",
   "history": ["Show me channel mix first"],
-  "stepId": "step_1"
+  "stepId": "step_1",
+  "retryFeedback": [],
+  "dependencyContext": []
 }
 ```
 
 Response:
 ```json
 {
-  "type": "answer|clarification",
+  "type": "sql_ready|clarification|not_relevant",
   "conversationId": "session-123",
   "sql": "SELECT ...",
   "lightResponse": "One-sentence analyst summary.",
+  "interpretationNotes": [],
+  "caveats": [],
   "clarificationQuestion": "",
+  "clarificationKind": "",
+  "notRelevantReason": "",
   "rows": [],
   "rowCount": 0,
+  "failedSql": null,
   "assumptions": []
 }
 ```
 
 Notes:
 - `type=clarification` returns a non-empty `clarificationQuestion`.
+- `type=not_relevant` explains the rejection in `notRelevantReason`.
 - Service keeps conversation memory by `conversationId`.
 
 ### GET `/api/v2/cortex/analyst/history/{conversationId}`
@@ -123,9 +142,29 @@ Response:
 
 Raw SQL execution endpoint used by the sandbox SQL adapter.
 
+Request:
+```json
+{
+  "sql": "SELECT * FROM sales LIMIT 10",
+  "warehouse": "optional",
+  "database": "optional",
+  "schema": "optional"
+}
+```
+
+Response:
+```json
+{
+  "rows": [],
+  "rowCount": 0,
+  "rewrittenSql": "SELECT * FROM sales LIMIT 10"
+}
+```
+
 ## Frontend API Routes
 
 - `/api/chat` -> turn route proxy
 - `/api/chat/stream` -> stream route proxy
+- `/api/system-status` -> environment badge route returning `{"environment":"Sandbox|Production"}`
 
 Both routes use orchestrator proxy mode (`WEB_BACKEND_MODE=orchestrator`, `ORCHESTRATOR_URL` set).
