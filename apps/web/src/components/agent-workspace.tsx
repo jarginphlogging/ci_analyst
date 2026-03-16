@@ -717,7 +717,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
   }
 
   const composerFooter = (
-    <footer className="mt-4 rounded-[1.75rem] border border-slate-300/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(242,248,253,0.92))] p-3 shadow-[0_14px_30px_rgba(14,44,68,0.08)] sm:p-4">
+    <footer className="mt-4 rounded-[1.75rem] border border-slate-300/80 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(242,248,253,0.92))] p-3 shadow-[0_10px_22px_rgba(14,44,68,0.06)] sm:p-4">
       {showStarterPrompts ? (
         <div className="mb-3 rounded-2xl border border-slate-200/90 bg-white/85 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.75)] sm:p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -751,7 +751,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                   <button
                     key={prompt.question}
                     onClick={() => setInput(prompt.question)}
-                    className={`group relative flex animate-fade-up flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_8px_18px_rgba(14,44,68,0.08)] transition duration-200 hover:border-cyan-500 hover:shadow-[0_14px_24px_rgba(14,44,68,0.14)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
+                    className={`group relative flex flex-col items-start justify-start rounded-2xl border border-slate-300/90 bg-[linear-gradient(160deg,#fefefe,#edf4fb)] px-3 py-2.5 text-left text-slate-900 shadow-[0_5px_12px_rgba(14,44,68,0.06)] transition duration-200 hover:border-cyan-500 hover:shadow-[0_8px_16px_rgba(14,44,68,0.09)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50 ${
                       isLastOddCard ? "sm:col-span-2" : ""
                     }`}
                     type="button"
@@ -762,7 +762,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                     <span className="absolute right-3 top-3 w-6 text-right text-xs font-semibold tabular-nums text-slate-500 group-hover:text-cyan-800">
                       {String(index + 1).padStart(2, "0")}
                     </span>
-                    <p className="mt-1.5 font-[var(--font-body)] text-sm font-medium leading-tight text-slate-800">{prompt.question}</p>
+                    <p className="mt-1.5 text-sm font-medium leading-snug text-slate-800">{prompt.question}</p>
                   </button>
                 );
               })}
@@ -788,7 +788,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         <button
           aria-label={isLoading ? "Stop analysis" : "Send message"}
           disabled={!isLoading && !input.trim()}
-          className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_10px_18px_rgba(15,36,56,0.24)] transition disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
+          className={`min-h-[42px] rounded-2xl border px-6 py-2.5 text-sm font-semibold text-white shadow-[0_6px_12px_rgba(15,36,56,0.18)] transition disabled:cursor-not-allowed disabled:border-slate-400 disabled:bg-slate-400 ${
             isLoading
               ? "border-rose-700 bg-[linear-gradient(145deg,#7f1d1d,#b91c1c)] hover:bg-[linear-gradient(145deg,#991b1b,#dc2626)]"
               : "border-slate-700 bg-slate-900 hover:bg-slate-800"
@@ -806,7 +806,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     <div className="relative min-h-screen overflow-x-clip bg-[radial-gradient(circle_at_10%_10%,#d7f5ff_0,#f5f2e9_38%,#eff4f8_100%)] lg:h-screen lg:overflow-hidden">
       <div className={workspaceGridClassName}>
         {isLeftPaneVisible ? (
-          <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_20px_50px_rgba(15,23,42,0.3)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+          <aside className="rounded-3xl border border-slate-200 bg-slate-900 p-4 text-slate-100 shadow-[0_12px_28px_rgba(15,23,42,0.2)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
           <p className="text-xs uppercase tracking-[0.22em] text-cyan-300">Customer Insights</p>
           <h1 className="mt-2 text-3xl font-bold leading-tight">Analyst</h1>
           <p className="mt-2 text-sm text-slate-300">Ask questions about your data in natural language.</p>
@@ -867,7 +867,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         ) : null}
 
         <section className="relative flex min-h-[calc(100vh-2.5rem)] flex-col lg:h-[calc(100vh-3rem)] lg:min-h-0">
-          <header className="relative z-10 rounded-2xl border border-slate-700/90 bg-slate-900 px-5 py-3 shadow-[0_22px_44px_rgba(15,23,42,0.26)]">
+          <header className="relative z-10 rounded-2xl border border-slate-700/90 bg-slate-900 px-5 py-3 shadow-[0_12px_24px_rgba(15,23,42,0.18)]">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-bold text-slate-100">Conversation Workspace</h2>
@@ -931,7 +931,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
             </div>
           </header>
 
-          <div className="relative mt-3 flex min-h-0 flex-1 flex-col rounded-[2rem] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(241,247,251,0.94))] p-4 pt-5 shadow-[0_18px_40px_rgba(14,44,68,0.13)] lg:overflow-hidden lg:p-5 lg:pt-6">
+          <div className="relative mt-3 flex min-h-0 flex-1 flex-col rounded-[2rem] border border-slate-200/90 bg-[linear-gradient(180deg,rgba(255,255,255,0.82),rgba(241,247,251,0.94))] p-4 pt-5 shadow-[0_10px_22px_rgba(14,44,68,0.08)] lg:overflow-hidden lg:p-5 lg:pt-6">
             <div
               aria-hidden="true"
               className="pointer-events-none absolute inset-x-0 top-0 z-10 h-8 bg-[linear-gradient(180deg,rgba(243,247,251,0.92)_0%,rgba(243,247,251,0.72)_38%,rgba(243,247,251,0.28)_68%,rgba(243,247,251,0)_100%)]"
@@ -947,7 +947,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               if (message.role === "user") {
                 return (
                   <article key={message.id} className="flex justify-end">
-                    <div className="max-w-[85%] animate-fade-up space-y-3 rounded-2xl rounded-br-md bg-slate-900 p-4 text-slate-100 shadow">
+                    <div className="max-w-[85%] space-y-3 rounded-2xl rounded-br-md bg-slate-900 p-4 text-slate-100 shadow-sm">
                       <div className="flex items-start justify-between gap-2">
                         <p className="text-xs uppercase tracking-[0.16em] text-cyan-300">User Query</p>
                         <p className="text-sm text-slate-300">{messageTime(message.createdAt)}</p>
@@ -960,7 +960,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               const responseIsFailure = message.response ? isFailureResponse(message.response) : false;
 
               return (
-                <article key={message.id} className="animate-fade-up space-y-3 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+                <article key={message.id} className="space-y-3 rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
                   <div className="flex flex-wrap items-start justify-between gap-2">
                     <div>
                       <p className="text-xs uppercase tracking-[0.16em] text-cyan-700">Agent Response</p>
@@ -989,7 +989,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                         <StreamActivityIndicator />
                         <div className="flex min-w-0 flex-1 items-center justify-between gap-2">
                           <p className="text-sm font-semibold text-cyan-900">Running your analysis</p>
-                          <span className="animate-fade-up rounded-full bg-white px-2 py-1 text-sm font-medium text-cyan-800">
+                          <span className="rounded-full bg-white px-2 py-1 text-sm font-medium text-cyan-800">
                             {(message.statusUpdates ?? []).at(-1) ?? "Initializing pipeline..."}
                           </span>
                         </div>
@@ -1104,7 +1104,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                                 <button
                                   key={question}
                                   onClick={() => setInput(question)}
-                                  className="group flex w-full items-start gap-3 rounded-xl border border-slate-300/90 bg-white px-3 py-2.5 text-left transition hover:border-cyan-500 hover:shadow-[0_10px_20px_rgba(14,44,68,0.10)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
+                                  className="group flex w-full items-start gap-3 rounded-xl border border-slate-300/90 bg-white px-3 py-2.5 text-left transition hover:border-cyan-500 hover:shadow-[0_6px_12px_rgba(14,44,68,0.07)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/50"
                                   type="button"
                                 >
                                   <span className="mt-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-slate-100 px-1 text-[11px] font-semibold text-slate-700 group-hover:bg-cyan-100 group-hover:text-cyan-800">
@@ -1180,7 +1180,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         </section>
 
         {isRightPaneVisible ? (
-          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_14px_32px_rgba(14,44,68,0.1)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
+          <aside className="rounded-3xl border border-slate-200 bg-white/80 p-4 shadow-[0_10px_20px_rgba(14,44,68,0.07)] lg:h-[calc(100vh-3rem)] lg:self-start lg:overflow-y-auto">
           <div className="rounded-2xl border border-slate-700 bg-slate-900 px-4 py-3">
             <p className="text-xl font-bold text-slate-100">Current Snapshot</p>
             <p className="mt-1 text-sm text-slate-300">

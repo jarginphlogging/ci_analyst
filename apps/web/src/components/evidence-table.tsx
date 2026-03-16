@@ -573,7 +573,7 @@ function ChartPanel({ table, config }: { table: DataTable; config: ChartConfig }
       ? "stacked area"
       : config.type.replace("_", " ");
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-3 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold tracking-wide text-slate-900">{title}</h3>
         <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-slate-600">
@@ -717,7 +717,7 @@ function ComparisonTablePanel({
   const showPct = config.deltaPolicy === "pct" || config.deltaPolicy === "both";
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold tracking-wide text-slate-900">Comparison Table</h3>
         <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
@@ -872,7 +872,7 @@ function ComparisonSignalsPanel({
   const currentValueHeader = sameWindow && compactCurrent ? compactCurrent : "Current Value";
   const tableMinWidth = sameWindow ? "min-w-[760px]" : "min-w-[980px]";
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold tracking-wide text-slate-900">{title}</h3>
         {sameWindow && primaryPrior && primaryCurrent ? (
@@ -943,7 +943,7 @@ function TablePanel({
   const rows = useMemo(() => sortedRows(table, tableConfig), [table, tableConfig]);
   const showRank = Boolean(tableConfig?.showRank || tableConfig?.style === "ranked");
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+    <section className="rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold tracking-wide text-slate-900">Primary Data Table</h3>
         {tableConfig?.style ? (
@@ -1010,7 +1010,7 @@ export function EvidenceTable({
   const table = dataTables?.[0];
   if (!table) {
     return (
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
         <h3 className="text-sm font-semibold tracking-wide text-slate-900">{primaryVisual?.title?.trim() || "Visualization"}</h3>
         <p className="mt-2 text-sm text-slate-600">No tabular output was returned for this request.</p>
       </section>

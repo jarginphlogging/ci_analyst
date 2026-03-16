@@ -40,7 +40,7 @@ export function DataExplorer({ tables }: { tables: DataTable[] }) {
 
   if (!selected) {
     return (
-      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+      <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
         <h3 className="text-sm font-semibold tracking-wide text-slate-900">Retrieved Data</h3>
         <p className="mt-2 text-sm text-slate-600">No tabular artifacts were returned for this query.</p>
       </section>
@@ -48,7 +48,7 @@ export function DataExplorer({ tables }: { tables: DataTable[] }) {
   }
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+    <section className="rounded-2xl border border-slate-200 bg-white/90 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold tracking-wide text-slate-900">Retrieved Data</h3>

@@ -464,7 +464,7 @@ function LlmExchangeCard({
   const sqlLabel = exchangeSql ? (exchangeSql.failed || stageFailed ? "Failed SQL" : "Executed SQL") : "";
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-[0_2px_10px_rgba(14,44,68,0.04)]">
+    <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-[0_1px_6px_rgba(14,44,68,0.03)]">
       <div className="flex items-center justify-between gap-2">
         <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-700">{exchangeLabel}</p>
         <span className="rounded-full border border-slate-300 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">
@@ -534,7 +534,7 @@ export function AnalysisTrace({ steps }: { steps: TraceStep[] }) {
   const [open, setOpen] = useState(false);
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white/85 p-4 shadow-[0_8px_24px_rgba(14,44,68,0.08)]">
+    <section className="rounded-2xl border border-slate-200 bg-white/85 p-4 shadow-[0_5px_14px_rgba(14,44,68,0.06)]">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h3 className="text-sm font-semibold tracking-wide text-slate-900">Analysis Trace</h3>
