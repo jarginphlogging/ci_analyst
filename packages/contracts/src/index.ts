@@ -4,7 +4,7 @@ export const chatTurnRequestSchema = z.object({
   sessionId: z.string().uuid().optional(),
   message: z.string().min(1),
   role: z.string().optional(),
-  explicitFilters: z.record(z.string(), z.array(z.string())).optional(),
+  entitlementFilters: z.record(z.string(), z.array(z.string())).optional(),
 });
 
 export type ChatTurnRequest = z.infer<typeof chatTurnRequestSchema>;

@@ -76,15 +76,16 @@ class RealDependencies:
         module_name = getattr(self._llm_fn, "__module__", "")
         if "azure_openai" in module_name:
             return "azure_openai"
-        if "anthropic" in module_name:
-            return "anthropic"
-        mode = settings.provider_mode.strip().lower()
-        if mode in {"prod", "prod-sandbox"}:
-            return "azure_openai"
-        if mode == "sandbox":
-            return "anthropic"
-        if mode:
-            return mode
+        if "anthropic_bedrock" in module_name:
+            return "anthropic_bedrock"
+        if "anthropic_llm" in module_name:
+            return "anthropic_direct"
+        try:
+            provider = settings.llm_provider
+        except RuntimeError:
+            provider = ""
+        if provider:
+            return provider
         return "llm"
 
     async def _ask_planner_payload(self, *, system_prompt: str, user_prompt: str, max_tokens: int) -> dict[str, Any]:

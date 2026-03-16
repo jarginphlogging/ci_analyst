@@ -12,14 +12,36 @@ from app.sandbox.sandbox_sca_service import SandboxSqlGenerationError, app
 
 def test_sandbox_sql_generation_llm_uses_azure_in_prod_sandbox_mode() -> None:
     original_provider_mode_raw = settings.provider_mode_raw
+    original_llm_provider_raw = settings.llm_provider_raw
     try:
         object.__setattr__(settings, "provider_mode_raw", "prod-sandbox")
+        object.__setattr__(settings, "llm_provider_raw", "azure_openai")
         provider_name, provider_fn = sandbox_sca_service._sql_generation_llm()
     finally:
         object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
+        object.__setattr__(settings, "llm_provider_raw", original_llm_provider_raw)
 
     assert provider_name == "azure_openai"
-    assert provider_fn is sandbox_sca_service.azure_chat_completion
+    from app.providers.azure_openai import chat_completion as azure_chat_completion
+
+    assert provider_fn is azure_chat_completion
+
+
+def test_sandbox_sql_generation_llm_uses_bedrock_in_prod_sandbox_mode() -> None:
+    original_provider_mode_raw = settings.provider_mode_raw
+    original_llm_provider_raw = settings.llm_provider_raw
+    try:
+        object.__setattr__(settings, "provider_mode_raw", "prod-sandbox")
+        object.__setattr__(settings, "llm_provider_raw", "anthropic_bedrock")
+        provider_name, provider_fn = sandbox_sca_service._sql_generation_llm()
+    finally:
+        object.__setattr__(settings, "provider_mode_raw", original_provider_mode_raw)
+        object.__setattr__(settings, "llm_provider_raw", original_llm_provider_raw)
+
+    assert provider_name == "anthropic_bedrock"
+    from app.providers.anthropic_bedrock import chat_completion as anthropic_bedrock_chat_completion
+
+    assert provider_fn is anthropic_bedrock_chat_completion
 
 
 def test_sandbox_cortex_query_endpoint(tmp_path: Path) -> None:

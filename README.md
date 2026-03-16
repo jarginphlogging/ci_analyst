@@ -186,7 +186,9 @@ For deeper guidance, see:
 ## Real Provider Setup
 
 For `PROVIDER_MODE=prod`, configure:
-- Azure OpenAI variables such as `AZURE_OPENAI_AUTH_MODE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, and credentials
+- `LLM_PROVIDER=azure_openai` or `LLM_PROVIDER=anthropic_bedrock`
+- for Azure OpenAI: `AZURE_OPENAI_AUTH_MODE`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, and credentials
+- for Anthropic via Bedrock: `ANTHROPIC_BEDROCK_AWS_ACCOUNT_NUMBER`, `ANTHROPIC_BEDROCK_AWS_REGION`, `ANTHROPIC_BEDROCK_WORKSPACE_ID`, `ANTHROPIC_BEDROCK_MODEL_ID`, optional `ANTHROPIC_BEDROCK_MODEL_NAME`, and enterprise runtime access to `cdao`
 - Snowflake variables such as `SNOWFLAKE_CORTEX_*`, `SNOWFLAKE_ACCOUNT`, and auth details
 - frontend routing:
   - `WEB_BACKEND_MODE=orchestrator`
@@ -194,6 +196,7 @@ For `PROVIDER_MODE=prod`, configure:
 
 Primary provider integration points:
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/azure_openai.py`
+- `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/anthropic_bedrock.py`
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/anthropic_llm.py`
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/snowflake_cortex.py`
 - `/Users/joe/Code/ci_analyst/apps/orchestrator/app/providers/sandbox_cortex.py`

@@ -6,7 +6,7 @@ exports.chatTurnRequestSchema = zod_1.z.object({
     sessionId: zod_1.z.string().uuid().optional(),
     message: zod_1.z.string().min(1),
     role: zod_1.z.string().optional(),
-    explicitFilters: zod_1.z.record(zod_1.z.string(), zod_1.z.array(zod_1.z.string())).optional(),
+    entitlementFilters: zod_1.z.record(zod_1.z.string(), zod_1.z.array(zod_1.z.string())).optional(),
 });
 exports.traceStatusSchema = zod_1.z.enum(["done", "running", "blocked"]);
 exports.traceStepSchema = zod_1.z.object({

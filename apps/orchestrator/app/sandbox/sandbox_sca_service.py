@@ -15,8 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
 from app.observability import bind_log_context, configure_logging
-from app.providers.anthropic_llm import chat_completion as anthropic_chat_completion
-from app.providers.azure_openai import chat_completion as azure_chat_completion
+from app.providers.llm_router import resolve_llm_provider
 from app.prompts.templates import sql_prompt
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 from app.services.llm_json import as_string_list, parse_json_object
@@ -185,9 +184,7 @@ def _preview_payload(value: Any, *, max_chars: int = 2000) -> str:
 
 
 def _sql_generation_llm() -> tuple[str, Any]:
-    if settings.provider_mode == "prod-sandbox":
-        return "azure_openai", azure_chat_completion
-    return "anthropic", anthropic_chat_completion
+    return resolve_llm_provider(settings.provider_mode)
 
 
 def _to_analyst_payload(*, parsed: SqlGenerationResponsePayload) -> dict[str, Any]:

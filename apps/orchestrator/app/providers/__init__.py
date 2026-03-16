@@ -7,6 +7,7 @@ from app.providers.factory import (
     build_prod_sandbox_provider_bundle,
     build_sandbox_provider_bundle,
 )
+from app.providers.llm_router import resolve_llm_provider
 from app.providers.protocols import AnalystFn, AnalystProvider, LlmFn, LlmProvider, SqlFn, SqlProvider
 
 __all__ = [
@@ -21,4 +22,5 @@ __all__ = [
     "build_prod_sandbox_provider_bundle",
     "build_sandbox_provider_bundle",
     "build_provider_bundle",
+    "resolve_llm_provider",
 ]

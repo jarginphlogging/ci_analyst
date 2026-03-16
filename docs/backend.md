@@ -166,10 +166,12 @@ Important settings families:
   - `LOG_LEVEL`
 - provider mode
   - `PROVIDER_MODE`
+  - `LLM_PROVIDER`
 - Azure OpenAI
   - endpoint, deployment, auth mode, keys/cert inputs
 - Anthropic
   - base URL, API key, model
+  - Amazon Bedrock BYOA account/workspace/model identifiers
 - Snowflake Cortex / analyst
   - base URL, auth inputs, semantic references
 - Snowflake connector SQL
@@ -187,6 +189,10 @@ Important normalization:
   - `sandbox`
   - `prod`
   - `prod-sandbox`
+- llm provider resolves to one of:
+  - `anthropic_direct`
+  - `azure_openai`
+  - `anthropic_bedrock`
 - unknown values normalize to `sandbox`
 
 Important operational rule:
@@ -215,6 +221,12 @@ The backend abstracts providers through three callable protocol surfaces:
 ### Provider bundle factory
 
 `build_provider_bundle` selects runtime providers from provider mode.
+
+LLM selection is explicit:
+- `sandbox` only supports `LLM_PROVIDER=anthropic_direct`
+- `prod` supports `LLM_PROVIDER=azure_openai` or `LLM_PROVIDER=anthropic_bedrock`
+- `prod-sandbox` supports `LLM_PROVIDER=azure_openai` or `LLM_PROVIDER=anthropic_bedrock`
+- invalid or missing prod/prod-sandbox LLM selections fail fast during provider wiring
 
 Current modes:
 - `sandbox`

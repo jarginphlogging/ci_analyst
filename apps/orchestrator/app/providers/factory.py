@@ -3,8 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.config import settings
-from app.providers.anthropic_llm import chat_completion as anthropic_chat_completion
-from app.providers.azure_openai import chat_completion
+from app.providers.llm_router import resolve_llm_provider
 from app.providers.protocols import AnalystFn, LlmFn, SqlFn
 from app.providers.sandbox_cortex import analyze_message, execute_sandbox_sql
 from app.providers.snowflake_analyst import analyze_message as analyze_snowflake_analyst_message
@@ -19,24 +18,27 @@ class ProviderBundle:
 
 
 def build_live_provider_bundle() -> ProviderBundle:
+    _, llm_fn = resolve_llm_provider("prod")
     return ProviderBundle(
-        llm_fn=chat_completion,
+        llm_fn=llm_fn,
         sql_fn=execute_snowflake_sql,
         analyst_fn=analyze_snowflake_analyst_message,
     )
 
 
 def build_prod_sandbox_provider_bundle() -> ProviderBundle:
+    _, llm_fn = resolve_llm_provider("prod-sandbox")
     return ProviderBundle(
-        llm_fn=chat_completion,
+        llm_fn=llm_fn,
         sql_fn=execute_sandbox_sql,
         analyst_fn=analyze_message,
     )
 
 
 def build_sandbox_provider_bundle() -> ProviderBundle:
+    _, llm_fn = resolve_llm_provider("sandbox")
     return ProviderBundle(
-        llm_fn=anthropic_chat_completion,
+        llm_fn=llm_fn,
         sql_fn=execute_sandbox_sql,
         analyst_fn=analyze_message,
     )

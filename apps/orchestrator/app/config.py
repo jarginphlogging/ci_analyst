@@ -61,6 +61,7 @@ class Settings:
     port: int = int(os.getenv("PORT", "8787"))
     log_level: str = _as_nonempty(os.getenv("LOG_LEVEL"), "INFO").upper()
     provider_mode_raw: Optional[str] = os.getenv("PROVIDER_MODE")
+    llm_provider_raw: Optional[str] = os.getenv("LLM_PROVIDER")
 
     azure_openai_endpoint: Optional[str] = _as_optional(os.getenv("AZURE_OPENAI_ENDPOINT"))
     azure_openai_api_key: Optional[str] = _as_optional(os.getenv("AZURE_OPENAI_API_KEY"))
@@ -83,6 +84,21 @@ class Settings:
     anthropic_api_key: Optional[str] = os.getenv("ANTHROPIC_API_KEY")
     anthropic_model: str = os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-latest")
     anthropic_api_version: str = os.getenv("ANTHROPIC_API_VERSION", "2023-06-01")
+    anthropic_bedrock_aws_account_number: Optional[str] = _as_optional(
+        os.getenv("ANTHROPIC_BEDROCK_AWS_ACCOUNT_NUMBER")
+    )
+    anthropic_bedrock_aws_region: Optional[str] = _as_optional(os.getenv("ANTHROPIC_BEDROCK_AWS_REGION"))
+    anthropic_bedrock_workspace_id: Optional[str] = _as_optional(os.getenv("ANTHROPIC_BEDROCK_WORKSPACE_ID"))
+    anthropic_bedrock_is_execution_role: bool = _as_bool(os.getenv("ANTHROPIC_BEDROCK_IS_EXECUTION_ROLE"), False)
+    anthropic_bedrock_model_id: Optional[str] = _as_optional(os.getenv("ANTHROPIC_BEDROCK_MODEL_ID"))
+    anthropic_bedrock_model_name: str = _as_nonempty(
+        os.getenv("ANTHROPIC_BEDROCK_MODEL_NAME"),
+        "anthropic.claude-opus-4-1-20250805-v1:0",
+    )
+    anthropic_bedrock_anthropic_version: str = _as_nonempty(
+        os.getenv("ANTHROPIC_BEDROCK_ANTHROPIC_VERSION"),
+        "bedrock-2023-05-31",
+    )
 
     snowflake_cortex_base_url: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_BASE_URL")
     snowflake_cortex_api_key: Optional[str] = os.getenv("SNOWFLAKE_CORTEX_API_KEY")
@@ -143,6 +159,23 @@ class Settings:
             return "prod-sandbox"
         return "sandbox"
 
+    @property
+    def llm_provider(self) -> str:
+        raw = (self.llm_provider_raw or "").strip().lower().replace("-", "_")
+        if not raw:
+            if self.provider_mode == "sandbox":
+                return "anthropic_direct"
+            raise RuntimeError(
+                "LLM_PROVIDER must be set for prod and prod-sandbox. "
+                "Use one of: azure_openai, anthropic_bedrock."
+            )
+        if raw in {"azure_openai", "anthropic_bedrock", "anthropic_direct"}:
+            return raw
+        raise RuntimeError(
+            f"Unsupported LLM_PROVIDER '{self.llm_provider_raw}'. "
+            "Use one of: azure_openai, anthropic_bedrock, anthropic_direct."
+        )
+
     def has_azure_credentials(self) -> bool:
         if not self.azure_openai_endpoint or not self.azure_openai_deployment:
             return False
@@ -152,6 +185,14 @@ class Settings:
 
     def has_anthropic_credentials(self) -> bool:
         return bool(self.anthropic_api_key and self.anthropic_model)
+
+    def has_anthropic_bedrock_credentials(self) -> bool:
+        return bool(
+            self.anthropic_bedrock_aws_account_number
+            and self.anthropic_bedrock_aws_region
+            and self.anthropic_bedrock_workspace_id
+            and self.anthropic_bedrock_model_id
+        )
 
     def has_snowflake_credentials(self) -> bool:
         return bool(self.snowflake_cortex_base_url and self.snowflake_cortex_api_key)

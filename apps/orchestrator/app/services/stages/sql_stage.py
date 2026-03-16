@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import inspect
 import logging
-import re
-from datetime import date, datetime, timedelta
 from time import perf_counter
 from typing import Any, Awaitable, Callable, Optional
 
@@ -29,148 +26,26 @@ from app.services.stages.sql_state_machine import (
     normalize_retry_feedback,
 )
 from app.services.stages.sql_stage_topology import dependency_indices, dependency_levels, execution_dispatch
-from app.services.table_analysis import normalize_rows
+from app.services.stages.sql_stage_dependency_context import (
+    compact_context_value,
+    dependency_context_for_step,
+    sample_dependency_rows,
+)
+from app.services.stages.sql_stage_execution import (
+    AllNullRowsError,
+    execute_generated_step,
+    execute_sql,
+    is_timeout_error,
+    raise_execution_timeout,
+)
+from app.services.stages.sql_stage_runtime import append_unique, emit_progress, flatten_retry_feedback
+from app.services.stages.sql_stage_temporal import TemporalScopeMismatchError, validate_temporal_scope_result
 
 AskLlmJsonFn = Callable[..., Awaitable[dict[str, Any]]]
 SqlFn = Callable[[str], Awaitable[list[dict[str, Any]]]]
 AnalystFn = Callable[..., Awaitable[dict[str, Any]]]
 ProgressFn = Callable[[str], Optional[Awaitable[None]]]
 logger = logging.getLogger(__name__)
-
-
-class _AllNullRowsError(RuntimeError):
-    pass
-
-
-class _TemporalScopeMismatchError(RuntimeError):
-    pass
-
-
-_ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-
-
-def _parse_date(value: Any) -> date | None:
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if not isinstance(value, str):
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    if _ISO_DATE_PATTERN.match(raw):
-        try:
-            return datetime.fromisoformat(raw).date()
-        except ValueError:
-            return None
-    if len(raw) >= 10 and _ISO_DATE_PATTERN.match(raw[:10]):
-        try:
-            return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
-        except ValueError:
-            return None
-    return None
-
-
-def _append_unique(target: list[str], items: list[str], *, limit: int | None = None) -> None:
-    for item in items:
-        text = " ".join(str(item).split()).strip()
-        if not text or text in target:
-            continue
-        target.append(text)
-        if limit is not None and len(target) >= limit:
-            return
-
-
-def _period_start(value: date, unit: str) -> date:
-    if unit == "day":
-        return value
-    if unit == "week":
-        return value - timedelta(days=value.weekday())
-    if unit == "month":
-        return value.replace(day=1)
-    if unit == "quarter":
-        month = ((value.month - 1) // 3) * 3 + 1
-        return value.replace(month=month, day=1)
-    if unit == "year":
-        return value.replace(month=1, day=1)
-    return value
-
-
-def _add_period(start: date, unit: str) -> date:
-    if unit == "day":
-        return start + timedelta(days=1)
-    if unit == "week":
-        return start + timedelta(weeks=1)
-    if unit == "month":
-        year = start.year + (start.month // 12)
-        month = (start.month % 12) + 1
-        return date(year, month, 1)
-    if unit == "quarter":
-        month_index = (start.month - 1) + 3
-        year = start.year + (month_index // 12)
-        month = (month_index % 12) + 1
-        return date(year, month, 1)
-    if unit == "year":
-        return date(start.year + 1, 1, 1)
-    return start
-
-
-def _best_date_column(rows: list[dict[str, Any]]) -> str | None:
-    if not rows:
-        return None
-    best_column: str | None = None
-    best_count = 0
-    for column in rows[0].keys():
-        count = 0
-        for row in rows:
-            if _parse_date(row.get(column)) is not None:
-                count += 1
-        if count > best_count:
-            best_count = count
-            best_column = str(column)
-    return best_column if best_count > 0 else None
-
-
-def _validate_temporal_scope_result(result: SqlExecutionResult, temporal_scope: TemporalScope) -> str | None:
-    if temporal_scope.granularity is None:
-        return None
-    date_column = _best_date_column(result.rows)
-    if date_column is None:
-        return None
-
-    period_starts: set[date] = set()
-    for row in result.rows:
-        parsed = _parse_date(row.get(date_column))
-        if parsed is None:
-            continue
-        period_starts.add(_period_start(parsed, temporal_scope.granularity))
-    if not period_starts:
-        return None
-
-    ordered = sorted(period_starts)
-    expected_count = temporal_scope.count
-    if len(ordered) != expected_count:
-        return (
-            f"Temporal scope mismatch: expected {expected_count} {temporal_scope.granularity} period(s), "
-            f"but found {len(ordered)} distinct period(s) in column '{date_column}'."
-        )
-
-    for index in range(1, len(ordered)):
-        if ordered[index] != _add_period(ordered[index - 1], temporal_scope.granularity):
-            return (
-                f"Temporal scope mismatch: expected contiguous {temporal_scope.granularity} periods "
-                f"but found gaps in column '{date_column}'."
-            )
-    return None
-
-
-async def _emit_progress(progress_callback: ProgressFn | None, message: str) -> None:
-    if progress_callback is None:
-        return
-    maybe_result = progress_callback(message)
-    if inspect.isawaitable(maybe_result):
-        await maybe_result
 
 
 class SqlExecutionStage:
@@ -204,47 +79,23 @@ class SqlExecutionStage:
 
     @staticmethod
     def _flatten_retry_feedback(retry_feedback_by_step: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-        flattened: list[dict[str, Any]] = []
-        for step_id, entries in retry_feedback_by_step.items():
-            for entry in entries[-6:]:
-                payload = dict(entry)
-                payload.setdefault("stepId", step_id)
-                flattened.append(payload)
-        return normalize_retry_feedback(flattened, max_items=12)
+        return flatten_retry_feedback(retry_feedback_by_step)
 
     @classmethod
     def _compact_context_value(cls, value: Any) -> Any:
-        if value is None or isinstance(value, (int, float, bool)):
-            return value
-        text = " ".join(str(value).split()).strip()
-        if len(text) <= cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS:
-            return text
-        return f"{text[: cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS - 3]}..."
+        return compact_context_value(
+            value,
+            max_cell_chars=cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS,
+        )
 
     @classmethod
     def _sample_dependency_rows(cls, rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool]:
-        if not rows:
-            return [], False
-        total = len(rows)
-        limit = cls._DEPENDENCY_CONTEXT_MAX_ROWS
-        if total <= limit:
-            selected = rows
-            truncated = False
-        else:
-            head = max(1, limit // 2)
-            tail = max(1, limit - head)
-            selected = [*rows[:head], *rows[-tail:]]
-            truncated = True
-
-        sampled: list[dict[str, Any]] = []
-        for row in selected:
-            compact_row: dict[str, Any] = {}
-            for column_index, (column, value) in enumerate(row.items()):
-                if column_index >= cls._DEPENDENCY_CONTEXT_MAX_COLUMNS:
-                    break
-                compact_row[str(column)] = cls._compact_context_value(value)
-            sampled.append(compact_row)
-        return sampled, truncated
+        return sample_dependency_rows(
+            rows,
+            max_rows=cls._DEPENDENCY_CONTEXT_MAX_ROWS,
+            max_columns=cls._DEPENDENCY_CONTEXT_MAX_COLUMNS,
+            max_cell_chars=cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS,
+        )
 
     @classmethod
     def _dependency_context_for_step(
@@ -255,67 +106,18 @@ class SqlExecutionStage:
         plan: list[QueryPlanStep],
         results_by_index: dict[int, SqlExecutionResult],
     ) -> list[dict[str, Any]]:
-        dependency_indexes = sorted(dependencies_by_index.get(index, set()))
-        if not dependency_indexes:
-            return []
-
-        context_items: list[dict[str, Any]] = []
-        for dep_index in dependency_indexes:
-            result = results_by_index.get(dep_index)
-            if result is None:
-                continue
-            sampled_rows, truncated = cls._sample_dependency_rows(result.rows)
-            context_items.append(
-                {
-                    "stepId": plan[dep_index].id,
-                    "stepGoal": plan[dep_index].goal,
-                    "rowCount": result.rowCount,
-                    "columns": list(result.rows[0].keys()) if result.rows else [],
-                    "sampleRows": sampled_rows,
-                    "sampleTruncated": truncated,
-                }
-            )
-        return context_items
+        return dependency_context_for_step(
+            index=index,
+            dependencies_by_index=dependencies_by_index,
+            plan=plan,
+            results_by_index=results_by_index,
+            max_rows=cls._DEPENDENCY_CONTEXT_MAX_ROWS,
+            max_columns=cls._DEPENDENCY_CONTEXT_MAX_COLUMNS,
+            max_cell_chars=cls._DEPENDENCY_CONTEXT_MAX_CELL_CHARS,
+        )
 
     async def _execute_sql(self, sql: str) -> SqlExecutionResult:
-        started_at = perf_counter()
-        sql_preview = " ".join(sql.split())[:260]
-        logger.info(
-            "SQL execution started",
-            extra={
-                "event": "sql.execution.started",
-                "sqlChars": len(sql),
-                "sqlPreview": sql_preview,
-            },
-        )
-        try:
-            raw_rows = await self._sql_fn(sql)
-            normalized_rows = normalize_rows(raw_rows)
-        except Exception:
-            logger.exception(
-                "SQL execution failed",
-                extra={
-                    "event": "sql.execution.failed",
-                    "sqlChars": len(sql),
-                    "sqlPreview": sql_preview,
-                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
-                },
-            )
-            raise
-        logger.info(
-            "SQL execution completed",
-            extra={
-                "event": "sql.execution.completed",
-                "durationMs": round((perf_counter() - started_at) * 1000, 2),
-                "rowCount": len(normalized_rows),
-                "sqlPreview": sql_preview,
-            },
-        )
-        return SqlExecutionResult(
-            sql=sql,
-            rows=normalized_rows,
-            rowCount=len(normalized_rows),
-        )
+        return await execute_sql(sql, sql_fn=self._sql_fn)
 
     @staticmethod
     def _informed_clarification_message(
@@ -401,33 +203,12 @@ class SqlExecutionStage:
         total_steps: int,
         progress_callback: ProgressFn | None,
     ) -> tuple[int, SqlExecutionResult]:
-        def _rows_all_null(rows: list[dict[str, Any]]) -> bool:
-            if not rows:
-                return False
-            for row in rows:
-                if any(value is not None for value in row.values()):
-                    return False
-            return True
-
-        await _emit_progress(progress_callback, f"Running data retrieval step {generated.index + 1}/{total_steps}")
-        if generated.rows is not None and generated.sql:
-            normalized_rows = normalize_rows(generated.rows)
-            result = SqlExecutionResult(
-                sql=generated.sql,
-                rows=normalized_rows,
-                rowCount=len(normalized_rows),
-            )
-        else:
-            if not generated.sql:
-                raise RuntimeError("SQL generation produced no executable SQL.")
-            result = await self._execute_sql(generated.sql)
-        if _rows_all_null(result.rows):
-            raise _AllNullRowsError("SQL returned only null values.")
-        await _emit_progress(
-            progress_callback,
-            f"Completed data retrieval step {generated.index + 1}/{total_steps} ({result.rowCount} rows)",
+        return await execute_generated_step(
+            generated=generated,
+            total_steps=total_steps,
+            progress_callback=progress_callback,
+            sql_fn=self._sql_fn,
         )
-        return generated.index, result
 
     async def _generate_ready_step(
         self,
@@ -454,16 +235,16 @@ class SqlExecutionStage:
         generation_history = list(history)
         while True:
             if attempt == 1:
-                await _emit_progress(progress_callback, f"Preparing data retrieval step {index + 1}/{total_steps}: {step.goal}")
+                await emit_progress(progress_callback, f"Preparing data retrieval step {index + 1}/{total_steps}: {step.goal}")
                 if self._analyst_fn is not None:
-                    await _emit_progress(
+                    await emit_progress(
                         progress_callback,
                         f"Preparing data retrieval for step {index + 1}/{total_steps}",
                     )
                 else:
-                    await _emit_progress(progress_callback, f"Preparing data retrieval for step {index + 1}/{total_steps}")
+                    await emit_progress(progress_callback, f"Preparing data retrieval for step {index + 1}/{total_steps}")
             else:
-                await _emit_progress(
+                await emit_progress(
                     progress_callback,
                     f"Refining data retrieval for step {index + 1}/{total_steps} (attempt {attempt}/{MAX_SQL_ATTEMPTS})",
                 )
@@ -480,9 +261,9 @@ class SqlExecutionStage:
                 temporal_scope=temporal_scope.model_dump(mode="json", exclude_none=True) if temporal_scope else None,
                 dependency_context=dependency_context,
             )
-            _append_unique(interpretation_notes, generated.interpretation_notes, limit=6)
-            _append_unique(caveats, generated.caveats, limit=8)
-            _append_unique(assumptions, generated.assumptions, limit=8)
+            append_unique(interpretation_notes, generated.interpretation_notes, limit=6)
+            append_unique(caveats, generated.caveats, limit=8)
+            append_unique(assumptions, generated.assumptions, limit=8)
 
             if generated.status == "sql_ready" and generated.sql:
                 return generated, attempt
@@ -556,47 +337,6 @@ class SqlExecutionStage:
         temporal_scope: TemporalScope | None,
         dependency_context: list[dict[str, Any]] | None = None,
     ) -> tuple[int, SqlExecutionResult]:
-        def _is_timeout_error(error: Exception) -> bool:
-            if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
-                return True
-            return "timeout" in type(error).__name__.lower()
-
-        def _raise_execution_timeout(
-            *,
-            step_id: str,
-            attempt: int,
-            failed_sql: str | None,
-            retry_feedback: list[dict[str, Any]],
-            error_text: str,
-            elapsed_seconds: float,
-        ) -> None:
-            retry_feedback_tail = normalize_retry_feedback(retry_feedback[-8:], max_items=6)
-            user_message = informed_clarification_message(
-                step_goal=current_generated.step.goal,
-                clarification_question=current_generated.clarification_question,
-                clarification_kind=current_generated.clarification_kind,
-                retry_feedback=retry_feedback_tail,
-                max_attempts=MAX_SQL_ATTEMPTS,
-                fallback_error=error_text,
-            )
-            raise SqlGenerationBlockedError(
-                stop_reason="clarification",
-                user_message=user_message,
-                detail={
-                    "phase": "sql_execution",
-                    "stepId": step_id,
-                    "attempt": attempt,
-                    "maxAttempts": MAX_SQL_ATTEMPTS,
-                    "error": error_text,
-                    "errorCode": SqlFailureCode.EXECUTION_TIMEOUT.value,
-                    "errorCategory": error_category(SqlFailureCode.EXECUTION_TIMEOUT),
-                    "failedSql": failed_sql,
-                    "retryFeedback": retry_feedback_tail,
-                    "elapsedSeconds": round(elapsed_seconds, 2),
-                    "slaSeconds": settings.sql_step_sla_seconds,
-                },
-            )
-
         current_generated = generated
         attempt_cursor = generated_attempt
         step_retry_feedback = retry_feedback_by_step.setdefault(current_generated.step.id, [])
@@ -610,9 +350,9 @@ class SqlExecutionStage:
                     progress_callback=progress_callback,
                 )
                 if temporal_scope is not None:
-                    mismatch_reason = _validate_temporal_scope_result(result, temporal_scope)
+                    mismatch_reason = validate_temporal_scope_result(result, temporal_scope)
                     if mismatch_reason:
-                        raise _TemporalScopeMismatchError(mismatch_reason)
+                        raise TemporalScopeMismatchError(mismatch_reason)
                 return index, result
             except Exception as error:
                 logger.exception(
@@ -629,13 +369,13 @@ class SqlExecutionStage:
                 error_text = str(error).strip()
                 failure_code = (
                     SqlFailureCode.EXECUTION_ALL_NULL_ROWS
-                    if isinstance(error, _AllNullRowsError)
+                    if isinstance(error, AllNullRowsError)
                     else (
                         SqlFailureCode.EXECUTION_TEMPORAL_MISMATCH
-                        if isinstance(error, _TemporalScopeMismatchError)
+                        if isinstance(error, TemporalScopeMismatchError)
                         else (
                         SqlFailureCode.EXECUTION_TIMEOUT
-                        if _is_timeout_error(error)
+                        if is_timeout_error(error)
                         else SqlFailureCode.EXECUTION_WAREHOUSE_ERROR
                         )
                     )
@@ -657,10 +397,9 @@ class SqlExecutionStage:
 
                 if failure_code == SqlFailureCode.EXECUTION_TIMEOUT or elapsed_seconds >= settings.sql_step_sla_seconds:
                     timeout_text = error_text or "SQL execution exceeded SLA."
-                    _raise_execution_timeout(
-                        step_id=current_generated.step.id,
+                    raise_execution_timeout(
+                        generated=current_generated,
                         attempt=attempt_cursor,
-                        failed_sql=current_generated.sql,
                         retry_feedback=step_retry_feedback,
                         error_text=timeout_text,
                         elapsed_seconds=elapsed_seconds,
@@ -692,7 +431,7 @@ class SqlExecutionStage:
                         },
                     ) from error
 
-                await _emit_progress(
+                await emit_progress(
                     progress_callback,
                     (
                         f"Data retrieval step {current_generated.index + 1}/{total_steps} failed on attempt {attempt_cursor}: "
@@ -781,7 +520,7 @@ class SqlExecutionStage:
                 )
 
             dispatch = execution_dispatch(self._analyst_fn)
-            await _emit_progress(
+            await emit_progress(
                 progress_callback,
                 f"Dispatching {total_steps} data retrieval step(s) to {dispatch.target_label}",
             )
@@ -846,7 +585,7 @@ class SqlExecutionStage:
                 generated_level_steps = [generated for generated, _ in ordered_generated_level]
                 should_parallel_execute = len(generated_level) > 1 and dispatch.parallel_capable
                 level_positions = ", ".join(str(index + 1) for index in level)
-                await _emit_progress(
+                await emit_progress(
                     progress_callback,
                     (
                         f"Executing level [{level_positions}] in parallel on {dispatch.target_label}"

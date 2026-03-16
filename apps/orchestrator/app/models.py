@@ -28,7 +28,7 @@ class ChatTurnRequest(BaseModel):
     sessionId: Optional[UUID] = None
     message: str
     role: Optional[str] = None
-    explicitFilters: Optional[dict[str, list[str]]] = None
+    entitlementFilters: Optional[dict[str, list[str]]] = None
 
 
 class TraceStep(BaseModel):

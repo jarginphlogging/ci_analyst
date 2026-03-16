@@ -40,8 +40,9 @@ Provider modes:
 - No external Snowflake/Cortex API key required for sandbox mode.
 
 `prod-sandbox` mode uses:
-- Azure OpenAI for routing, planning, and narrative synthesis
-- Local pseudo-Cortex Analyst REST service for analyst-style SQL generation, powered by Azure OpenAI
+- `LLM_PROVIDER=azure_openai` or `LLM_PROVIDER=anthropic_bedrock`
+- The selected LLM provider for routing, planning, and narrative synthesis
+- Local pseudo-Cortex Analyst REST service for analyst-style SQL generation, powered by the same selected LLM provider
 - Local seeded SQLite dataset with allowlisted banking tables
 - No Snowflake connectivity required
 
@@ -50,6 +51,16 @@ Azure auth supports:
 - `AZURE_OPENAI_AUTH_MODE=certificate` with `AZURE_TENANT_ID`, `AZURE_SPN_CLIENT_ID`, `AZURE_SPN_CERT_PATH` (optional `AZURE_SPN_CERT_PASSWORD`)
 - `AZURE_OPENAI_DEPLOYMENT` or `AZURE_OPENAI_MODEL` for the Azure deployment/model name
 - optional enterprise gateway header via `AZURE_OPENAI_GATEWAY_API_KEY` (alias: `AZURE_API_KEY`) and `AZURE_OPENAI_GATEWAY_API_KEY_HEADER`
+
+Anthropic Bedrock supports:
+- `ANTHROPIC_BEDROCK_AWS_ACCOUNT_NUMBER`
+- `ANTHROPIC_BEDROCK_AWS_REGION`
+- `ANTHROPIC_BEDROCK_WORKSPACE_ID`
+- `ANTHROPIC_BEDROCK_IS_EXECUTION_ROLE`
+- `ANTHROPIC_BEDROCK_MODEL_ID`
+- optional `ANTHROPIC_BEDROCK_MODEL_NAME`
+- optional `ANTHROPIC_BEDROCK_ANTHROPIC_VERSION`
+- enterprise runtime access to `cdao` plus AWS credentials available to the internal package path
 
 Snowflake prod auth/config supports:
 - Analyst generation: `SNOWFLAKE_CORTEX_BASE_URL`, `SNOWFLAKE_CORTEX_API_KEY`, and one semantic model reference (`SNOWFLAKE_CORTEX_SEMANTIC_MODEL_FILE` or `SNOWFLAKE_CORTEX_SEMANTIC_MODEL` or `SNOWFLAKE_CORTEX_SEMANTIC_VIEW` or `SNOWFLAKE_CORTEX_SEMANTIC_MODELS_JSON`)
@@ -147,5 +158,7 @@ SQL retry/tracing contract:
 Set in `.env`:
 
 - `PROVIDER_MODE=sandbox` (local end-to-end testing without enterprise services)
-- `PROVIDER_MODE=prod-sandbox` (Azure OpenAI + local Cortex emulator + SQLite)
-- `PROVIDER_MODE=prod` (Azure/Snowflake/Cortex)
+- `PROVIDER_MODE=prod-sandbox` (`LLM_PROVIDER` + local Cortex emulator + SQLite)
+- `PROVIDER_MODE=prod` (`LLM_PROVIDER` + Snowflake/Cortex)
+- `LLM_PROVIDER=anthropic_direct` for `sandbox`
+- `LLM_PROVIDER=azure_openai` or `LLM_PROVIDER=anthropic_bedrock` for `prod` and `prod-sandbox`

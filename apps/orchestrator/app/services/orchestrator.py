@@ -31,8 +31,31 @@ from app.evaluation.inline_checks import (
     redact_pii,
 )
 from app.services.llm_trace import LlmTraceCollector, LlmTraceEntry, bind_llm_trace_collector
+from app.services.orchestrator_summaries import (
+    deterministic_answer_fallback,
+    history_summary,
+    plan_summary,
+    preview_text,
+    response_summary,
+    result_row_sample,
+    results_summary,
+)
+from app.services.orchestrator_trace import (
+    build_trace,
+    human_response_for_trace_entry,
+    llm_entries_for_stages,
+    llm_prompt_payload,
+    llm_response_payload,
+    planner_blocked_trace_step,
+    planner_completed_trace_step,
+    provider_request_payloads,
+    sql_generation_blocked_trace_step,
+    sql_retry_feedback,
+    step_runtime,
+    trace_until_sql_failure,
+    warehouse_errors,
+)
 from app.services.stages import PlannerBlockedError, SqlGenerationBlockedError
-from app.services.stages.sql_state_machine import execution_error_view, normalize_retry_feedback
 from app.services.stages.synthesis_stage import build_incremental_answer_deltas
 from app.services.types import OrchestratorDependencies, TurnExecutionContext
 from app.config import settings
@@ -402,99 +425,28 @@ class ConversationalOrchestrator:
 
     @staticmethod
     def _preview_text(text: str, max_chars: int = 220) -> str:
-        collapsed = " ".join(text.split())
-        if len(collapsed) <= max_chars:
-            return collapsed
-        return f"{collapsed[: max_chars - 3]}..."
+        return preview_text(text, max_chars=max_chars)
 
     def _history_summary(self, history: list[str]) -> dict[str, Any]:
-        return {
-            "historyDepth": len(history),
-            "recentTurns": [self._preview_text(turn, max_chars=140) for turn in history[-3:]],
-        }
+        return history_summary(history)
 
     def _plan_summary(self, context: TurnExecutionContext) -> dict[str, Any]:
-        return {
-            "presentationIntent": context.presentation_intent.model_dump(),
-            "stepCount": len(context.plan),
-            "steps": [
-                {
-                    "id": step.id,
-                    "goal": self._preview_text(step.goal, max_chars=180),
-                    "dependsOn": step.dependsOn,
-                    "independent": step.independent,
-                }
-                for step in context.plan
-            ],
-        }
+        return plan_summary(context)
 
     def _result_row_sample(self, row: dict[str, Any], max_columns: int = 8) -> dict[str, Any]:
-        sampled: dict[str, Any] = {}
-        column_items = list(row.items())[:max_columns]
-        for key, value in column_items:
-            if isinstance(value, str):
-                sampled[key] = self._preview_text(value, max_chars=90)
-            elif isinstance(value, (int, float, bool)) or value is None:
-                sampled[key] = value
-            else:
-                sampled[key] = self._preview_text(str(value), max_chars=90)
-        if len(row) > max_columns:
-            sampled["__truncatedColumns"] = len(row) - max_columns
-        return sampled
+        return result_row_sample(row, max_columns=max_columns)
 
     def _results_summary(self, results: list[SqlExecutionResult]) -> dict[str, Any]:
-        step_summaries = []
-        for index, result in enumerate(results, start=1):
-            sample_rows = [self._result_row_sample(row) for row in result.rows[:2]]
-            column_count = len(result.rows[0]) if result.rows else 0
-            step_summaries.append(
-                {
-                    "stepIndex": index,
-                    "rowCount": result.rowCount,
-                    "columnCount": column_count,
-                    "sqlPreview": self._preview_text(result.sql, max_chars=260),
-                    "sampleRows": sample_rows,
-                }
-            )
-
-        return {
-            "queryCount": len(results),
-            "totalRows": sum(result.rowCount for result in results),
-            "steps": step_summaries,
-        }
+        return results_summary(results)
 
     def _response_summary(self, response: AgentResponse) -> dict[str, Any]:
-        return {
-            "presentationIntent": response.presentationIntent.model_dump() if response.presentationIntent else None,
-            "chartConfig": response.chartConfig.model_dump() if response.chartConfig else None,
-            "tableConfig": response.tableConfig.model_dump() if response.tableConfig else None,
-            "confidence": response.confidence,
-            "answerPreview": self._preview_text(response.answer, max_chars=260),
-            "metricLabels": [metric.label for metric in response.metrics[:5]],
-            "summaryCardLabels": [card.label for card in response.summaryCards[:5]],
-            "primaryVisual": response.primaryVisual.model_dump() if response.primaryVisual else None,
-            "insightTitles": [insight.title for insight in response.insights[:5]],
-            "suggestedQuestions": response.suggestedQuestions[:3],
-            "tableCount": len(response.dataTables),
-            "artifactCount": len(response.artifacts),
-        }
+        return response_summary(response)
 
     def _inline_checks_for_stage(self, stage_id: str) -> list[str]:
         return list(self._latest_inline_checks.get(stage_id, []))
 
     def _deterministic_answer_fallback(self, response: AgentResponse) -> str:
-        summary_bits: list[str] = []
-        if response.summaryCards:
-            for card in response.summaryCards[:3]:
-                summary_bits.append(f"{card.label}: {card.value}")
-        elif response.metrics:
-            for metric in response.metrics[:3]:
-                summary_bits.append(f"{metric.label}: {metric.value} {metric.unit}")
-        elif response.dataTables:
-            summary_bits.append(f"Retrieved {len(response.dataTables)} table(s) for review.")
-        if not summary_bits:
-            summary_bits.append("Analysis completed. Review tables and trace for details.")
-        return " | ".join(summary_bits)
+        return deterministic_answer_fallback(response)
 
     def _apply_synthesis_inline_checks(self, response: AgentResponse, *, phase: str) -> AgentResponse:
         answer_pass, answer_reason = check_answer_sanity(response.answer)
@@ -527,102 +479,32 @@ class ConversationalOrchestrator:
         return response
 
     def _llm_entries_for_stages(self, llm_entries: list[LlmTraceEntry], stage_names: set[str]) -> list[LlmTraceEntry]:
-        return [entry for entry in llm_entries if entry.stage in stage_names]
+        return llm_entries_for_stages(llm_entries, stage_names)
 
     def _llm_prompt_payload(self, llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
-        return [
-            {
-                "provider": entry.provider,
-                "metadata": entry.metadata,
-                "systemPrompt": entry.system_prompt,
-                "userPrompt": entry.user_prompt,
-                "maxTokens": entry.max_tokens,
-                "temperature": entry.temperature,
-            }
-            for entry in llm_entries
-        ]
+        return llm_prompt_payload(llm_entries)
 
     def _llm_response_payload(self, llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
-        return [
-            {
-                "provider": entry.provider,
-                "metadata": entry.metadata,
-                "humanResponse": self._human_response_for_trace_entry(entry),
-                "rawResponse": entry.raw_response,
-                "parsedResponse": entry.parsed_response,
-                "error": entry.error,
-            }
-            for entry in llm_entries
-        ]
+        return llm_response_payload(llm_entries)
 
     @staticmethod
     def _human_response_for_trace_entry(entry: LlmTraceEntry) -> str | None:
-        if entry.error:
-            return entry.error.strip() or None
-
-        payload = entry.parsed_response if isinstance(entry.parsed_response, dict) else None
-        if not payload:
-            return None
-
-        candidates = [
-            payload.get("answer"),
-            payload.get("lightResponse"),
-            payload.get("explanation"),
-            payload.get("userMessage"),
-            payload.get("relevanceReason"),
-            payload.get("rationale"),
-            payload.get("clarificationQuestion"),
-            payload.get("notRelevantReason"),
-        ]
-        for value in candidates:
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-
-        generation_type = payload.get("generationType") or payload.get("type")
-        if isinstance(generation_type, str) and generation_type.strip():
-            assumptions = payload.get("assumptions")
-            assumption_suffix = ""
-            if isinstance(assumptions, list):
-                cleaned = [item.strip() for item in assumptions if isinstance(item, str) and item.strip()]
-                if cleaned:
-                    assumption_suffix = f" Assumptions: {'; '.join(cleaned[:2])}."
-            return f"{generation_type.strip()}.{assumption_suffix}".strip()
-
-        return None
+        return human_response_for_trace_entry(entry)
 
     @staticmethod
     def _provider_request_payloads(llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
-        payloads: list[dict[str, Any]] = []
-        for entry in llm_entries:
-            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-            raw_payload = metadata.get("providerRequestPayload")
-            if isinstance(raw_payload, dict):
-                payloads.append(raw_payload)
-        return payloads
+        return provider_request_payloads(llm_entries)
 
     def _sql_retry_feedback(self, llm_entries: list[LlmTraceEntry]) -> list[dict[str, Any]]:
-        collected: list[dict[str, Any]] = []
-        for entry in llm_entries:
-            metadata = entry.metadata if isinstance(entry.metadata, dict) else {}
-            raw_feedback = metadata.get("retryFeedback")
-            if not isinstance(raw_feedback, list):
-                continue
-            for item in raw_feedback:
-                if not isinstance(item, dict):
-                    continue
-                collected.append(item)
-        return normalize_retry_feedback(collected, max_items=6)
+        return sql_retry_feedback(llm_entries)
 
     @staticmethod
     def _warehouse_errors(retry_feedback: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        return execution_error_view(retry_feedback, max_items=6)
+        return warehouse_errors(retry_feedback)
 
     @staticmethod
     def _step_runtime(stage_timings_ms: dict[str, float], step_id: str) -> float | None:
-        value = stage_timings_ms.get(step_id)
-        if value is None:
-            return None
-        return round(value, 2)
+        return step_runtime(stage_timings_ms, step_id)
 
     def _build_trace(
         self,
@@ -636,95 +518,17 @@ class ConversationalOrchestrator:
         llm_entries: list[LlmTraceEntry],
         stage_timings_ms: dict[str, float],
     ) -> list[TraceStep]:
-        result_summary = self._results_summary(results)
-        synthesis_summary = "Synthesized final narrative and recommendations from governed execution context."
-        plan_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
-        sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
-        synthesis_llm_entries = self._llm_entries_for_stages(llm_entries, {"synthesis_final"})
-        sql_retry_feedback = context.sql_retry_feedback or self._sql_retry_feedback(sql_llm_entries)
-        warehouse_errors = self._warehouse_errors(sql_retry_feedback)
-        provider_requests = self._provider_request_payloads(sql_llm_entries)
-
-        return [
-            TraceStep(
-                id="t1",
-                title="Build plan",
-                summary="Generated ordered analysis plan under semantic-model policy guardrails.",
-                status="done",
-                runtimeMs=self._step_runtime(stage_timings_ms, "t1"),
-                qualityChecks=self._inline_checks_for_stage("t1") or None,
-                stageInput={
-                    "message": request.message,
-                    **self._history_summary(prior_history),
-                    "llmPrompts": self._llm_prompt_payload(plan_llm_entries),
-                },
-                stageOutput={
-                    **self._plan_summary(context),
-                    "llmResponses": self._llm_response_payload(plan_llm_entries),
-                },
-            ),
-            TraceStep(
-                id="t2",
-                title="Generate and execute SQL",
-                summary="Generated governed SQL for each plan step and executed against the analytics provider.",
-                status="done",
-                runtimeMs=self._step_runtime(stage_timings_ms, "t2"),
-                sql=results[0].sql if results else None,
-                qualityChecks=self._inline_checks_for_stage("t2") or None,
-                stageInput={
-                    "planStepIds": [step.id for step in context.plan],
-                    "planGoals": [self._preview_text(step.goal, max_chars=120) for step in context.plan],
-                    "historyDepth": len(prior_history),
-                    "providerRequests": provider_requests,
-                    "llmPrompts": self._llm_prompt_payload(sql_llm_entries),
-                },
-                stageOutput={
-                    **result_summary,
-                    "interpretationNotes": context.sql_interpretation_notes,
-                    "caveats": context.sql_caveats,
-                    "executionNotes": context.sql_assumptions,
-                    "retryFeedback": sql_retry_feedback,
-                    "warehouseErrors": warehouse_errors,
-                    "llmResponses": self._llm_response_payload(sql_llm_entries),
-                },
-            ),
-            TraceStep(
-                id="t3",
-                title="Validate results",
-                summary="Applied numeric and policy quality checks to ensure returned tables are usable.",
-                status="done" if validation.passed else "blocked",
-                runtimeMs=self._step_runtime(stage_timings_ms, "t3"),
-                qualityChecks=[*validation.checks, *self._inline_checks_for_stage("t3")],
-                stageInput={
-                    "queryCount": len(results),
-                    "rowCounts": [result.rowCount for result in results],
-                    "totalRows": result_summary["totalRows"],
-                },
-                stageOutput={
-                    "passed": validation.passed,
-                    "checks": validation.checks,
-                },
-            ),
-            TraceStep(
-                id="t4",
-                title="Synthesize response",
-                summary=synthesis_summary,
-                status="done",
-                runtimeMs=self._step_runtime(stage_timings_ms, "t4"),
-                qualityChecks=self._inline_checks_for_stage("t4") or None,
-                stageInput={
-                    "sqlInterpretationNoteCount": len(context.sql_interpretation_notes),
-                    "sqlCaveatCount": len(context.sql_caveats),
-                    "sqlAssumptionCount": len(context.sql_assumptions),
-                    "resultSummary": result_summary,
-                    "llmPrompts": self._llm_prompt_payload(synthesis_llm_entries),
-                },
-                stageOutput={
-                    **self._response_summary(response),
-                    "llmResponses": self._llm_response_payload(synthesis_llm_entries),
-                },
-            ),
-        ]
+        return build_trace(
+            request=request,
+            prior_history=prior_history,
+            context=context,
+            results=results,
+            validation=validation,
+            response=response,
+            llm_entries=llm_entries,
+            stage_timings_ms=stage_timings_ms,
+            inline_checks_by_stage=self._latest_inline_checks,
+        )
 
     def _planner_blocked_trace_step(
         self,
@@ -735,24 +539,12 @@ class ConversationalOrchestrator:
         llm_entries: list[LlmTraceEntry],
         stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
-        planner_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
-        resolved_timings = stage_timings_ms or {}
-        return TraceStep(
-            id="t1",
-            title="Build plan",
-            summary="Planner blocked execution and returned a guidance response.",
-            status="blocked",
-            runtimeMs=self._step_runtime(resolved_timings, "t1"),
-            stageInput={
-                "message": request.message,
-                **self._history_summary(prior_history),
-                "llmPrompts": self._llm_prompt_payload(planner_llm_entries),
-            },
-            stageOutput={
-                "stopReason": blocked.stop_reason,
-                "userMessage": blocked.user_message,
-                "llmResponses": self._llm_response_payload(planner_llm_entries),
-            },
+        return planner_blocked_trace_step(
+            request=request,
+            prior_history=prior_history,
+            blocked=blocked,
+            llm_entries=llm_entries,
+            stage_timings_ms=stage_timings_ms,
         )
 
     def _planner_completed_trace_step(
@@ -764,23 +556,12 @@ class ConversationalOrchestrator:
         llm_entries: list[LlmTraceEntry],
         stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
-        planner_llm_entries = self._llm_entries_for_stages(llm_entries, {"plan_generation"})
-        resolved_timings = stage_timings_ms or {}
-        return TraceStep(
-            id="t1",
-            title="Build plan",
-            summary="Generated ordered analysis plan under semantic-model policy guardrails.",
-            status="done",
-            runtimeMs=self._step_runtime(resolved_timings, "t1"),
-            stageInput={
-                "message": request.message,
-                **self._history_summary(prior_history),
-                "llmPrompts": self._llm_prompt_payload(planner_llm_entries),
-            },
-            stageOutput={
-                **self._plan_summary(context),
-                "llmResponses": self._llm_response_payload(planner_llm_entries),
-            },
+        return planner_completed_trace_step(
+            request=request,
+            prior_history=prior_history,
+            context=context,
+            llm_entries=llm_entries,
+            stage_timings_ms=stage_timings_ms,
         )
 
     def _sql_generation_blocked_trace_step(
@@ -793,55 +574,13 @@ class ConversationalOrchestrator:
         llm_entries: list[LlmTraceEntry],
         stage_timings_ms: dict[str, float] | None = None,
     ) -> TraceStep:
-        sql_llm_entries = self._llm_entries_for_stages(llm_entries, {"sql_generation"})
-        provider_requests = self._provider_request_payloads(sql_llm_entries)
-        resolved_timings = stage_timings_ms or {}
-        detail_retry_feedback = blocked.detail.get("retryFeedback") if blocked.detail else None
-        if isinstance(detail_retry_feedback, list):
-            retry_feedback = [item for item in detail_retry_feedback if isinstance(item, dict)]
-        else:
-            retry_feedback = context.sql_retry_feedback or self._sql_retry_feedback(sql_llm_entries)
-        stage_output: dict[str, Any] = {
-            "stopReason": blocked.stop_reason,
-            "userMessage": blocked.user_message,
-            "retryFeedback": retry_feedback,
-            "warehouseErrors": self._warehouse_errors(retry_feedback),
-            "llmResponses": self._llm_response_payload(sql_llm_entries),
-        }
-        derived_failed_sql = ""
-        for entry in sql_llm_entries:
-            parsed = entry.parsed_response if isinstance(entry.parsed_response, dict) else None
-            if not parsed:
-                continue
-            candidate = parsed.get("failedSql")
-            if not candidate:
-                candidate = parsed.get("sql")
-            if isinstance(candidate, str) and candidate.strip():
-                derived_failed_sql = candidate
-                break
-        if blocked.detail:
-            stage_output["failureDetail"] = blocked.detail
-            failed_sql = blocked.detail.get("failedSql")
-            if isinstance(failed_sql, str) and failed_sql.strip():
-                stage_output["failedSql"] = failed_sql
-            elif derived_failed_sql:
-                stage_output["failedSql"] = derived_failed_sql
-        elif derived_failed_sql:
-            stage_output["failedSql"] = derived_failed_sql
-        return TraceStep(
-            id="t2",
-            title="Generate and execute SQL",
-            summary="SQL generation blocked and returned guidance.",
-            status="blocked",
-            runtimeMs=self._step_runtime(resolved_timings, "t2"),
-            stageInput={
-                "message": request.message,
-                "planStepIds": [step.id for step in context.plan],
-                **self._history_summary(prior_history),
-                "providerRequests": provider_requests,
-                "llmPrompts": self._llm_prompt_payload(sql_llm_entries),
-            },
-            stageOutput=stage_output,
+        return sql_generation_blocked_trace_step(
+            request=request,
+            prior_history=prior_history,
+            context=context,
+            blocked=blocked,
+            llm_entries=llm_entries,
+            stage_timings_ms=stage_timings_ms,
         )
 
     def _trace_until_sql_failure(
@@ -854,23 +593,14 @@ class ConversationalOrchestrator:
         llm_entries: list[LlmTraceEntry],
         stage_timings_ms: dict[str, float] | None = None,
     ) -> list[TraceStep]:
-        return [
-            self._planner_completed_trace_step(
-                request=request,
-                prior_history=prior_history,
-                context=context,
-                llm_entries=llm_entries,
-                stage_timings_ms=stage_timings_ms,
-            ),
-            self._sql_generation_blocked_trace_step(
-                request=request,
-                prior_history=prior_history,
-                context=context,
-                blocked=blocked,
-                llm_entries=llm_entries,
-                stage_timings_ms=stage_timings_ms,
-            ),
-        ]
+        return trace_until_sql_failure(
+            request=request,
+            prior_history=prior_history,
+            context=context,
+            blocked=blocked,
+            llm_entries=llm_entries,
+            stage_timings_ms=stage_timings_ms,
+        )
 
     def _finalize_response(
         self,

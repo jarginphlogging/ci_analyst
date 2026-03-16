@@ -51,73 +51,133 @@ pre {
   will-change: opacity, transform;
 }
 
-@keyframes signal-ring-a {
-  from {
-    transform: translate(-50%, -50%) rotate(0deg);
+@keyframes stream-scan {
+  0% {
+    transform: translate3d(-0.75rem, 0, 0);
+    opacity: 0;
   }
 
-  to {
-    transform: translate(-50%, -50%) rotate(360deg);
+  18% {
+    opacity: 0.48;
+  }
+
+  100% {
+    transform: translate3d(3.35rem, 0, 0);
+    opacity: 0;
   }
 }
 
-@keyframes signal-core {
+@keyframes analysis-bar {
   0%,
   100% {
-    transform: translate(-50%, -50%) scale(0.92);
-    opacity: 0.92;
+    opacity: 0.52;
+    transform: scaleY(0.62);
   }
 
-  50% {
-    transform: translate(-50%, -50%) scale(1);
+  35% {
     opacity: 1;
+    transform: scaleY(1);
+  }
+
+  70% {
+    opacity: 0.82;
+    transform: scaleY(0.78);
   }
 }
 
-.signal-spinner {
+.stream-activity-indicator {
   position: relative;
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2.7rem;
+  height: 2rem;
   flex-shrink: 0;
+  overflow: hidden;
+  border: 1px solid rgba(14, 116, 144, 0.18);
+  border-radius: 0.75rem;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.98) 0%, rgba(234, 248, 252, 0.98) 100%);
+}
+
+.stream-activity-indicator::before {
+  content: "";
+  position: absolute;
+  inset: 0.26rem 0.28rem;
+  border-radius: 0.52rem;
+  background:
+    linear-gradient(180deg, rgba(8, 145, 178, 0.09) 0%, rgba(8, 145, 178, 0.03) 100%),
+    repeating-linear-gradient(
+      0deg,
+      transparent 0,
+      transparent 0.42rem,
+      rgba(8, 145, 178, 0.05) 0.42rem,
+      rgba(8, 145, 178, 0.05) 0.46rem
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0,
+      transparent 0.48rem,
+      rgba(8, 145, 178, 0.07) 0.48rem,
+      rgba(8, 145, 178, 0.07) 0.54rem
+    );
+}
+
+.stream-activity-indicator__baseline,
+.stream-activity-indicator__bar,
+.stream-activity-indicator__scan {
+  position: absolute;
+}
+
+.stream-activity-indicator__baseline {
+  left: 0.48rem;
+  right: 0.42rem;
+  bottom: 0.44rem;
+  height: 1px;
+  background: linear-gradient(90deg, rgba(15, 118, 110, 0.2) 0%, rgba(8, 145, 178, 0.24) 100%);
+}
+
+.stream-activity-indicator__bar {
+  bottom: 0.46rem;
+  width: 0.22rem;
+  border-radius: 999px 999px 0.16rem 0.16rem;
+  background: linear-gradient(180deg, rgba(8, 145, 178, 0.95) 0%, rgba(14, 116, 144, 0.72) 100%);
+  transform-origin: center bottom;
+  animation: analysis-bar 1.16s cubic-bezier(0.22, 1, 0.36, 1) infinite;
   will-change: transform, opacity;
 }
 
-.signal-spinner__ring {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  border-radius: 50%;
-  box-sizing: border-box;
-  transform: translate(-50%, -50%);
+.stream-activity-indicator__bar-a {
+  left: 0.58rem;
+  height: 0.36rem;
 }
 
-.signal-spinner__ring-a {
-  width: 1.75rem;
-  height: 1.75rem;
-  border: 2px solid rgba(8, 145, 178, 0.2);
-  border-top-color: rgba(14, 116, 144, 0.95);
-  animation: signal-ring-a 1.8s linear infinite;
+.stream-activity-indicator__bar-b {
+  left: 0.9rem;
+  height: 0.72rem;
+  animation-delay: 0.08s;
 }
 
-.signal-spinner__core {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 1rem;
-  height: 1rem;
-  border-radius: 50%;
-  clip-path: none;
-  background: radial-gradient(circle at 34% 30%, #f0fdff 0%, #9be8fb 30%, #22d3ee 62%, #0284c7 100%);
-  box-shadow:
-    0 0 0.45rem rgba(14, 165, 233, 0.32),
-    inset 0 0 0 1px rgba(186, 230, 253, 0.35);
-  animation: signal-core 1.35s ease-in-out infinite;
+.stream-activity-indicator__bar-c {
+  left: 1.22rem;
+  height: 0.52rem;
+  animation-delay: 0.16s;
 }
 
-.signal-spinner__core::before {
-  content: none;
+.stream-activity-indicator__bar-d {
+  left: 1.54rem;
+  height: 0.92rem;
+  animation-delay: 0.24s;
 }
 
-.signal-spinner__core::after {
-  content: none;
+.stream-activity-indicator__bar-e {
+  left: 1.86rem;
+  height: 0.64rem;
+  animation-delay: 0.32s;
+}
+
+.stream-activity-indicator__scan {
+  top: 0.34rem;
+  bottom: 0.34rem;
+  width: 0.58rem;
+  border-radius: 0.48rem;
+  background: linear-gradient(90deg, rgba(125, 211, 252, 0) 0%, rgba(125, 211, 252, 0.16) 38%, rgba(125, 211, 252, 0.42) 50%, rgba(125, 211, 252, 0.16) 62%, rgba(125, 211, 252, 0) 100%);
+  animation: stream-scan 1.24s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  will-change: transform, opacity;
 }
