@@ -1,19 +1,16 @@
 from __future__ import annotations
 
+from app.services.semantic_model_source import load_semantic_model_source
 from app.prompts.templates import sql_prompt
-from app.services.semantic_model import load_semantic_model
-from app.services.semantic_model_yaml import load_semantic_model_yaml
 
 
-def test_sql_prompt_includes_full_semantic_model_yaml() -> None:
-    model = load_semantic_model()
-    full_yaml = load_semantic_model_yaml().raw_text.strip()
+def test_sql_prompt_includes_full_semantic_model_source_text() -> None:
+    full_yaml = load_semantic_model_source().raw_text.strip()
 
     _, user_prompt = sql_prompt(
         user_message="Show spend by state for Q4 2025",
         step_id="step_1",
         step_goal="Compute spend totals by state for Q4 2025.",
-        model=model,
         prior_sql=[],
         history=[],
     )
@@ -23,12 +20,10 @@ def test_sql_prompt_includes_full_semantic_model_yaml() -> None:
 
 
 def test_sql_prompt_includes_dependency_context_block() -> None:
-    model = load_semantic_model()
     _, user_prompt = sql_prompt(
         user_message="Top and bottom stores with mix",
         step_id="step_2",
         step_goal="Show new vs repeat mix for those stores.",
-        model=model,
         prior_sql=["SELECT td_id FROM cia_sales_insights_cortex LIMIT 10"],
         history=[],
         dependency_context=[
@@ -47,12 +42,10 @@ def test_sql_prompt_includes_dependency_context_block() -> None:
 
 
 def test_sql_prompt_includes_temporal_scope_contract_block() -> None:
-    model = load_semantic_model()
     _, user_prompt = sql_prompt(
         user_message="Show new vs repeat customers by month for the last 6 months",
         step_id="step_1",
         step_goal="Show new vs repeat customers by month for the last 6 months.",
-        model=model,
         prior_sql=[],
         history=[],
         temporal_scope={"unit": "month", "count": 6, "granularity": "month"},

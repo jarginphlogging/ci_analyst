@@ -9,8 +9,11 @@ from app.models import (
     ChatTurnRequest,
     DataTable,
     Insight,
-    MetricPoint,
     QueryPlanStep,
+    ResponseAudit,
+    ResponseData,
+    ResponseSummary,
+    ResponseVisualization,
     SqlExecutionResult,
     TraceStep,
     ValidationResult,
@@ -73,29 +76,35 @@ class HistorySpyDependencies:
         _ = context
         self.response_histories.append(list(history))
         return AgentResponse(
-            answer="Answer",
-            confidence="high",
-            whyItMatters="Why",
-            metrics=[MetricPoint(label="metric", value=1.0, delta=0.1, unit="count")],
-            evidence=[],
-            insights=[Insight(id="i1", title="Insight", detail="Detail", importance="high")],
-            suggestedQuestions=["Q1", "Q2", "Q3"],
-            assumptions=["A1"],
+            summary=ResponseSummary(
+                answer="Answer",
+                confidence="high",
+                whyItMatters="Why",
+                summaryCards=[],
+                insights=[Insight(id="i1", title="Insight", detail="Detail", importance="high")],
+                suggestedQuestions=["Q1", "Q2", "Q3"],
+                assumptions=["A1"],
+            ),
+            visualization=ResponseVisualization(),
+            data=ResponseData(
+                dataTables=[
+                    DataTable(
+                        id="table_1",
+                        name="result_1",
+                        columns=["segment", "prior", "current", "changeBps", "contribution"],
+                        rows=[],
+                        rowCount=0,
+                    )
+                ],
+                evidence=[],
+            ),
+            audit=ResponseAudit(),
             trace=[
                 TraceStep(
                     id="t3",
                     title="Synthesize",
                     summary="done",
                     status="done",
-                )
-            ],
-            dataTables=[
-                DataTable(
-                    id="table_1",
-                    name="result_1",
-                    columns=["segment", "prior", "current", "changeBps", "contribution"],
-                    rows=[],
-                    rowCount=0,
                 )
             ],
         )
@@ -120,4 +129,4 @@ async def test_orchestrator_carries_prior_history_only() -> None:
     assert dependencies.plan_histories[1] == expected_history
     assert dependencies.sql_histories[1] == expected_history
     assert dependencies.response_histories[1] == expected_history
-    assert second_turn.response.assumptions == ["A1"]
+    assert second_turn.response.summary.assumptions == ["A1"]

@@ -4,14 +4,11 @@ import pytest
 
 from app.config import settings
 from app.models import QueryPlanStep
-from app.services.semantic_model import load_semantic_model
 from app.services.stages.sql_stage_generation import SqlStepGenerator
 
 
 @pytest.mark.asyncio
 async def test_sql_step_generator_falls_back_to_llm_when_sandbox_analyst_fails() -> None:
-    model = load_semantic_model()
-
     async def fake_ask_llm_json(**kwargs) -> dict[str, object]:  # type: ignore[no-untyped-def]
         _ = kwargs
         return {
@@ -24,7 +21,7 @@ async def test_sql_step_generator_falls_back_to_llm_when_sandbox_analyst_fails()
         _ = kwargs
         raise RuntimeError("sandbox analyst unavailable")
 
-    generator = SqlStepGenerator(model=model, ask_llm_json=fake_ask_llm_json, analyst_fn=failing_analyst)
+    generator = SqlStepGenerator(ask_llm_json=fake_ask_llm_json, analyst_fn=failing_analyst)
     step = QueryPlanStep(id="step-1", goal="Show spend by state")
 
     original_provider_mode_raw = settings.provider_mode_raw

@@ -6,7 +6,7 @@ import { DataExplorer } from "@/components/data-explorer";
 import { EvidenceTable } from "@/components/evidence-table";
 import { StreamActivityIndicator } from "@/components/stream-activity-indicator";
 import { readNdjsonStream } from "@/lib/stream";
-import type { AgentResponse, ChatMessage, ChatStreamEvent, DataTable, MetricPoint, SummaryCard } from "@/lib/types";
+import type { AgentResponse, ChatMessage, ChatStreamEvent, DataTable, SummaryCard } from "@/lib/types";
 
 type StarterPrompt = {
   question: string;
@@ -54,10 +54,9 @@ const insightImportanceRank: Record<"high" | "medium", number> = {
   medium: 1,
 };
 
-const integerFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const currencyFormatter = new Intl.NumberFormat(undefined, { style: "currency", currency: "USD", maximumFractionDigits: 2 });
+const integerFormatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 });
 const dateFormatter = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
-type KpiMetric = Pick<MetricPoint, "label" | "value" | "unit">;
 
 function toTitleCase(text: string): string {
   return text.toLowerCase().replace(/\b\w/g, (char) => char.toUpperCase());
@@ -76,21 +75,6 @@ function normalizeMetricLabel(label: string): string {
   return deduped === deduped.toUpperCase() ? toTitleCase(deduped) : deduped;
 }
 
-function asFiniteNumber(value: unknown): number | null {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value !== "string") return null;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function isRowsRetrievedLabel(label: string): boolean {
-  return normalizeMetricLabel(label).toLowerCase() === "rows retrieved";
-}
-
-function resolveMetricUnit(metric: KpiMetric): MetricPoint["unit"] {
-  return metric.unit;
-}
-
 function formatUsdValue(value: number, label: string): string {
   const abs = Math.abs(value);
   const isAverageLike = /(avg|average|mean|ticket|amount)/i.test(label);
@@ -102,66 +86,8 @@ function formatUsdValue(value: number, label: string): string {
   return currencyFormatter.format(value);
 }
 
-function formatMetric(metric: KpiMetric): string {
-  const resolvedUnit = resolveMetricUnit(metric);
-
-  if (resolvedUnit === "pct") {
-    const normalizedPct = Math.abs(metric.value) <= 1 ? metric.value * 100 : metric.value;
-    return `${normalizedPct.toFixed(Math.abs(normalizedPct) >= 10 ? 1 : 2)}%`;
-  }
-  if (resolvedUnit === "bps") return `${metric.value.toFixed(0)} bps`;
-  if (resolvedUnit === "usd") return formatUsdValue(metric.value, metric.label);
-  return integerFormatter.format(Math.round(metric.value));
-}
-
-function derivedKpis(response: AgentResponse): KpiMetric[] {
-  const fallback: KpiMetric[] = [];
-
-  const topContribution = response.evidence.reduce((max, row) => Math.max(max, Math.abs(row.contribution)), 0);
-  if (topContribution > 0) {
-    fallback.push({ label: "Top Driver Share", value: topContribution * 100, unit: "pct" });
-  }
-
-  const rankingArtifact = (response.artifacts ?? []).find((artifact) => artifact.kind === "ranking_breakdown" && artifact.rows.length > 0);
-  if (rankingArtifact) {
-    const maxShare = Math.max(
-      0,
-      ...rankingArtifact.rows
-        .map((row) => asFiniteNumber(row.share_pct))
-        .filter((value): value is number => value !== null),
-    );
-    if (maxShare > 0) {
-      fallback.push({ label: "Top Entity Share", value: maxShare, unit: "pct" });
-    }
-  }
-
-  const highPriorityCount = response.insights.filter((insight) => insight.importance === "high").length;
-  if (highPriorityCount > 0) {
-    fallback.push({ label: "High-Priority Insights", value: highPriorityCount, unit: "count" });
-  }
-
-  if (response.suggestedQuestions.length > 0) {
-    fallback.push({ label: "Suggested Next Steps", value: response.suggestedQuestions.length, unit: "count" });
-  }
-
-  return fallback;
-}
-
-function kpiMetrics(response: AgentResponse): KpiMetric[] {
-  const primary = response.metrics.filter((metric) => !isRowsRetrievedLabel(metric.label));
-  const selected: KpiMetric[] = [...primary];
-
-  for (const metric of derivedKpis(response)) {
-    if (selected.length >= 3) break;
-    if (selected.some((item) => normalizeMetricLabel(item.label) === normalizeMetricLabel(metric.label))) continue;
-    selected.push(metric);
-  }
-
-  return selected.slice(0, 3);
-}
-
 function summaryCardsForResponse(response: AgentResponse): SummaryCard[] {
-  const fromContract = (response.summaryCards ?? [])
+  return (response.summary.summaryCards ?? [])
     .map((card) => ({
       label: (card.label ?? "").trim(),
       value: (card.value ?? "").trim(),
@@ -169,13 +95,6 @@ function summaryCardsForResponse(response: AgentResponse): SummaryCard[] {
     }))
     .filter((card) => card.label && card.value)
     .slice(0, 3);
-  if (fromContract.length > 0) return fromContract;
-
-  return kpiMetrics(response).map((metric) => ({
-    label: normalizeMetricLabel(metric.label),
-    value: formatMetric(metric),
-    detail: "",
-  }));
 }
 
 function splitSummaryCardLabel(label: string): { title: string; qualifier: string } {
@@ -300,21 +219,12 @@ function periodFromText(text: string): string | null {
   return null;
 }
 
-function periodFromMetricLabels(metrics: MetricPoint[]): string | null {
-  for (const metric of metrics) {
-    const fromMetric = periodFromText(metric.label);
-    if (fromMetric) return fromMetric;
-  }
-
-  return null;
-}
-
 function isMonthlyPeriodContext(response: AgentResponse, userQuery: string): boolean {
-  const chartX = response.chartConfig?.x?.toLowerCase() ?? "";
-  const chartXLabel = response.chartConfig?.xLabel?.toLowerCase() ?? "";
+  const chartX = response.visualization.chartConfig?.x?.toLowerCase() ?? "";
+  const chartXLabel = response.visualization.chartConfig?.xLabel?.toLowerCase() ?? "";
   if (chartX.includes("month") || chartXLabel.includes("month")) return true;
 
-  const hasMonthColumn = (response.dataTables ?? []).some((table) =>
+  const hasMonthColumn = (response.data.dataTables ?? []).some((table) =>
     table.columns.some((column) => column.toLowerCase().includes("month")),
   );
   if (hasMonthColumn) return true;
@@ -330,17 +240,17 @@ function adjustInclusiveMonthlyEnd(start: Date, end: Date, isMonthlyContext: boo
 }
 
 function deriveMetricPeriodLabel(response: AgentResponse, userQuery: string, responseCreatedAt: string): string {
-  const explicitLabel = (response.periodLabel ?? "").trim();
+  const explicitLabel = (response.summary.periodLabel ?? "").trim();
   if (explicitLabel) return explicitLabel;
 
-  const explicitStart = parseDateValue(response.periodStart ?? "");
-  const explicitEnd = parseDateValue(response.periodEnd ?? "");
+  const explicitStart = parseDateValue(response.summary.periodStart ?? "");
+  const explicitEnd = parseDateValue(response.summary.periodEnd ?? "");
   if (explicitStart && explicitEnd) {
     const adjustedEnd = adjustInclusiveMonthlyEnd(explicitStart, explicitEnd, isMonthlyPeriodContext(response, userQuery));
     return formatDateRange(explicitStart, adjustedEnd);
   }
 
-  for (const table of response.dataTables ?? []) {
+  for (const table of response.data.dataTables ?? []) {
     const fromSql = periodFromSql(table.sourceSql);
     if (fromSql) return fromSql;
   }
@@ -350,19 +260,16 @@ function deriveMetricPeriodLabel(response: AgentResponse, userQuery: string, res
     if (fromTraceSql) return fromTraceSql;
   }
 
-  const fromTables = periodFromTables(response.dataTables ?? []);
+  const fromTables = periodFromTables(response.data.dataTables ?? []);
   if (fromTables) return fromTables;
 
-  for (const assumption of response.assumptions ?? []) {
+  for (const assumption of response.summary.assumptions ?? []) {
     const fromAssumption = periodFromText(assumption);
     if (fromAssumption) return fromAssumption;
   }
 
-  const fromAnswer = periodFromText(response.answer ?? "");
+  const fromAnswer = periodFromText(response.summary.answer ?? "");
   if (fromAnswer) return fromAnswer;
-
-  const fromMetricLabels = periodFromMetricLabels(response.metrics ?? []);
-  if (fromMetricLabels) return fromMetricLabels;
 
   const fromUserQuery = periodFromText(userQuery);
   if (fromUserQuery) return fromUserQuery;
@@ -373,9 +280,9 @@ function deriveMetricPeriodLabel(response: AgentResponse, userQuery: string, res
 }
 
 function rowsRetrievedCount(response: AgentResponse): number {
-  const fromTables = (response.dataTables ?? []).reduce((total, table) => total + table.rowCount, 0);
+  const fromTables = (response.data.dataTables ?? []).reduce((total, table) => total + table.rowCount, 0);
   if (fromTables > 0) return fromTables;
-  return response.evidence.length;
+  return response.data.evidence.length;
 }
 
 function formatRuntime(durationMs: number | undefined, isStreaming: boolean | undefined): string {
@@ -402,7 +309,7 @@ function messageTime(iso: string): string {
 }
 
 function buildRenderableTables(response: AgentResponse): DataTable[] {
-  const tables = [...(response.dataTables ?? [])];
+  const tables = [...(response.data.dataTables ?? [])];
   if (tables.length > 0) {
     return tables;
   }
@@ -412,14 +319,14 @@ function buildRenderableTables(response: AgentResponse): DataTable[] {
       id: "evidence_fallback",
       name: "Evidence Table",
       columns: ["segment", "prior", "current", "changeBps", "contribution"],
-      rows: response.evidence.map((row) => ({
+      rows: response.data.evidence.map((row) => ({
         segment: row.segment,
         prior: row.prior,
         current: row.current,
         changeBps: row.changeBps,
         contribution: row.contribution,
       })),
-      rowCount: response.evidence.length,
+      rowCount: response.data.evidence.length,
       description: "Fallback table derived from rendered evidence rows.",
     },
   ];
@@ -466,7 +373,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
     () => (latestResponse ? isFailureResponse(latestResponse) : false),
     [latestResponse],
   );
-  const latestNextAction = useMemo(() => nextActionBody(latestResponse?.suggestedQuestions), [latestResponse]);
+  const latestNextAction = useMemo(() => nextActionBody(latestResponse?.summary.suggestedQuestions), [latestResponse]);
   const latestSnapshotMetadata = useMemo(() => {
     if (!latestResponseMessage?.response) return null;
     if (isFailureResponse(latestResponseMessage.response)) return null;
@@ -666,7 +573,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
         if (event.type === "response") {
           updateAssistantMessage(assistantMessageId, (draft) => ({
             ...draft,
-            text: event.response.answer,
+            text: event.response.summary.answer,
             response: event.response,
             hasAnswerDeltas: true,
             requestDurationMs: Math.max(1, Math.round(performance.now() - requestStartedAtMs)),
@@ -969,14 +876,14 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                     {message.response && !responseIsFailure ? (
                       <span
                         className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
-                          message.response.confidence === "high"
+                          message.response.summary.confidence === "high"
                             ? "bg-emerald-100 text-emerald-800"
-                            : message.response.confidence === "medium"
+                            : message.response.summary.confidence === "medium"
                               ? "bg-amber-100 text-amber-800"
                               : "bg-rose-100 text-rose-800"
                         }`}
                       >
-                        {message.response.confidence} confidence
+                        {message.response.summary.confidence} confidence
                       </span>
                     ) : null}
                   </div>
@@ -1012,7 +919,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                       <>
                         <section className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                           <p className="text-xs uppercase tracking-wide text-slate-500">Why It Matters</p>
-                          <p className="mt-1.5 text-sm text-slate-700">{message.response.whyItMatters}</p>
+                          <p className="mt-1.5 text-sm text-slate-700">{message.response.summary.whyItMatters}</p>
                         </section>
 
                         <section className="rounded-2xl border border-slate-200 bg-slate-50 p-3">
@@ -1042,17 +949,17 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                         </section>
 
                         <EvidenceTable
-                          chartConfig={message.response.chartConfig}
-                          tableConfig={message.response.tableConfig}
-                          primaryVisual={message.response.primaryVisual}
-                          dataTables={message.response.dataTables}
-                          comparisons={message.response.comparisons}
+                          chartConfig={message.response.visualization.chartConfig}
+                          tableConfig={message.response.visualization.tableConfig}
+                          primaryVisual={message.response.visualization.primaryVisual}
+                          dataTables={message.response.data.dataTables}
+                          comparisons={message.response.data.comparisons}
                         />
 
                         <section className="rounded-2xl border border-slate-200 bg-white/85 p-4">
                           <h3 className="text-sm font-semibold tracking-wide text-slate-900">Priority Insights</h3>
                           <div className="mt-3 grid gap-2 md:grid-cols-3">
-                            {[...message.response.insights]
+                            {[...message.response.summary.insights]
                               .sort((a, b) => insightImportanceRank[a.importance] - insightImportanceRank[b.importance])
                               .slice(0, 3)
                               .map((insight) => (
@@ -1076,13 +983,13 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
 
                         <AnalysisTrace steps={message.response.trace} />
 
-                        <section className={`grid gap-3 ${(message.response.assumptions ?? []).length > 0 ? "md:grid-cols-2" : ""}`}>
-                          {(message.response.assumptions ?? []).length > 0 ? (
+                        <section className={`grid gap-3 ${(message.response.summary.assumptions ?? []).length > 0 ? "md:grid-cols-2" : ""}`}>
+                          {(message.response.summary.assumptions ?? []).length > 0 ? (
                             <div className="rounded-xl border border-slate-200 bg-[linear-gradient(180deg,rgba(248,251,255,0.95),rgba(241,246,252,0.92))] p-3">
                               <p className="text-xs uppercase tracking-wide text-slate-500">Assumptions</p>
                               <p className="mt-1 text-xs text-slate-600">Interpretation constraints used for this answer.</p>
                               <ol className="mt-2 space-y-2">
-                                {message.response.assumptions.map((item, index) => (
+                                {message.response.summary.assumptions.map((item, index) => (
                                   <li
                                     key={item}
                                     className="flex items-start gap-2.5 rounded-lg border border-slate-200/80 bg-white/90 px-2.5 py-2 text-sm leading-relaxed text-slate-700 shadow-[inset_0_0_0_1px_rgba(255,255,255,0.5)]"
@@ -1100,7 +1007,7 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
                             <p className="text-xs uppercase tracking-wide text-slate-500">Suggested Next Questions</p>
                             <p className="mt-1 text-xs text-slate-600">Pick one to auto-fill the composer.</p>
                             <div className="mt-2 space-y-2">
-                              {message.response.suggestedQuestions.map((question, index) => (
+                              {message.response.summary.suggestedQuestions.map((question, index) => (
                                 <button
                                   key={question}
                                   onClick={() => setInput(question)}
@@ -1197,16 +1104,16 @@ export function AgentWorkspace({ initialEnvironment }: AgentWorkspaceProps) {
               <div className="mt-4 space-y-3">
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Top Signal</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{latestResponse.insights[0]?.title ?? "No insight yet"}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{latestResponse.summary.insights[0]?.title ?? "No insight yet"}</p>
                   <p className="mt-1 text-sm leading-relaxed text-slate-700">
-                    {latestResponse.insights[0]?.detail ?? "Run an analysis to populate signal context."}
+                    {latestResponse.summary.insights[0]?.detail ?? "Run an analysis to populate signal context."}
                   </p>
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-xs uppercase tracking-wide text-slate-500">Confidence Basis</p>
-                  <p className="mt-1 text-sm font-semibold text-slate-900">{toTitleCase(latestResponse.confidence)} confidence</p>
-                  {latestResponse.confidenceReason?.trim() ? (
-                    <p className="mt-1 text-sm leading-relaxed text-slate-700">{latestResponse.confidenceReason.trim()}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-900">{toTitleCase(latestResponse.summary.confidence)} confidence</p>
+                  {latestResponse.summary.confidenceReason?.trim() ? (
+                    <p className="mt-1 text-sm leading-relaxed text-slate-700">{latestResponse.summary.confidenceReason.trim()}</p>
                   ) : null}
                 </div>
                 <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">

@@ -17,9 +17,9 @@ async def test_run_turn_returns_payload() -> None:
     )
 
     assert result.turnId
-    assert len(result.response.answer) > 20
-    assert result.response.dataTables
-    assert len(result.response.trace) == 4
+    assert len(result.response.summary.answer) > 20
+    assert result.response.data.dataTables
+    assert len(result.response.trace) == 5
     assert result.response.trace[0].stageInput is not None
     assert result.response.trace[0].stageOutput is not None
     assert result.response.trace[2].stageOutput is not None

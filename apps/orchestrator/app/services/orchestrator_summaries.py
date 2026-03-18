@@ -75,31 +75,27 @@ def results_summary(results: list[SqlExecutionResult]) -> dict[str, Any]:
 
 def response_summary(response: AgentResponse) -> dict[str, Any]:
     return {
-        "presentationIntent": response.presentationIntent.model_dump() if response.presentationIntent else None,
-        "chartConfig": response.chartConfig.model_dump() if response.chartConfig else None,
-        "tableConfig": response.tableConfig.model_dump() if response.tableConfig else None,
-        "confidence": response.confidence,
-        "answerPreview": preview_text(response.answer, max_chars=260),
-        "metricLabels": [metric.label for metric in response.metrics[:5]],
-        "summaryCardLabels": [card.label for card in response.summaryCards[:5]],
-        "primaryVisual": response.primaryVisual.model_dump() if response.primaryVisual else None,
-        "insightTitles": [insight.title for insight in response.insights[:5]],
-        "suggestedQuestions": response.suggestedQuestions[:3],
-        "tableCount": len(response.dataTables),
-        "artifactCount": len(response.artifacts),
+        "presentationIntent": response.audit.presentationIntent.model_dump() if response.audit.presentationIntent else None,
+        "chartConfig": response.visualization.chartConfig.model_dump() if response.visualization.chartConfig else None,
+        "tableConfig": response.visualization.tableConfig.model_dump() if response.visualization.tableConfig else None,
+        "confidence": response.summary.confidence,
+        "answerPreview": preview_text(response.summary.answer, max_chars=260),
+        "summaryCardLabels": [card.label for card in response.summary.summaryCards[:5]],
+        "primaryVisual": response.visualization.primaryVisual.model_dump() if response.visualization.primaryVisual else None,
+        "insightTitles": [insight.title for insight in response.summary.insights[:5]],
+        "suggestedQuestions": response.summary.suggestedQuestions[:3],
+        "tableCount": len(response.data.dataTables),
+        "artifactCount": len(response.audit.artifacts),
     }
 
 
 def deterministic_answer_fallback(response: AgentResponse) -> str:
     summary_bits: list[str] = []
-    if response.summaryCards:
-        for card in response.summaryCards[:3]:
+    if response.summary.summaryCards:
+        for card in response.summary.summaryCards[:3]:
             summary_bits.append(f"{card.label}: {card.value}")
-    elif response.metrics:
-        for metric in response.metrics[:3]:
-            summary_bits.append(f"{metric.label}: {metric.value} {metric.unit}")
-    elif response.dataTables:
-        summary_bits.append(f"Retrieved {len(response.dataTables)} table(s) for review.")
+    elif response.data.dataTables:
+        summary_bits.append(f"Retrieved {len(response.data.dataTables)} table(s) for review.")
     if not summary_bits:
         summary_bits.append("Analysis completed. Review tables and trace for details.")
     return " | ".join(summary_bits)

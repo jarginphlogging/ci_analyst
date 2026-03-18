@@ -85,12 +85,11 @@ async def test_real_dependencies_pipeline_with_llm_outputs() -> None:
     assert context.presentation_intent.chartType == "grouped_bar"
     assert len(context.plan) >= 1
     assert validation.passed
-    assert response.answer
-    assert response.summaryCards
-    assert response.chartConfig is not None
-    assert response.dataTables
+    assert response.summary.answer
+    assert response.summary.summaryCards
+    assert response.visualization.chartConfig is not None
+    assert response.data.dataTables
     assert response.trace
-    assert response.metrics
 
 
 @pytest.mark.asyncio

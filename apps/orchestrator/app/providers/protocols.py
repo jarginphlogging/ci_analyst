@@ -11,7 +11,6 @@ class LlmProvider(Protocol):
         user_prompt: str,
         temperature: float = 0.1,
         max_tokens: int = 1000,
-        response_json: bool = False,
         response_schema: dict[str, Any] | None = None,
         response_schema_name: str | None = None,
     ) -> str: ...

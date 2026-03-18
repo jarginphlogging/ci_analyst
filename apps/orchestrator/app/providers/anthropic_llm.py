@@ -56,25 +56,15 @@ async def chat_completion(
     user_prompt: str,
     temperature: float = 0.1,
     max_tokens: int = 1000,
-    response_json: bool = False,
     response_schema: dict[str, Any] | None = None,
     response_schema_name: str | None = None,
 ) -> str:
-    if response_json and response_schema is not None:
-        raise RuntimeError("response_json and response_schema cannot be combined.")
-
     endpoint = _messages_endpoint()
     started_at = time.perf_counter()
-    effective_system = system_prompt
-    if response_json:
-        effective_system = (
-            f"{effective_system}\n\n"
-            "Return only one strict JSON object. Do not add markdown fences or prose."
-        )
 
     payload: dict[str, Any] = {
         "model": settings.anthropic_model,
-        "system": effective_system,
+        "system": system_prompt,
         "messages": [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
         "temperature": temperature,
         "max_tokens": max_tokens,
@@ -95,7 +85,6 @@ async def chat_completion(
         "Anthropic request started",
         extra={
             "event": "provider.anthropic.request.started",
-            "responseJson": response_json,
             "responseSchema": response_schema is not None,
             "maxTokens": max_tokens,
             "temperature": temperature,

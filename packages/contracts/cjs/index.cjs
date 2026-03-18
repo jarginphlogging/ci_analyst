@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.chatStreamEventSchema = exports.chatTurnResponseSchema = exports.agentResponseSchema = exports.primaryVisualSchema = exports.analysisArtifactSchema = exports.subtaskStatusSchema = exports.claimSupportSchema = exports.comparisonSignalSchema = exports.factSignalSchema = exports.evidenceProvenanceSchema = exports.evidenceReferenceSchema = exports.evidenceStatusSchema = exports.supportStatusSchema = exports.salienceDriverSchema = exports.summaryCardSchema = exports.tableConfigSchema = exports.tableColumnConfigSchema = exports.chartConfigSchema = exports.presentationIntentSchema = exports.dataTableSchema = exports.insightSchema = exports.evidenceRowSchema = exports.metricPointSchema = exports.traceStepSchema = exports.traceStatusSchema = exports.chatTurnRequestSchema = void 0;
+exports.chatStreamEventSchema = exports.chatTurnResponseSchema = exports.agentResponseSchema = exports.responseAuditSchema = exports.responseDataSchema = exports.responseVisualizationSchema = exports.responseSummarySchema = exports.primaryVisualSchema = exports.analysisArtifactSchema = exports.subtaskStatusSchema = exports.claimSupportSchema = exports.comparisonSignalSchema = exports.factSignalSchema = exports.evidenceProvenanceSchema = exports.evidenceReferenceSchema = exports.evidenceStatusSchema = exports.supportStatusSchema = exports.salienceDriverSchema = exports.summaryCardSchema = exports.tableConfigSchema = exports.tableColumnConfigSchema = exports.chartConfigSchema = exports.presentationIntentSchema = exports.dataTableSchema = exports.insightSchema = exports.evidenceRowSchema = exports.metricPointSchema = exports.traceStepSchema = exports.traceStatusSchema = exports.chatTurnRequestSchema = void 0;
 const zod_1 = require("zod");
 exports.chatTurnRequestSchema = zod_1.z.object({
     sessionId: zod_1.z.string().uuid().optional(),
@@ -164,35 +164,46 @@ exports.primaryVisualSchema = zod_1.z.object({
     visualType: zod_1.z.enum(["trend", "ranking", "comparison", "distribution", "snapshot", "table"]).optional(),
     artifactKind: exports.analysisArtifactSchema.shape.kind.optional(),
 });
-exports.agentResponseSchema = zod_1.z.object({
+exports.responseSummarySchema = zod_1.z.object({
     answer: zod_1.z.string(),
     confidence: zod_1.z.enum(["high", "medium", "low"]),
     confidenceReason: zod_1.z.string().optional(),
     whyItMatters: zod_1.z.string(),
-    presentationIntent: exports.presentationIntentSchema.optional(),
-    chartConfig: exports.chartConfigSchema.nullable().optional(),
-    tableConfig: exports.tableConfigSchema.nullable().optional(),
-    metrics: zod_1.z.array(exports.metricPointSchema),
-    evidence: zod_1.z.array(exports.evidenceRowSchema),
+    summaryCards: zod_1.z.array(exports.summaryCardSchema),
     insights: zod_1.z.array(exports.insightSchema),
     suggestedQuestions: zod_1.z.array(zod_1.z.string()),
     assumptions: zod_1.z.array(zod_1.z.string()),
-    trace: zod_1.z.array(exports.traceStepSchema),
-    summaryCards: zod_1.z.array(exports.summaryCardSchema).optional(),
+    periodStart: zod_1.z.string().optional(),
+    periodEnd: zod_1.z.string().optional(),
+    periodLabel: zod_1.z.string().optional(),
+});
+exports.responseVisualizationSchema = zod_1.z.object({
+    chartConfig: exports.chartConfigSchema.nullable().optional(),
+    tableConfig: exports.tableConfigSchema.nullable().optional(),
     primaryVisual: exports.primaryVisualSchema.nullable().optional(),
+});
+exports.responseDataSchema = zod_1.z.object({
     dataTables: zod_1.z.array(exports.dataTableSchema).default([]),
+    evidence: zod_1.z.array(exports.evidenceRowSchema),
+    comparisons: zod_1.z.array(exports.comparisonSignalSchema).optional(),
+});
+exports.responseAuditSchema = zod_1.z.object({
+    presentationIntent: exports.presentationIntentSchema.optional(),
     artifacts: zod_1.z.array(exports.analysisArtifactSchema).optional(),
     facts: zod_1.z.array(exports.factSignalSchema).optional(),
-    comparisons: zod_1.z.array(exports.comparisonSignalSchema).optional(),
     evidenceStatus: exports.evidenceStatusSchema.optional(),
     evidenceEmptyReason: zod_1.z.string().optional(),
     subtaskStatus: zod_1.z.array(exports.subtaskStatusSchema).optional(),
     claimSupport: zod_1.z.array(exports.claimSupportSchema).optional(),
     headline: zod_1.z.string().optional(),
     headlineEvidenceRefs: zod_1.z.array(exports.evidenceReferenceSchema).optional(),
-    periodStart: zod_1.z.string().optional(),
-    periodEnd: zod_1.z.string().optional(),
-    periodLabel: zod_1.z.string().optional(),
+});
+exports.agentResponseSchema = zod_1.z.object({
+    summary: exports.responseSummarySchema,
+    visualization: exports.responseVisualizationSchema,
+    data: exports.responseDataSchema,
+    audit: exports.responseAuditSchema,
+    trace: zod_1.z.array(exports.traceStepSchema),
 });
 exports.chatTurnResponseSchema = zod_1.z.object({
     turnId: zod_1.z.string().uuid(),

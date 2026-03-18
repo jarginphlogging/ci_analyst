@@ -185,35 +185,50 @@ export const primaryVisualSchema = z.object({
   artifactKind: analysisArtifactSchema.shape.kind.optional(),
 });
 
-export const agentResponseSchema = z.object({
+export const responseSummarySchema = z.object({
   answer: z.string(),
   confidence: z.enum(["high", "medium", "low"]),
   confidenceReason: z.string().optional(),
   whyItMatters: z.string(),
-  presentationIntent: presentationIntentSchema.optional(),
-  chartConfig: chartConfigSchema.nullable().optional(),
-  tableConfig: tableConfigSchema.nullable().optional(),
-  metrics: z.array(metricPointSchema),
-  evidence: z.array(evidenceRowSchema),
+  summaryCards: z.array(summaryCardSchema),
   insights: z.array(insightSchema),
   suggestedQuestions: z.array(z.string()),
   assumptions: z.array(z.string()),
-  trace: z.array(traceStepSchema),
-  summaryCards: z.array(summaryCardSchema).optional(),
+  periodStart: z.string().optional(),
+  periodEnd: z.string().optional(),
+  periodLabel: z.string().optional(),
+});
+
+export const responseVisualizationSchema = z.object({
+  chartConfig: chartConfigSchema.nullable().optional(),
+  tableConfig: tableConfigSchema.nullable().optional(),
   primaryVisual: primaryVisualSchema.nullable().optional(),
+});
+
+export const responseDataSchema = z.object({
   dataTables: z.array(dataTableSchema).default([]),
+  evidence: z.array(evidenceRowSchema),
+  comparisons: z.array(comparisonSignalSchema).optional(),
+});
+
+export const responseAuditSchema = z.object({
+  presentationIntent: presentationIntentSchema.optional(),
   artifacts: z.array(analysisArtifactSchema).optional(),
   facts: z.array(factSignalSchema).optional(),
-  comparisons: z.array(comparisonSignalSchema).optional(),
   evidenceStatus: evidenceStatusSchema.optional(),
   evidenceEmptyReason: z.string().optional(),
   subtaskStatus: z.array(subtaskStatusSchema).optional(),
   claimSupport: z.array(claimSupportSchema).optional(),
   headline: z.string().optional(),
   headlineEvidenceRefs: z.array(evidenceReferenceSchema).optional(),
-  periodStart: z.string().optional(),
-  periodEnd: z.string().optional(),
-  periodLabel: z.string().optional(),
+});
+
+export const agentResponseSchema = z.object({
+  summary: responseSummarySchema,
+  visualization: responseVisualizationSchema,
+  data: responseDataSchema,
+  audit: responseAuditSchema,
+  trace: z.array(traceStepSchema),
 });
 
 export type AgentResponse = z.infer<typeof agentResponseSchema>;

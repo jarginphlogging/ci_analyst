@@ -194,26 +194,25 @@ Important shared schemas:
 - `chatTurnResponseSchema`
 
 Important response fields the frontend actively uses:
-- `answer`
-- `confidence`
-- `whyItMatters`
-- `metrics`
-- `insights`
-- `suggestedQuestions`
-- `assumptions`
+- `summary.answer`
+- `summary.confidence`
+- `summary.whyItMatters`
+- `summary.summaryCards`
+- `summary.insights`
+- `summary.suggestedQuestions`
+- `summary.assumptions`
+- `summary.periodStart`
+- `summary.periodEnd`
+- `summary.periodLabel`
+- `visualization.chartConfig`
+- `visualization.tableConfig`
+- `visualization.primaryVisual`
+- `data.dataTables`
+- `data.evidence`
+- `data.comparisons`
+- `audit.artifacts`
+- `audit.facts`
 - `trace`
-- `summaryCards`
-- `chartConfig`
-- `tableConfig`
-- `primaryVisual`
-- `dataTables`
-- `artifacts`
-- `facts`
-- `comparisons`
-- `headline`
-- `periodStart`
-- `periodEnd`
-- `periodLabel`
 
 If a backend field changes shape or meaning:
 - update the contract first
@@ -370,7 +369,7 @@ Key file:
 
 What it owns:
 - choosing between a chart panel, a comparison panel, or a table panel
-- interpreting `chartConfig`, `tableConfig`, `primaryVisual`, `dataTables`, and `comparisons`
+- interpreting `visualization.chartConfig`, `visualization.tableConfig`, `visualization.primaryVisual`, `data.dataTables`, and `data.comparisons`
 - rendering the first returned data table as the main evidence/visual surface when appropriate
 
 Important behavior:
@@ -448,7 +447,7 @@ That dual state is why many UI bugs show up as:
 The frontend intentionally does some display-oriented derivation.
 
 Examples inside `AgentWorkspace`:
-- summary-card derivation from metrics when explicit cards are absent
+- summary-card rendering from `summary.summaryCards`
 - label normalization and formatting
 - period-label inference from SQL or returned tables
 - runtime label formatting

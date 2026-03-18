@@ -9,7 +9,7 @@ import pytest
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 
 
-def _semantic_model_yaml_path() -> Path:
+def _semantic_model_source_path() -> Path:
     current = Path(__file__).resolve()
     for parent in current.parents:
         candidate = parent / "semantic_model.yaml"
@@ -19,7 +19,7 @@ def _semantic_model_yaml_path() -> Path:
 
 
 def _yaml_required_columns() -> dict[str, set[str]]:
-    text = _semantic_model_yaml_path().read_text(encoding="utf-8")
+    text = _semantic_model_source_path().read_text(encoding="utf-8")
     lines = text.splitlines()
 
     start = next((idx for idx, line in enumerate(lines) if line.strip() == "tables:"), None)
@@ -121,7 +121,7 @@ def test_execute_readonly_query_supports_common_snowflake_date_functions(tmp_pat
     assert rows[0]["data_through"] == "2025-11-30"
 
 
-def test_seeded_sqlite_schema_covers_semantic_model_yaml(tmp_path: Path) -> None:
+def test_seeded_sqlite_schema_covers_semantic_model_source(tmp_path: Path) -> None:
     db_path = tmp_path / "sandbox.db"
     ensure_sandbox_database(str(db_path), reset=True)
     required_columns = _yaml_required_columns()

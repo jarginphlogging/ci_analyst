@@ -125,7 +125,6 @@ class RealDependencies:
         schema_name: str,
     ) -> dict[str, Any]:
         raw_response: str | None = None
-        structured_mode = True
         started_at = perf_counter()
         stage_name = "unknown_stage"
         stage_metadata: dict[str, Any] = {}
@@ -138,7 +137,7 @@ class RealDependencies:
                 "event": "llm.call.started",
                 "provider": settings.provider_mode,
                 "stage": stage_name,
-                "structuredMode": structured_mode,
+                "structuredMode": True,
                 "schemaName": schema_name,
                 "maxTokens": max_tokens,
                 "temperature": settings.real_llm_temperature,
@@ -153,12 +152,9 @@ class RealDependencies:
                 "user_prompt": user_prompt,
                 "temperature": settings.real_llm_temperature,
                 "max_tokens": max_tokens,
+                "response_schema": output_model.model_json_schema(),
+                "response_schema_name": schema_name,
             }
-            if structured_mode:
-                llm_kwargs["response_schema"] = output_model.model_json_schema()
-                llm_kwargs["response_schema_name"] = schema_name
-            else:
-                llm_kwargs["response_json"] = True
 
             llm_response = await self._llm_fn(**llm_kwargs)
 
@@ -189,7 +185,7 @@ class RealDependencies:
                     "event": "llm.call.completed",
                     "provider": settings.provider_mode,
                     "stage": stage_name,
-                    "structuredMode": structured_mode,
+                    "structuredMode": True,
                     "schemaName": schema_name,
                     "durationMs": round((perf_counter() - started_at) * 1000, 2),
                     "responseChars": len(raw_response or ""),
@@ -197,7 +193,7 @@ class RealDependencies:
             )
             return parsed_response
         except TypeError as error:
-            if structured_mode and "unexpected keyword argument" in str(error):
+            if "unexpected keyword argument" in str(error):
                 logger.exception(
                     "LLM provider does not support structured output arguments",
                     extra={
@@ -220,14 +216,14 @@ class RealDependencies:
             logger.exception(
                 "LLM call failed",
                 extra={
-                    "event": "llm.call.failed",
-                    "provider": settings.provider_mode,
-                    "stage": stage_name,
-                    "structuredMode": structured_mode,
-                    "schemaName": schema_name,
-                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
-                },
-            )
+                "event": "llm.call.failed",
+                "provider": settings.provider_mode,
+                "stage": stage_name,
+                "structuredMode": True,
+                "schemaName": schema_name,
+                "durationMs": round((perf_counter() - started_at) * 1000, 2),
+            },
+        )
             raise
         except Exception as error:
             record_llm_trace(
@@ -242,14 +238,14 @@ class RealDependencies:
             logger.exception(
                 "LLM call failed",
                 extra={
-                    "event": "llm.call.failed",
-                    "provider": settings.provider_mode,
-                    "stage": stage_name,
-                    "structuredMode": structured_mode,
-                    "schemaName": schema_name,
-                    "durationMs": round((perf_counter() - started_at) * 1000, 2),
-                },
-            )
+                "event": "llm.call.failed",
+                "provider": settings.provider_mode,
+                "stage": stage_name,
+                "structuredMode": True,
+                "schemaName": schema_name,
+                "durationMs": round((perf_counter() - started_at) * 1000, 2),
+            },
+        )
             raise
 
     async def create_plan(

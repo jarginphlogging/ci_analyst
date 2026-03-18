@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from app.config import settings
-from app.services.semantic_model import SemanticModel, semantic_model_summary
-from app.services.semantic_model_yaml import load_semantic_model_yaml
+from app.services.semantic_model import semantic_model_summary
+from app.services.semantic_model_source import load_semantic_model_source
 
 _PROMPT_TEMPLATE_DIR = Path(__file__).resolve().parent / "markdown"
 _PLACEHOLDER_PATTERN = re.compile(r"\{\{([a-zA-Z0-9_]+)\}\}")
@@ -66,7 +66,7 @@ def _retry_feedback_text(retry_feedback: list[dict[str, Any]] | None) -> str:
 
 @lru_cache(maxsize=1)
 def _full_semantic_model_yaml_text() -> str:
-    return load_semantic_model_yaml().raw_text.strip()
+    return load_semantic_model_source().raw_text.strip()
 
 
 def plan_prompt(
@@ -92,7 +92,6 @@ def sql_prompt(
     user_message: str,
     step_id: str,
     step_goal: str,
-    model: SemanticModel,
     prior_sql: list[str],
     history: list[str],
     retry_feedback: list[dict[str, Any]] | None = None,

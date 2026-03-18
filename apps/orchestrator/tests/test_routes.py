@@ -11,8 +11,11 @@ from app.models import (
     ChatTurnRequest,
     DataTable,
     Insight,
-    MetricPoint,
     QueryPlanStep,
+    ResponseAudit,
+    ResponseData,
+    ResponseSummary,
+    ResponseVisualization,
     SqlExecutionResult,
     TraceStep,
     ValidationResult,
@@ -71,25 +74,30 @@ class DeterministicDependencies:
         _ = results
         _ = history
         return AgentResponse(
-            answer="Final narrative answer with concrete recommendation details.",
-            confidence="high",
-            whyItMatters="This helps prioritize state-level interventions.",
-            metrics=[MetricPoint(label="Rows Retrieved", value=1, delta=0, unit="count")],
-            evidence=[],
-            insights=[Insight(id="i1", title="Top state", detail="TX leads.", importance="high")],
-            suggestedQuestions=["Which channels drove TX?"],
-            assumptions=["A1"],
+            summary=ResponseSummary(
+                answer="Final narrative answer with concrete recommendation details.",
+                confidence="high",
+                whyItMatters="This helps prioritize state-level interventions.",
+                summaryCards=[],
+                insights=[Insight(id="i1", title="Top state", detail="TX leads.", importance="high")],
+                suggestedQuestions=["Which channels drove TX?"],
+                assumptions=["A1"],
+            ),
+            visualization=ResponseVisualization(),
+            data=ResponseData(
+                dataTables=[
+                    DataTable(
+                        id="table_1",
+                        name="state_summary",
+                        columns=["transaction_state", "current_value", "prior_value", "change_value"],
+                        rows=[{"transaction_state": "TX", "current_value": 120.0, "prior_value": 100.0, "change_value": 20.0}],
+                        rowCount=1,
+                    )
+                ],
+                evidence=[],
+            ),
+            audit=ResponseAudit(artifacts=[]),
             trace=[TraceStep(id="t3", title="Synthesis", summary="done", status="done")],
-            dataTables=[
-                DataTable(
-                    id="table_1",
-                    name="state_summary",
-                    columns=["transaction_state", "current_value", "prior_value", "change_value"],
-                    rows=[{"transaction_state": "TX", "current_value": 120.0, "prior_value": 100.0, "change_value": 20.0}],
-                    rowCount=1,
-                )
-            ],
-            artifacts=[],
         )
 
 @pytest.fixture(autouse=True)
@@ -117,8 +125,8 @@ def test_turn_endpoint() -> None:
     assert response.status_code == 200
     assert response.headers.get("x-request-id") == request_id
     payload = response.json()
-    assert payload["response"]["answer"]
-    assert len(payload["response"]["dataTables"]) >= 1
+    assert payload["response"]["summary"]["answer"]
+    assert len(payload["response"]["data"]["dataTables"]) >= 1
 
 
 def test_stream_endpoint() -> None:

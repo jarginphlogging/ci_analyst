@@ -209,41 +209,50 @@ class TableConfig(BaseModel):
     maxComparandsBeforeChartSwitch: Optional[int] = None
 
 
-class AgentResponse(BaseModel):
+class ResponseSummary(BaseModel):
     answer: str
     confidence: Literal["high", "medium", "low"]
     confidenceReason: str = ""
     whyItMatters: str
-    presentationIntent: Optional[PresentationIntent] = None
-    chartConfig: Optional[ChartConfig] = None
-    tableConfig: Optional[TableConfig] = None
-    metrics: list[MetricPoint]
-    evidence: list[EvidenceRow]
+    summaryCards: list[SummaryCard] = Field(default_factory=list)
     insights: list[Insight]
     suggestedQuestions: list[str]
     assumptions: list[str]
-    trace: list[TraceStep]
-    summaryCards: list[SummaryCard] = Field(default_factory=list)
+    periodStart: Optional[str] = None
+    periodEnd: Optional[str] = None
+    periodLabel: Optional[str] = None
+
+
+class ResponseVisualization(BaseModel):
+    chartConfig: Optional[ChartConfig] = None
+    tableConfig: Optional[TableConfig] = None
     primaryVisual: Optional[PrimaryVisual] = None
+
+
+class ResponseData(BaseModel):
     dataTables: list[DataTable] = Field(default_factory=list)
+    evidence: list[EvidenceRow] = Field(default_factory=list)
+    comparisons: list[ComparisonSignal] = Field(default_factory=list)
+
+
+class ResponseAudit(BaseModel):
+    presentationIntent: Optional[PresentationIntent] = None
     artifacts: list[AnalysisArtifact] = Field(default_factory=list)
     facts: list[FactSignal] = Field(default_factory=list)
-    comparisons: list[ComparisonSignal] = Field(default_factory=list)
     evidenceStatus: EvidenceStatus = "insufficient"
     evidenceEmptyReason: str = ""
     subtaskStatus: list[SubtaskStatus] = Field(default_factory=list)
     claimSupport: list[ClaimSupport] = Field(default_factory=list)
     headline: str = ""
     headlineEvidenceRefs: list[EvidenceReference] = Field(default_factory=list)
-    periodStart: Optional[str] = None
-    periodEnd: Optional[str] = None
-    periodLabel: Optional[str] = None
 
 
-class TurnResult(BaseModel):
-    turnId: str
-    createdAt: str
-    response: AgentResponse
+class AgentResponse(BaseModel):
+    summary: ResponseSummary
+    visualization: ResponseVisualization
+    data: ResponseData
+    audit: ResponseAudit
+    trace: list[TraceStep]
 
 
 class QueryPlanStep(BaseModel):
@@ -300,10 +309,16 @@ class SynthesisContextPackage(BaseModel):
     evidenceStatus: EvidenceStatus = "insufficient"
     evidenceEmptyReason: str = ""
     subtaskStatus: list[SubtaskStatus] = Field(default_factory=list)
-    interpretationNotes: list[str] = Field(default_factory=list)
-    caveats: list[str] = Field(default_factory=list)
     headline: str = ""
     headlineEvidenceRefs: list[EvidenceReference] = Field(default_factory=list)
+    interpretationNotes: list[str] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+
+
+class TurnResult(BaseModel):
+    turnId: str
+    createdAt: str
+    response: AgentResponse
 
 
 class SqlExecutionResult(BaseModel):

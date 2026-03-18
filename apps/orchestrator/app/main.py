@@ -106,7 +106,7 @@ async def chat_turn(request: ChatTurnRequest):
                     "event": "chat.turn.completed",
                     "sessionIdValue": session_id,
                     "traceSteps": len(result.response.trace),
-                    "insightCount": len(result.response.insights),
+                    "insightCount": len(result.response.summary.insights),
                 },
             )
             return JSONResponse(content=result.model_dump())

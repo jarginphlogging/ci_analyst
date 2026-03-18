@@ -10,7 +10,6 @@ from app.prompts.templates import sql_prompt
 from app.services.llm_json import as_string_list
 from app.services.llm_trace import llm_trace_stage, record_llm_trace
 from app.services.llm_schemas import AnalystResponsePayload
-from app.services.semantic_model import SemanticModel
 from app.services.semantic_policy import SemanticPolicy, load_semantic_policy
 from app.services.sql_guardrails import guard_sql
 from app.services.stages.sql_stage_models import GeneratedStep
@@ -114,12 +113,10 @@ class SqlStepGenerator:
     def __init__(
         self,
         *,
-        model: SemanticModel,
         ask_llm_json: AskLlmJsonFn,
         analyst_fn: AnalystFn | None = None,
         policy: SemanticPolicy | None = None,
     ) -> None:
-        self._model = model
         self._ask_llm_json = ask_llm_json
         self._analyst_fn = analyst_fn
         self._policy = policy or load_semantic_policy()
@@ -161,7 +158,6 @@ class SqlStepGenerator:
             message,
             step.id,
             step.goal,
-            self._model,
             prior_sql,
             history,
             retry_feedback=retry_feedback,
@@ -368,7 +364,6 @@ class SqlStepGenerator:
                 message,
                 step.id,
                 step.goal,
-                self._model,
                 prior_sql,
                 history,
                 retry_feedback=retry_feedback,

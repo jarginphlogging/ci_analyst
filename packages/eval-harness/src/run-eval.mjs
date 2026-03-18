@@ -46,7 +46,7 @@ async function run() {
 
     const payload = await response.json();
     const tokenMatch = scoreTokenMatch(
-      payload?.response?.answer,
+      payload?.response?.summary?.answer,
       item.mustContainAny,
       item.minTokenHits ?? 1,
     );
@@ -64,7 +64,7 @@ async function run() {
       latencyMs: elapsedMs,
       maxLatencyMs,
       latencyPass,
-      confidence: payload?.response?.confidence,
+      confidence: payload?.response?.summary?.confidence,
       responseId: payload?.turnId ?? null,
     });
   }

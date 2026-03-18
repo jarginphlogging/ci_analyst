@@ -18,7 +18,8 @@ function isFallbackEvent(payload: unknown): payload is ChatStreamEvent {
   if (type === "done") return true;
   if (type !== "response") return false;
   if (!isRecord(payload.response)) return false;
-  return typeof payload.response.answer === "string";
+  if (!isRecord(payload.response.summary)) return false;
+  return typeof payload.response.summary.answer === "string";
 }
 
 function validateStreamEvent(payload: unknown): ChatStreamEvent {

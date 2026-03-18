@@ -20,7 +20,6 @@ from app.prompts.templates import sql_prompt
 from app.sandbox.sqlite_store import ensure_sandbox_database, execute_readonly_query, rewrite_sql_for_sqlite
 from app.services.llm_json import as_string_list, parse_json_object
 from app.services.llm_schemas import SqlGenerationResponsePayload
-from app.services.semantic_model import SemanticModel, load_semantic_model
 
 configure_logging()
 logger = logging.getLogger(__name__)
@@ -42,16 +41,12 @@ class MessageRequest(BaseModel):
     retryFeedback: list[dict[str, Any]] = Field(default_factory=list)
     dependencyContext: list[dict[str, Any]] = Field(default_factory=list)
 
-
 _CONVERSATION_MEMORY: dict[str, list[str]] = {}
-_SEMANTIC_MODEL: SemanticModel | None = None
 
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
-    global _SEMANTIC_MODEL
     ensure_sandbox_database(settings.sandbox_sqlite_path, reset=settings.sandbox_seed_reset)
-    _SEMANTIC_MODEL = load_semantic_model()
     yield
 
 
@@ -108,13 +103,6 @@ def _check_auth(authorization: Optional[str]) -> None:
     expected = f"Bearer {settings.sandbox_cortex_api_key}"
     if authorization != expected:
         raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-def _model() -> SemanticModel:
-    if _SEMANTIC_MODEL is None:
-        return load_semantic_model()
-    return _SEMANTIC_MODEL
-
 
 def _conversation_history(conversation_id: str, incoming_history: list[str]) -> list[str]:
     stored = _CONVERSATION_MEMORY.get(conversation_id, [])
@@ -226,7 +214,6 @@ async def _generate_sql_from_message(
         user_message=message,
         step_id=step_id,
         step_goal=message,
-        model=_model(),
         prior_sql=[],
         history=conversation_history,
         retry_feedback=retry_feedback,

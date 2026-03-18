@@ -58,10 +58,10 @@ async def test_synthesis_stage_accepts_stacked_area_chart_config() -> None:
         history=[],
     )
 
-    assert response.chartConfig is not None
-    assert response.chartConfig.type == "stacked_area"
-    assert response.primaryVisual is not None
-    assert response.primaryVisual.visualType == "trend"
+    assert response.visualization.chartConfig is not None
+    assert response.visualization.chartConfig.type == "stacked_area"
+    assert response.visualization.primaryVisual is not None
+    assert response.visualization.primaryVisual.visualType == "trend"
 
 
 @pytest.mark.asyncio
@@ -118,13 +118,13 @@ async def test_synthesis_stage_sanitizes_multiway_comparison_table_config() -> N
         history=[],
     )
 
-    assert response.tableConfig is not None
-    assert response.tableConfig.style == "comparison"
-    assert response.tableConfig.comparisonMode == "baseline"
-    assert response.tableConfig.comparisonKeys == ["q4_2023", "q4_2024", "q4_2025"]
-    assert response.tableConfig.baselineKey == "q4_2023"
-    assert response.tableConfig.deltaPolicy == "both"
-    assert response.tableConfig.maxComparandsBeforeChartSwitch == 5
+    assert response.visualization.tableConfig is not None
+    assert response.visualization.tableConfig.style == "comparison"
+    assert response.visualization.tableConfig.comparisonMode == "baseline"
+    assert response.visualization.tableConfig.comparisonKeys == ["q4_2023", "q4_2024", "q4_2025"]
+    assert response.visualization.tableConfig.baselineKey == "q4_2023"
+    assert response.visualization.tableConfig.deltaPolicy == "both"
+    assert response.visualization.tableConfig.maxComparandsBeforeChartSwitch == 5
 
 
 @pytest.mark.asyncio
@@ -177,10 +177,10 @@ async def test_synthesis_stage_infers_comparison_keys_when_llm_config_is_invalid
         history=[],
     )
 
-    assert response.tableConfig is not None
-    assert response.tableConfig.style == "comparison"
-    assert len(response.tableConfig.comparisonKeys) >= 2
-    assert response.tableConfig.baselineKey in response.tableConfig.comparisonKeys
+    assert response.visualization.tableConfig is not None
+    assert response.visualization.tableConfig.style == "comparison"
+    assert len(response.visualization.tableConfig.comparisonKeys) >= 2
+    assert response.visualization.tableConfig.baselineKey in response.visualization.tableConfig.comparisonKeys
 
 
 @pytest.mark.asyncio
@@ -242,6 +242,6 @@ async def test_synthesis_stage_rejects_mixed_metric_family_comparison_keys() -> 
         history=[],
     )
 
-    assert response.tableConfig is not None
-    assert response.tableConfig.style != "comparison"
-    assert response.tableConfig.comparisonKeys == []
+    assert response.visualization.tableConfig is not None
+    assert response.visualization.tableConfig.style != "comparison"
+    assert response.visualization.tableConfig.comparisonKeys == []

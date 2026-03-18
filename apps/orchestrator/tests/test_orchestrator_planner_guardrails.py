@@ -127,13 +127,13 @@ async def test_run_turn_returns_guardrail_response_when_out_of_domain() -> None:
         ChatTurnRequest(sessionId=uuid4(), message="What is the weather today?")
     )
 
-    assert result.response.answer == "I can only answer questions about Customer Insights."
+    assert result.response.summary.answer == "I can only answer questions about Customer Insights."
     assert result.response.trace[0].status == "blocked"
     assert result.response.trace[0].stageOutput is not None
-    assert result.response.dataTables == []
-    assert result.response.insights == []
-    assert result.response.suggestedQuestions == []
-    assert result.response.assumptions == []
+    assert result.response.data.dataTables == []
+    assert result.response.summary.insights == []
+    assert result.response.summary.suggestedQuestions == []
+    assert result.response.summary.assumptions == []
 
 
 @pytest.mark.asyncio
@@ -146,7 +146,7 @@ async def test_run_stream_returns_guardrail_response_when_out_of_domain() -> Non
     assert stream_result.events[-1]["type"] == "done"
     response_events = [event for event in stream_result.events if event.get("type") == "response"]
     assert response_events
-    assert response_events[-1]["response"]["answer"] == "I can only answer questions about Customer Insights."
+    assert response_events[-1]["response"]["summary"]["answer"] == "I can only answer questions about Customer Insights."
 
 
 @pytest.mark.asyncio
@@ -156,7 +156,7 @@ async def test_run_turn_returns_clarification_when_sql_generation_blocks() -> No
         ChatTurnRequest(sessionId=uuid4(), message="Show me details")
     )
 
-    assert result.response.answer == "Which metric and time window should I use?"
+    assert result.response.summary.answer == "Which metric and time window should I use?"
     assert len(result.response.trace) == 2
     assert result.response.trace[0].id == "t1"
     assert result.response.trace[0].status == "done"
@@ -164,10 +164,10 @@ async def test_run_turn_returns_clarification_when_sql_generation_blocks() -> No
     assert result.response.trace[1].status == "blocked"
     assert result.response.trace[1].stageOutput is not None
     assert "bad_schema.bad_table" in str(result.response.trace[1].stageOutput.get("failedSql", ""))
-    assert result.response.dataTables == []
-    assert result.response.insights == []
-    assert result.response.suggestedQuestions == []
-    assert result.response.assumptions == []
+    assert result.response.data.dataTables == []
+    assert result.response.summary.insights == []
+    assert result.response.summary.suggestedQuestions == []
+    assert result.response.summary.assumptions == []
 
 
 @pytest.mark.asyncio
@@ -180,7 +180,7 @@ async def test_run_stream_includes_planner_and_sql_trace_when_sql_generation_blo
     response_events = [event for event in stream_result.events if event.get("type") == "response"]
     assert response_events
     payload = response_events[-1]["response"]
-    assert payload["answer"] == "Which metric and time window should I use?"
+    assert payload["summary"]["answer"] == "Which metric and time window should I use?"
     assert [step["id"] for step in payload["trace"]] == ["t1", "t2"]
     assert payload["trace"][0]["status"] == "done"
     assert payload["trace"][1]["status"] == "blocked"
@@ -194,7 +194,7 @@ async def test_run_turn_returns_trace_when_sql_runtime_fails_unexpectedly() -> N
         ChatTurnRequest(sessionId=uuid4(), message="what were my total sales for last month")
     )
 
-    assert "DATE_TRUNC" in result.response.answer
+    assert "DATE_TRUNC" in result.response.summary.answer
     assert len(result.response.trace) == 2
     assert result.response.trace[0].id == "t1"
     assert result.response.trace[0].status == "done"
@@ -212,7 +212,7 @@ async def test_run_turn_returns_failure_trace_when_unexpected_error_occurs() -> 
         ChatTurnRequest(sessionId=uuid4(), message="what were my total sales for last month")
     )
 
-    assert result.response.answer == "planner crash"
+    assert result.response.summary.answer == "planner crash"
     assert result.response.trace[0].id == "t0"
     assert result.response.trace[0].status == "blocked"
     assert result.response.trace[0].stageOutput is not None
@@ -229,7 +229,7 @@ async def test_run_stream_returns_failure_trace_when_unexpected_error_occurs() -
     response_events = [event for event in stream_result.events if event.get("type") == "response"]
     assert response_events
     response_payload = response_events[-1]["response"]
-    assert response_payload["answer"] == "planner crash"
+    assert response_payload["summary"]["answer"] == "planner crash"
     assert response_payload["trace"][0]["id"] == "t0"
     assert response_payload["trace"][0]["status"] == "blocked"
     assert "planner crash" in str(response_payload["trace"][0]["stageOutput"]["error"])

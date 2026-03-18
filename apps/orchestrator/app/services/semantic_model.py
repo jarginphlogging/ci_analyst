@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 from app.config import settings
-from app.services.semantic_model_yaml import load_semantic_model_yaml
+from app.services.semantic_model_source import load_semantic_model_source
 
 
 @dataclass(frozen=True)
@@ -30,7 +30,7 @@ def _default_model_path() -> Path:
     if env_path:
         return Path(env_path).expanduser()
 
-    return load_semantic_model_yaml().path
+    return load_semantic_model_source().path
 
 
 def _named_fields(items: Any) -> list[str]:

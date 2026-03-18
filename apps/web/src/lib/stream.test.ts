@@ -19,19 +19,19 @@ describe("parseNdjsonChunk", () => {
 
   it("accepts response events with nullable trace fields", () => {
     const line =
-      '{"type":"response","response":{"answer":"Blocked","confidence":"low","whyItMatters":"Need clarification","metrics":[],"evidence":[],"insights":[],"suggestedQuestions":[],"assumptions":[],"trace":[{"id":"t2","title":"Generate and execute SQL","summary":"blocked","status":"blocked","sql":null,"qualityChecks":null}],"dataTables":[]}}\n';
+      '{"type":"response","response":{"summary":{"answer":"Blocked","confidence":"low","whyItMatters":"Need clarification","summaryCards":[],"insights":[],"suggestedQuestions":[],"assumptions":[]},"visualization":{},"data":{"dataTables":[],"evidence":[]},"audit":{},"trace":[{"id":"t2","title":"Generate and execute SQL","summary":"blocked","status":"blocked","sql":null,"qualityChecks":null}]}}\n';
     const parsed = parseNdjsonChunk(line);
     assert.equal(parsed.events.length, 1);
     assert.equal(parsed.events[0].type, "response");
   });
 
   it("falls back to tolerant parsing when response shape drifts", () => {
-    const line = '{"type":"response","response":{"answer":"Fallback answer"}}\n';
+    const line = '{"type":"response","response":{"summary":{"answer":"Fallback answer"}}}\n';
     const parsed = parseNdjsonChunk(line);
     assert.equal(parsed.events.length, 1);
     assert.deepEqual(parsed.events[0], {
       type: "response",
-      response: { answer: "Fallback answer" },
+      response: { summary: { answer: "Fallback answer" } },
     });
   });
 });

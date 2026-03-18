@@ -135,13 +135,13 @@ async def test_synthesis_stage_uses_plan_sql_and_table_summary_context() -> None
         history=[],
     )
 
-    assert response.answer == "Synthesis answer"
-    assert response.confidenceReason
-    assert response.summaryCards
-    assert response.chartConfig is not None
-    assert response.evidenceStatus in {"sufficient", "limited", "insufficient"}
-    assert response.comparisons
-    assert response.headline
+    assert response.summary.answer == "Synthesis answer"
+    assert response.summary.confidenceReason
+    assert response.summary.summaryCards
+    assert response.visualization.chartConfig is not None
+    assert response.audit.evidenceStatus in {"sufficient", "limited", "insufficient"}
+    assert response.data.comparisons
+    assert response.audit.headline
     prompt_text = captured_prompts["user"]
     assert re.search(r'"displayType"\s*:\s*"chart"', prompt_text)
     assert re.search(r'"chartType"\s*:\s*"grouped_bar"', prompt_text)
@@ -313,8 +313,8 @@ async def test_synthesis_stage_marks_trend_claim_supported_without_fact_or_compa
         history=[],
     )
 
-    assert response.evidenceStatus == "sufficient"
-    assert response.evidenceEmptyReason == ""
+    assert response.audit.evidenceStatus == "sufficient"
+    assert response.audit.evidenceEmptyReason == ""
     context = _extract_context_payload(captured_prompts["user"])
     assert context["requestedClaimModes"] == ["trend"]
     supported_claims = context["supportedClaims"]

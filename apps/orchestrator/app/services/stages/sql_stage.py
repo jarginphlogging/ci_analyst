@@ -67,7 +67,6 @@ class SqlExecutionStage:
         self._latest_retry_feedback: list[dict[str, Any]] = []
         resolved_policy = policy or load_semantic_policy()
         self._generator = SqlStepGenerator(
-            model=model,
             policy=resolved_policy,
             ask_llm_json=ask_llm_json,
             analyst_fn=analyst_fn,

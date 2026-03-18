@@ -73,7 +73,6 @@ async def test_anthropic_chat_completion_retries_transient_http_errors(monkeypat
         result = await anthropic_llm.chat_completion(
             system_prompt="system",
             user_prompt="user",
-            response_json=False,
         )
     finally:
         object.__setattr__(settings, "anthropic_api_key", original_key)
@@ -199,7 +198,6 @@ async def test_anthropic_chat_completion_uses_retry_after_on_429(monkeypatch: py
         result = await anthropic_llm.chat_completion(
             system_prompt="system",
             user_prompt="user",
-            response_json=False,
         )
     finally:
         object.__setattr__(settings, "anthropic_api_key", original_key)

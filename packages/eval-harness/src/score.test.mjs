@@ -17,7 +17,9 @@ test("scoreMatch fails when expected tokens are absent", () => {
 test("evaluateNumericAssertions validates metric value and unit", () => {
   const payload = {
     response: {
-      metrics: [{ label: "Total Spend", value: 2.83, delta: 0.27, unit: "usd" }],
+      summary: {
+        summaryCards: [{ label: "Total Spend", value: "$2.83" }],
+      },
     },
   };
   const result = evaluateNumericAssertions(payload, [

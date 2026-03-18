@@ -17,45 +17,88 @@ function isFiniteNumber(value) {
   return typeof value === "number" && Number.isFinite(value);
 }
 
+function parseSummaryCardValue(rawValue) {
+  const text = String(rawValue ?? "").trim();
+  if (!text) {
+    return null;
+  }
+
+  const normalized = text.replace(/,/g, "");
+  let unit = "count";
+  let numericText = normalized;
+
+  if (numericText.endsWith("%")) {
+    unit = "pct";
+    numericText = numericText.slice(0, -1);
+  } else if (/bps$/i.test(numericText)) {
+    unit = "bps";
+    numericText = numericText.replace(/bps$/i, "").trim();
+  } else if (numericText.startsWith("$")) {
+    unit = "usd";
+    numericText = numericText.slice(1);
+  }
+
+  let multiplier = 1;
+  if (/k$/i.test(numericText)) {
+    multiplier = 1_000;
+    numericText = numericText.slice(0, -1);
+  } else if (/m$/i.test(numericText)) {
+    multiplier = 1_000_000;
+    numericText = numericText.slice(0, -1);
+  } else if (/b$/i.test(numericText)) {
+    multiplier = 1_000_000_000;
+    numericText = numericText.slice(0, -1);
+  }
+
+  const value = Number(numericText);
+  if (!Number.isFinite(value)) {
+    return null;
+  }
+
+  return { value: value * multiplier, unit };
+}
+
 export function evaluateNumericAssertions(payload, assertions) {
-  const metrics = Array.isArray(payload?.response?.metrics) ? payload.response.metrics : [];
+  const summaryCards = Array.isArray(payload?.response?.summary?.summaryCards) ? payload.response.summary.summaryCards : [];
   const checks = [];
   let pass = true;
 
   for (const assertion of Array.isArray(assertions) ? assertions : []) {
     const label = String(assertion?.label ?? "").trim();
-    const field = assertion?.field === "delta" ? "delta" : "value";
+    const field = "value";
     const expected = Number(assertion?.expected);
     const tolerance = Number(assertion?.tolerance ?? 0);
     const expectedUnit = assertion?.unit ? String(assertion.unit) : undefined;
 
-    const metric = metrics.find((item) => normalize(item?.label) === normalize(label));
-    if (!metric) {
+    const card = summaryCards.find((item) => normalize(item?.label) === normalize(label));
+    if (!card) {
       pass = false;
       checks.push({
         label,
         field,
         pass: false,
-        reason: "metric_not_found",
+        reason: "summary_card_not_found",
       });
       continue;
     }
 
-    const actual = Number(metric[field]);
+    const parsed = parseSummaryCardValue(card.value);
+    const actual = parsed?.value;
+    const actualUnit = parsed?.unit ?? null;
     if (!isFiniteNumber(expected) || !isFiniteNumber(actual) || !isFiniteNumber(tolerance)) {
       pass = false;
       checks.push({
         label,
         field,
         pass: false,
-        reason: "invalid_numeric_values",
+        reason: "invalid_summary_card_value",
       });
       continue;
     }
 
     const absDiff = Math.abs(actual - expected);
     const valuePass = absDiff <= Math.max(0, tolerance);
-    const unitPass = expectedUnit ? normalize(metric.unit) === normalize(expectedUnit) : true;
+    const unitPass = expectedUnit ? normalize(actualUnit) === normalize(expectedUnit) : true;
     const assertionPass = valuePass && unitPass;
 
     if (!assertionPass) {
@@ -70,7 +113,7 @@ export function evaluateNumericAssertions(payload, assertions) {
       tolerance,
       absDiff,
       expectedUnit: expectedUnit ?? null,
-      actualUnit: metric.unit ?? null,
+      actualUnit,
       pass: assertionPass,
       reason: assertionPass ? "ok" : valuePass ? "unit_mismatch" : "value_mismatch",
     });

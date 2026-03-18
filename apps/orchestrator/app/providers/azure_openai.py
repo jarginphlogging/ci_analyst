@@ -109,13 +109,9 @@ async def chat_completion(
     user_prompt: str,
     temperature: float = 0.1,
     max_tokens: int = 1000,
-    response_json: bool = False,
     response_schema: dict[str, Any] | None = None,
     response_schema_name: str | None = None,
 ) -> str:
-    if response_json and response_schema is not None:
-        raise RuntimeError("response_json and response_schema cannot be combined.")
-
     payload: dict[str, Any] = {
         "model": str(settings.azure_openai_deployment),
         "messages": [
@@ -136,8 +132,6 @@ async def chat_completion(
                 "schema": azure_schema,
             },
         }
-    elif response_json:
-        payload["response_format"] = {"type": "json_object"}
 
     started_at = time.perf_counter()
     logger.info(
@@ -145,7 +139,6 @@ async def chat_completion(
         extra={
             "event": "provider.azure_openai.request.started",
             "authMode": settings.azure_openai_auth_mode,
-            "responseJson": response_json,
             "responseSchema": response_schema is not None,
             "maxTokens": max_tokens,
             "temperature": temperature,

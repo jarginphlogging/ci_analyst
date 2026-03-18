@@ -35,9 +35,9 @@ async def test_synthesis_sets_day_level_period_bounds_from_year_sql_filter() -> 
         history=[],
     )
 
-    assert response.periodStart == "2025-01-01"
-    assert response.periodEnd == "2025-12-31"
-    assert response.periodLabel == "Period: 2025-01-01 to 2025-12-31"
+    assert response.summary.periodStart == "2025-01-01"
+    assert response.summary.periodEnd == "2025-12-31"
+    assert response.summary.periodLabel == "Period: 2025-01-01 to 2025-12-31"
 
 
 @pytest.mark.asyncio
@@ -77,12 +77,12 @@ async def test_synthesis_enforces_dual_ranks_for_multi_objective_ranked_intent()
         history=[],
     )
 
-    assert response.tableConfig is not None
-    assert response.tableConfig.style == "simple"
-    assert response.tableConfig.sortDir == "asc"
-    assert response.tableConfig.sortBy == "rank_by_avg_ticket"
+    assert response.visualization.tableConfig is not None
+    assert response.visualization.tableConfig.style == "simple"
+    assert response.visualization.tableConfig.sortDir == "asc"
+    assert response.visualization.tableConfig.sortBy == "rank_by_avg_ticket"
 
-    primary = response.dataTables[0]
+    primary = response.data.dataTables[0]
     assert "rank_by_avg_ticket" in primary.columns
     assert "rank_by_transaction_volume" in primary.columns
     assert primary.rows[0]["rank_by_avg_ticket"] == 1
@@ -137,6 +137,6 @@ async def test_synthesis_rewrites_contradictory_confidence_reason_for_dual_objec
         history=[],
     )
 
-    assert response.confidenceReason
-    assert "only one objective" not in response.confidenceReason.lower()
-    assert "dual-objective ranking" in response.confidenceReason.lower()
+    assert response.summary.confidenceReason
+    assert "only one objective" not in response.summary.confidenceReason.lower()
+    assert "dual-objective ranking" in response.summary.confidenceReason.lower()

@@ -32,55 +32,139 @@ Response:
   "turnId": "0e2728b7-37c3-48cf-b696-6a8e62292151",
   "createdAt": "2026-03-16T14:00:00Z",
   "response": {
-    "answer": "California, Texas, and Florida had the highest spend last month across the entitled CO_ID set.",
-    "confidence": "high",
-    "confidenceReason": "High confidence because the result is a direct ranking over a complete month window with no failed retrieval steps.",
-    "whyItMatters": "The output identifies which states contributed the most spend within the entitled company scope for the requested month.",
-    "presentationIntent": {
-      "displayType": "chart",
-      "chartType": "bar",
-      "rationale": "A ranked state comparison is best shown as a bar chart.",
-      "rankingObjectives": ["sorted_descending"]
-    },
-    "chartConfig": {
-      "type": "bar",
-      "x": "transaction_state",
-      "y": "total_spend",
-      "series": null,
-      "xLabel": "State",
-      "yLabel": "Spend",
-      "yFormat": "currency"
-    },
-    "tableConfig": {
-      "style": "ranked",
-      "columns": [
-        { "key": "transaction_state", "label": "State", "format": "string", "align": "left" },
-        { "key": "total_spend", "label": "Spend", "format": "currency", "align": "right" },
-        { "key": "data_from", "label": "Data From", "format": "date", "align": "left" },
-        { "key": "data_through", "label": "Data Through", "format": "date", "align": "left" }
+    "summary": {
+      "answer": "California, Texas, and Florida had the highest spend last month across the entitled CO_ID set.",
+      "confidence": "high",
+      "confidenceReason": "High confidence because the result is a direct ranking over a complete month window with no failed retrieval steps.",
+      "whyItMatters": "The output identifies which states contributed the most spend within the entitled company scope for the requested month.",
+      "summaryCards": [
+        { "label": "Top State", "value": "CA", "detail": "Highest spend in the February 2026 window" },
+        { "label": "Top State Spend", "value": "$1.25M", "detail": "California total spend" },
+        { "label": "Rows Returned", "value": "3", "detail": "Top ranked states in this example payload" }
       ],
-      "sortBy": "total_spend",
-      "sortDir": "desc",
-      "showRank": true
+      "insights": [
+        {
+          "id": "top_state_concentration",
+          "title": "Spend is concentrated in a few states",
+          "detail": "California, Texas, and Florida make up the top of the ranking for the February 2026 window.",
+          "importance": "high"
+        }
+      ],
+      "suggestedQuestions": [
+        "Which merchants drove California spend last month?"
+      ],
+      "assumptions": [
+        "Results are limited to CO_ID values 10001, 10002, and 10003."
+      ],
+      "periodStart": "2026-02-01",
+      "periodEnd": "2026-02-28",
+      "periodLabel": "Feb 1, 2026 to Feb 28, 2026"
     },
-    "metrics": [
-      { "label": "Rows Retrieved", "value": 3, "delta": 0, "unit": "count" }
-    ],
-    "evidence": [],
-    "insights": [
-      {
-        "id": "top_state_concentration",
-        "title": "Spend is concentrated in a few states",
-        "detail": "California, Texas, and Florida make up the top of the ranking for the February 2026 window.",
-        "importance": "high"
+    "visualization": {
+      "chartConfig": {
+        "type": "bar",
+        "x": "transaction_state",
+        "y": "total_spend",
+        "series": null,
+        "xLabel": "State",
+        "yLabel": "Spend",
+        "yFormat": "currency"
+      },
+      "tableConfig": {
+        "style": "ranked",
+        "columns": [
+          { "key": "transaction_state", "label": "State", "format": "string", "align": "left" },
+          { "key": "total_spend", "label": "Spend", "format": "currency", "align": "right" },
+          { "key": "data_from", "label": "Data From", "format": "date", "align": "left" },
+          { "key": "data_through", "label": "Data Through", "format": "date", "align": "left" }
+        ],
+        "sortBy": "total_spend",
+        "sortDir": "desc",
+        "showRank": true
+      },
+      "primaryVisual": {
+        "title": "Spend by State",
+        "description": "State-level spend ranking for last month within the entitled CO_ID set.",
+        "visualType": "ranking",
+        "artifactKind": "ranking_breakdown"
       }
-    ],
-    "suggestedQuestions": [
-      "Which merchants drove California spend last month?"
-    ],
-    "assumptions": [
-      "Results are limited to CO_ID values 10001, 10002, and 10003."
-    ],
+    },
+    "data": {
+      "dataTables": [
+        {
+          "id": "spend_by_state_last_month",
+          "name": "Spend by State",
+          "columns": ["transaction_state", "total_spend", "data_from", "data_through"],
+          "rows": [
+            { "transaction_state": "CA", "total_spend": 1245032.44, "data_from": "2026-02-01", "data_through": "2026-02-28" },
+            { "transaction_state": "TX", "total_spend": 1138874.21, "data_from": "2026-02-01", "data_through": "2026-02-28" },
+            { "transaction_state": "FL", "total_spend": 978935.48, "data_from": "2026-02-01", "data_through": "2026-02-28" }
+          ],
+          "rowCount": 3,
+          "description": "State-level spend totals for the February 2026 window used in the answer.",
+          "sourceSql": "SELECT transaction_state, SUM(spend) AS total_spend, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex WHERE co_id IN ('10001', '10002', '10003') AND resp_date >= DATE '2026-02-01' AND resp_date < DATE '2026-03-01' GROUP BY transaction_state ORDER BY total_spend DESC LIMIT 10"
+        }
+      ],
+      "evidence": [],
+      "comparisons": []
+    },
+    "audit": {
+      "presentationIntent": {
+        "displayType": "chart",
+        "chartType": "bar",
+        "rationale": "A ranked state comparison is best shown as a bar chart.",
+        "rankingObjectives": ["sorted_descending"]
+      },
+      "artifacts": [
+        {
+          "id": "ranking_spend_by_state",
+          "kind": "ranking_breakdown",
+          "title": "Spend by State Ranking",
+          "description": "Ranked state-level spend for the entitled company set.",
+          "columns": ["transaction_state", "total_spend"],
+          "rows": [
+            { "transaction_state": "CA", "total_spend": 1245032.44 },
+            { "transaction_state": "TX", "total_spend": 1138874.21 },
+            { "transaction_state": "FL", "total_spend": 978935.48 }
+          ],
+          "dimensionKey": "transaction_state",
+          "valueKey": "total_spend",
+          "supportStatus": "strong"
+        }
+      ],
+      "facts": [
+        {
+          "id": "fact_top_state_spend",
+          "metric": "total_spend",
+          "period": "2026-02-01 to 2026-02-28",
+          "value": 1245032.44,
+          "unit": "currency",
+          "grain": "state",
+          "supportStatus": "strong",
+          "salienceScore": 0.96,
+          "salienceRank": 1,
+          "salienceDriver": "magnitude",
+          "provenance": {
+            "stepIndex": 1,
+            "columnRefs": ["transaction_state", "total_spend"],
+            "timeWindow": "2026-02-01 to 2026-02-28",
+            "aggregationType": "sum"
+          }
+        }
+      ],
+      "evidenceStatus": "sufficient",
+      "evidenceEmptyReason": "",
+      "subtaskStatus": [
+        { "id": "state_ranking", "status": "sufficient" }
+      ],
+      "claimSupport": [
+        { "claimId": "fact_top_state_spend", "claimType": "fact", "supportStatus": "strong" }
+      ],
+      "headline": "California led spend last month across the entitled CO_ID set.",
+      "headlineEvidenceRefs": [
+        { "refType": "fact", "refId": "fact_top_state_spend" }
+      ]
+    },
     "trace": [
       {
         "id": "t1",
@@ -97,51 +181,46 @@ Response:
         "status": "done",
         "runtimeMs": 118.4,
         "sql": "SELECT transaction_state, SUM(spend) AS total_spend, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex WHERE co_id IN ('10001', '10002', '10003') AND resp_date >= DATE '2026-02-01' AND resp_date < DATE '2026-03-01' GROUP BY transaction_state ORDER BY total_spend DESC LIMIT 10"
-      }
-    ],
-    "summaryCards": [
-      { "label": "Top State", "value": "CA", "detail": "Highest spend in the February 2026 window" },
-      { "label": "States Returned", "value": "3", "detail": "Top ranked rows in this example payload" }
-    ],
-    "primaryVisual": {
-      "title": "Spend by State",
-      "description": "State-level spend ranking for last month within the entitled CO_ID set.",
-      "visualType": "ranking",
-      "artifactKind": "ranking_breakdown"
-    },
-    "dataTables": [
+      },
       {
-        "id": "spend_by_state_last_month",
-        "name": "Spend by State",
-        "columns": ["transaction_state", "total_spend", "data_from", "data_through"],
-        "rows": [
-          { "transaction_state": "CA", "total_spend": 1245032.44, "data_from": "2026-02-01", "data_through": "2026-02-28" },
-          { "transaction_state": "TX", "total_spend": 1138874.21, "data_from": "2026-02-01", "data_through": "2026-02-28" },
-          { "transaction_state": "FL", "total_spend": 978935.48, "data_from": "2026-02-01", "data_through": "2026-02-28" }
-        ],
-        "rowCount": 3,
-        "description": "State-level spend totals for the February 2026 window used in the answer.",
-        "sourceSql": "SELECT transaction_state, SUM(spend) AS total_spend, MIN(resp_date) AS data_from, MAX(resp_date) AS data_through FROM cia_sales_insights_cortex WHERE co_id IN ('10001', '10002', '10003') AND resp_date >= DATE '2026-02-01' AND resp_date < DATE '2026-03-01' GROUP BY transaction_state ORDER BY total_spend DESC LIMIT 10"
+        "id": "t5",
+        "title": "Assemble API response",
+        "summary": "Assembled the final nested API payload returned to the client.",
+        "status": "done",
+        "stageOutput": {
+          "apiResponse": {
+            "summary": {
+              "answer": "California, Texas, and Florida had the highest spend last month across the entitled CO_ID set."
+            },
+            "visualization": {
+              "chartConfig": {
+                "type": "bar",
+                "x": "transaction_state",
+                "y": "total_spend"
+              }
+            },
+            "data": {
+              "dataTables": [
+                { "id": "spend_by_state_last_month" }
+              ]
+            },
+            "audit": {
+              "headline": "California led spend last month across the entitled CO_ID set."
+            }
+          }
+        }
       }
-    ],
-    "artifacts": [],
-    "facts": [],
-    "comparisons": [],
-    "evidenceStatus": "sufficient",
-    "evidenceEmptyReason": "",
-    "subtaskStatus": [],
-    "claimSupport": [],
-    "headline": "California led spend last month across the entitled CO_ID set.",
-    "headlineEvidenceRefs": [],
-    "periodStart": "2026-02-01",
-    "periodEnd": "2026-02-28",
-    "periodLabel": "Feb 1, 2026 to Feb 28, 2026"
+    ]
   }
 }
 ```
 
 Response notes:
-- `chartConfig` and `tableConfig` live under `response`, not at the top level.
+- `response` now uses explicit nested sections: `summary`, `visualization`, `data`, `audit`, and `trace`.
+- `summaryCards` is the canonical summary surface; `metrics` is no longer part of the public response contract.
+- `presentationIntent` remains in the response as audit metadata under `response.audit`; it does not drive frontend rendering directly.
+- `data.evidence` is a derived comparison-summary surface and is distinct from `data.dataTables`, which carries the raw returned tables.
+- The final trace step includes `stageOutput.apiResponse`, which is a snapshot of the assembled API payload with `trace` excluded to avoid recursive nesting.
 - The `response` object above reflects the shared `AgentResponse` contract used by both the turn API and the final `response` event in the stream API.
 - Clients should tolerate omitted optional fields where the shared contract marks them optional, even though the backend commonly emits empty arrays and default strings.
 - On failure, the orchestrator route currently returns HTTP `400` with FastAPI's default error shape: `{"detail":"..."}`.
@@ -164,6 +243,7 @@ Event shapes:
 
 Stream notes:
 - The final `response` event contains the same nested `AgentResponse` shape shown in `/v1/chat/turn.response`.
+- The final trace entry in that `response` payload is `t5`, `"Assemble API response"`, which carries `stageOutput.apiResponse` for inspection during testing.
 - The stream does not emit `turnId` or `createdAt`.
 
 ## GET `/health`

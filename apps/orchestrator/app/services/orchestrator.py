@@ -12,6 +12,10 @@ from uuid import uuid4
 from app.models import (
     AgentResponse,
     ChatTurnRequest,
+    ResponseAudit,
+    ResponseData,
+    ResponseSummary,
+    ResponseVisualization,
     SqlExecutionResult,
     StreamResult,
     TraceStep,
@@ -449,14 +453,14 @@ class ConversationalOrchestrator:
         return deterministic_answer_fallback(response)
 
     def _apply_synthesis_inline_checks(self, response: AgentResponse, *, phase: str) -> AgentResponse:
-        answer_pass, answer_reason = check_answer_sanity(response.answer)
+        answer_pass, answer_reason = check_answer_sanity(response.summary.answer)
         self._record_inline_check(
             stage_id="t4",
             check_name=f"answer_sanity_{phase}",
             passed=answer_pass,
             reason=answer_reason,
         )
-        pii_pass, pii_reason = check_pii(response.answer)
+        pii_pass, pii_reason = check_pii(response.summary.answer)
         self._record_inline_check(
             stage_id="t4",
             check_name=f"pii_scan_{phase}",
@@ -466,16 +470,16 @@ class ConversationalOrchestrator:
         if not answer_pass:
             reason_text = answer_reason.lower()
             if "error pattern" in reason_text or "empty" in reason_text:
-                response.answer = self._deterministic_answer_fallback(response)
-                response.assumptions = [*response.assumptions, f"Inline check fallback applied: {answer_reason}"][:5]
+                response.summary.answer = self._deterministic_answer_fallback(response)
+                response.summary.assumptions = [*response.summary.assumptions, f"Inline check fallback applied: {answer_reason}"][:5]
             elif "shorter than" in reason_text:
                 # Concise answers are allowed for some deterministic/test providers.
                 pass
             else:
-                response.assumptions = [*response.assumptions, f"Inline check warning: {answer_reason}"][:5]
+                response.summary.assumptions = [*response.summary.assumptions, f"Inline check warning: {answer_reason}"][:5]
         if not pii_pass:
-            response.answer = redact_pii(response.answer)
-            response.assumptions = [*response.assumptions, f"Inline check redaction applied: {pii_reason}"][:5]
+            response.summary.answer = redact_pii(response.summary.answer)
+            response.summary.assumptions = [*response.summary.assumptions, f"Inline check redaction applied: {pii_reason}"][:5]
         return response
 
     def _llm_entries_for_stages(self, llm_entries: list[LlmTraceEntry], stage_names: set[str]) -> list[LlmTraceEntry]:
@@ -624,12 +628,25 @@ class ConversationalOrchestrator:
             merged_trace.append(step.model_copy(update={"qualityChecks": merged_checks}))
         response.trace = merged_trace
 
-        assumptions = list(response.assumptions)
+        assumptions = list(response.summary.assumptions)
         deduped: list[str] = []
         for item in assumptions:
             if item not in deduped:
                 deduped.append(item)
-        response.assumptions = deduped
+        response.summary.assumptions = deduped
+
+        response.trace = [
+            *response.trace,
+            TraceStep(
+                id="t5",
+                title="Assemble API response",
+                summary="Assembled the final nested API response payload for the client.",
+                status="done",
+                stageOutput={
+                    "apiResponse": response.model_dump(exclude={"trace": True}),
+                },
+            ),
+        ]
         return response
 
     def _unexpected_failure_response(
@@ -643,14 +660,18 @@ class ConversationalOrchestrator:
     ) -> AgentResponse:
         error_message = str(error).strip() or "Execution failed before a governed response could be produced."
         return AgentResponse(
-            answer=error_message,
-            confidence="low",
-            whyItMatters="Execution failed before a governed response could be produced.",
-            metrics=[],
-            evidence=[],
-            insights=[],
-            suggestedQuestions=[],
-            assumptions=[],
+            summary=ResponseSummary(
+                answer=error_message,
+                confidence="low",
+                whyItMatters="Execution failed before a governed response could be produced.",
+                summaryCards=[],
+                insights=[],
+                suggestedQuestions=[],
+                assumptions=[],
+            ),
+            visualization=ResponseVisualization(),
+            data=ResponseData(),
+            audit=ResponseAudit(),
             trace=[
                 TraceStep(
                     id="t0",
@@ -669,8 +690,6 @@ class ConversationalOrchestrator:
                     },
                 )
             ],
-            dataTables=[],
-            artifacts=[],
         )
 
     def _planner_blocked_response(
@@ -684,14 +703,18 @@ class ConversationalOrchestrator:
 
         message = blocked.user_message.strip() or "Planner blocked execution."
         return AgentResponse(
-            answer=message,
-            confidence="low",
-            whyItMatters="Planner blocked execution until this guidance is addressed.",
-            metrics=[],
-            evidence=[],
-            insights=[],
-            suggestedQuestions=[],
-            assumptions=[],
+            summary=ResponseSummary(
+                answer=message,
+                confidence="low",
+                whyItMatters="Planner blocked execution until this guidance is addressed.",
+                summaryCards=[],
+                insights=[],
+                suggestedQuestions=[],
+                assumptions=[],
+            ),
+            visualization=ResponseVisualization(),
+            data=ResponseData(),
+            audit=ResponseAudit(),
             trace=[
                 trace_step
                 or TraceStep(
@@ -705,8 +728,6 @@ class ConversationalOrchestrator:
                     },
                 )
             ],
-            dataTables=[],
-            artifacts=[],
         )
 
     def _sql_generation_blocked_response(
@@ -719,14 +740,18 @@ class ConversationalOrchestrator:
         _ = session_depth
 
         return AgentResponse(
-            answer=blocked.user_message,
-            confidence="low",
-            whyItMatters="SQL generation/execution is blocked until this clarification is resolved.",
-            metrics=[],
-            evidence=[],
-            insights=[],
-            suggestedQuestions=[],
-            assumptions=[],
+            summary=ResponseSummary(
+                answer=blocked.user_message,
+                confidence="low",
+                whyItMatters="SQL generation/execution is blocked until this clarification is resolved.",
+                summaryCards=[],
+                insights=[],
+                suggestedQuestions=[],
+                assumptions=[],
+            ),
+            visualization=ResponseVisualization(),
+            data=ResponseData(),
+            audit=ResponseAudit(),
             trace=trace_steps
             or [
                 TraceStep(
@@ -740,8 +765,6 @@ class ConversationalOrchestrator:
                     },
                 )
             ],
-            dataTables=[],
-            artifacts=[],
         )
 
     async def run_turn(self, request: ChatTurnRequest) -> TurnResult:
@@ -791,9 +814,9 @@ class ConversationalOrchestrator:
                             set_stage_output(
                                 self._response_summary(response),
                                 attributes={
-                                    "response.confidence": response.confidence,
-                                    "response.table_count": len(response.dataTables),
-                                    "response.artifact_count": len(response.artifacts),
+                                    "response.confidence": response.summary.confidence,
+                                    "response.table_count": len(response.data.dataTables),
+                                    "response.artifact_count": len(response.audit.artifacts),
                                     "runtime.ms": stage_timings_ms["t4"],
                                 },
                             )
@@ -995,9 +1018,9 @@ class ConversationalOrchestrator:
                             set_stage_output(
                                 self._response_summary(final_response),
                                 attributes={
-                                    "response.confidence": final_response.confidence,
-                                    "response.table_count": len(final_response.dataTables),
-                                    "response.artifact_count": len(final_response.artifacts),
+                                    "response.confidence": final_response.summary.confidence,
+                                    "response.table_count": len(final_response.data.dataTables),
+                                    "response.artifact_count": len(final_response.audit.artifacts),
                                     "runtime.ms": stage_timings_ms["t4"],
                                 },
                             )
@@ -1016,7 +1039,7 @@ class ConversationalOrchestrator:
                             validation=validation,
                             session_depth=len(self._session_history.get(session_id, [])),
                         )
-                        for delta in build_incremental_answer_deltas(final_response.answer):
+                        for delta in build_incremental_answer_deltas(final_response.summary.answer):
                             await emit({"type": "answer_delta", "delta": delta})
 
                         await progress("Finalizing response payload and audit trace")

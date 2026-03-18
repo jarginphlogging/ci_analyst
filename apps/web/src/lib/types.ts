@@ -182,34 +182,41 @@ export interface TableConfig {
 }
 
 export interface AgentResponse {
-  answer: string;
-  confidence: "high" | "medium" | "low";
-  confidenceReason?: string;
-  whyItMatters: string;
-  presentationIntent?: PresentationIntent;
-  chartConfig?: ChartConfig | null;
-  tableConfig?: TableConfig | null;
-  metrics: MetricPoint[];
-  evidence: EvidenceRow[];
-  insights: Insight[];
-  suggestedQuestions: string[];
-  assumptions: string[];
+  summary: {
+    answer: string;
+    confidence: "high" | "medium" | "low";
+    confidenceReason?: string;
+    whyItMatters: string;
+    summaryCards: SummaryCard[];
+    insights: Insight[];
+    suggestedQuestions: string[];
+    assumptions: string[];
+    periodStart?: string;
+    periodEnd?: string;
+    periodLabel?: string;
+  };
+  visualization: {
+    chartConfig?: ChartConfig | null;
+    tableConfig?: TableConfig | null;
+    primaryVisual?: PrimaryVisual;
+  };
+  data: {
+    dataTables: DataTable[];
+    evidence: EvidenceRow[];
+    comparisons?: ComparisonSignal[];
+  };
+  audit: {
+    presentationIntent?: PresentationIntent;
+    artifacts?: AnalysisArtifact[];
+    facts?: FactSignal[];
+    evidenceStatus?: EvidenceStatus;
+    evidenceEmptyReason?: string;
+    subtaskStatus?: SubtaskStatus[];
+    claimSupport?: ClaimSupport[];
+    headline?: string;
+    headlineEvidenceRefs?: EvidenceReference[];
+  };
   trace: TraceStep[];
-  summaryCards?: SummaryCard[];
-  primaryVisual?: PrimaryVisual;
-  dataTables: DataTable[];
-  artifacts?: AnalysisArtifact[];
-  facts?: FactSignal[];
-  comparisons?: ComparisonSignal[];
-  evidenceStatus?: EvidenceStatus;
-  evidenceEmptyReason?: string;
-  subtaskStatus?: SubtaskStatus[];
-  claimSupport?: ClaimSupport[];
-  headline?: string;
-  headlineEvidenceRefs?: EvidenceReference[];
-  periodStart?: string;
-  periodEnd?: string;
-  periodLabel?: string;
 }
 
 export interface ChatMessage {

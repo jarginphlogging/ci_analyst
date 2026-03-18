@@ -1,7 +1,15 @@
 from __future__ import annotations
 
 from app.services.semantic_model import load_semantic_model
+from app.services.semantic_model_source import load_semantic_model_source
 from app.services.semantic_policy import load_semantic_policy
+
+
+def test_load_semantic_model_source_reads_yaml_text() -> None:
+    source = load_semantic_model_source()
+
+    assert source.path.name == "semantic_model.yaml"
+    assert "cia_sales_insights_cortex" in source.raw_text
 
 
 def test_load_semantic_model_uses_yaml_source() -> None:
